@@ -1,0 +1,86 @@
+{
+  "name": "@mcrescenzo/opencode-workflows",
+  "version": "0.1.0",
+  "description": "opencode plugin providing durable, resumable multi-agent workflow orchestration (repo-review, a generic drain harness, and related workflows).",
+  "type": "module",
+  "main": "./opencode-workflows.js",
+  "homepage": "https://github.com/mcrescenzo/opencode-workflows#readme",
+  "bugs": {
+    "url": "https://github.com/mcrescenzo/opencode-workflows/issues"
+  },
+  "author": "Michael Crescenzo",
+  "exports": {
+    ".": "./opencode-workflows.js"
+  },
+  "files": [
+    "opencode-workflows.js",
+    "workflow-kernel/",
+    "workflows/",
+    "commands/",
+    "skills/",
+    "docs/workflow-plugin.md",
+    "README.md",
+    "CONTRIBUTING.md",
+    "CODE_OF_CONDUCT.md",
+    "CHANGELOG.md",
+    "SECURITY.md"
+  ],
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mcrescenzo/opencode-workflows"
+  },
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "workflow",
+    "orchestration"
+  ],
+  "engines": {
+    "node": ">=20.11.0"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "test:workflow-kernel": "node --test tests/drain-runtime.test.mjs tests/durable-state.test.mjs tests/multi-process-durability.test.mjs tests/notification-toast.test.mjs tests/run-store-status-salvage.test.mjs tests/workflow-checkpoint.test.mjs tests/workflow-salvage-resume.test.mjs tests/workflow-salvage.test.mjs",
+    "test:workflow-adapters": "node --test tests/beads-drain-adapter.test.mjs tests/test-fix-drain-adapter.test.mjs",
+    "test:beads-drain": "node --test tests/beads-drain-workflow.test.mjs tests/beads-drain-adapter.test.mjs tests/beads-drain-scratch.test.mjs tests/beads-drain-assets.test.mjs",
+    "test:extension-seam": "node --test tests/extension-registry.test.mjs tests/extension-wiring.test.mjs tests/extension-tool-contribution.test.mjs tests/extension-dir-resolution.test.mjs tests/extension-auto-apply-trust.test.mjs tests/extension-command-skill-registration.test.mjs",
+    "test:live-gates": "node --test tests/live-gate-probes.test.mjs tests/live-gates-integration.test.mjs tests/live-gates-permission.test.mjs tests/live-gates-runtime.test.mjs tests/live-gates-worktree.test.mjs",
+    "test:repo-bughunt": "node --test tests/repo-bughunt.test.mjs",
+    "test:repo-bughunt-command": "node --test tests/repo-bughunt-command-assets.test.mjs",
+    "test:repo-review-contract": "node --test tests/repo-review-leaf-contract.test.mjs",
+    "test:repo-review-command": "node --test tests/repo-review-command-assets.test.mjs",
+    "test:repo-review-cost-model-tier": "node --test tests/repo-review-cost-model-tier.test.mjs",
+    "test:repo-review-degraded-coverage": "node --test tests/repo-review-degraded-coverage.test.mjs",
+    "test:repo-review-meta-args": "node --test tests/repo-review-meta-arg-contract.test.mjs tests/repo-review-meta-smoke.test.mjs",
+    "test:repo-review-meta": "node --test tests/repo-review-meta.test.mjs",
+    "test:repo-review-meta-smoke": "node --test tests/repo-review-meta-smoke.test.mjs",
+    "test:repo-review-merge-determinism": "node --test tests/repo-review-merge-determinism.test.mjs",
+    "test:repo-review-no-mutation": "node --test tests/repo-review-no-mutation.test.mjs",
+    "test:repo-review-secret-containment": "node --test tests/repo-review-secret-containment.test.mjs",
+    "test:repo-security-audit": "node --test tests/repo-security-audit.test.mjs",
+    "test:repo-test-gaps": "node --test tests/repo-test-gaps.test.mjs",
+    "test:repo-cleanup": "node --test tests/repo-cleanup.test.mjs",
+    "test:repo-modernize": "node --test tests/repo-modernize.test.mjs",
+    "test:repo-perf": "node --test tests/repo-perf.test.mjs",
+    "test:repo-complexity": "node --test tests/repo-complexity.test.mjs",
+    "test:repo-deps": "node --test tests/repo-deps.test.mjs",
+    "test:lockfile-sync": "node scripts/check-lockfile-sync.mjs",
+    "test:workflows": "node --test tests/workflow-run.test.mjs tests/workflow-apply.test.mjs tests/model-tiering.test.mjs tests/repo-bughunt.test.mjs tests/repo-bughunt-command-assets.test.mjs tests/repo-review-leaf-contract.test.mjs tests/repo-security-audit.test.mjs tests/repo-test-gaps.test.mjs tests/repo-cleanup.test.mjs tests/repo-modernize.test.mjs tests/repo-perf.test.mjs tests/repo-complexity.test.mjs tests/repo-deps.test.mjs tests/repo-review-meta-arg-contract.test.mjs tests/repo-review-meta-defaults.test.mjs tests/repo-review-domain-scope.test.mjs tests/repo-review-lane-coverage.test.mjs tests/repo-review-artifacts.test.mjs tests/repo-review-inventory.test.mjs tests/repo-review-scalable-merge.test.mjs tests/repo-review-observability.test.mjs tests/repo-review-deep-modes.test.mjs tests/repo-review-docs-parity.test.mjs tests/repo-review-final-gate.test.mjs tests/repo-review-secret-containment.test.mjs tests/repo-review-meta-smoke.test.mjs tests/repo-review-meta.test.mjs tests/repo-review-merge-determinism.test.mjs tests/repo-review-no-mutation.test.mjs tests/repo-review-cost-model-tier.test.mjs tests/repo-review-degraded-coverage.test.mjs tests/repo-review-command-assets.test.mjs",
+    "release:no-token": "node scripts/release-no-token.mjs",
+    "release:child-system-smoke": "node scripts/child-system-smoke.mjs",
+    "release:system-smoke-required": "node scripts/child-system-smoke.mjs --required",
+    "test:parent-integration": "node scripts/parent-integration.mjs"
+  },
+  "dependencies": {
+    "@opencode-ai/plugin": "^1.17.13",
+    "@opencode-ai/sdk": "^1.17.13",
+    "acorn": "8.17.0",
+    "ajv": "8.20.0",
+    "quickjs-emscripten": "0.32.0",
+    "quickjs-emscripten-core": "0.32.0"
+  }
+}

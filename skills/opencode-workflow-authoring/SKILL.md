@@ -1,0 +1,180 @@
+---
+name: opencode-workflow-authoring
+description: Use when creating, editing, reviewing, debugging, or explaining OpenCode workflows run by the workflow_* plugin tools. Covers QuickJS sandbox limits, top-level return shape, agent/parallel/pipeline fan-out, the scoped-callback arity contract, phase-loop orchestration, model tiers and per-lane effort, budget self-scaling, sourceHash/approvalHash and autoApprove launch modes, inline result readback, edit/apply boundaries, static nested workflows, roles, schema lanes, and background runs.
+---
+
+# OpenCode Workflow Authoring
+
+Use this skill for workflow source and behavior: writing a new workflow, editing
+or reviewing an existing one, debugging a stalled or misleading run, or
+explaining how approval, sandboxing, fan-out, edit/apply, background, or resume
+works. For simple "run / status / cancel / save this workflow" operations, use
+the relevant command or `workflow_*` tool directly.
+
+## Phase Loop
+
+The primary pattern is **author -> run -> read -> decide**:
+
+1. Author a small workflow source or choose a saved workflow.
+2. Run a narrow slice first. Prefer `profile: "read-only-review"` unless the
+   question truly needs shell, network, MCP, or edit authority.
+3. Read the result with `workflow_status({ runId, detail: "result" })`, or use
+   the inline foreground result returned by `workflow_run` when it fits the safe
+   display cap.
+4. Decide whether to widen scope, add lanes, raise budget, switch authority, or
+   stop. Do not build one giant workflow before proving the slice.
+
+If the plugin owner configured `options.autoApprove`, eligible runs can launch on
+the first `workflow_run` call when their resolved authority tier is within that
+ceiling. Otherwise, use the preview plus `approvalHash` flow. `workflow_apply`
+keeps its separate hash gate either way.
+
+## Source Shape
+
+A workflow body is top-level JavaScript statements ending in `return <result>`.
+The only allowed export is `export const meta = { ... }`. Do not wrap the body
+in a function and do not use `export default`.
+
+```js
+export const meta = {
+  name: "review-slice",
+  description: "One narrow read-only review slice",
+  profile: "read-only-review",
+  maxAgents: 2,
+  concurrency: 2,
+};
+
+const notes = await parallel([
+  async ({ agent }) => await agent("Inspect the entrypoints", { role: "explorer" }),
+  async ({ agent }) => await agent("Inspect the tests", { role: "explorer" }),
+]);
+
+return { notes };
+```
+
+Injected globals are `agent`, `parallel`, `pipeline`, `workflow`, `phase`,
+`log`, `budget`, and `args`; do not import them.
+
+## QuickJS Sandbox
+
+The body runs in a deterministic QuickJS sandbox, not Node. Filesystem, process,
+network, clocks, timers, randomness, `crypto`, and imports are unavailable.
+`Date`, `Date.now`, `Math.random`, `performance`, `setTimeout`, `setInterval`,
+`clearTimeout`, and `clearInterval` throw if called. Use `workflow_status` run
+artifacts for timing and diagnostics instead of in-guest clocks.
+
+## Fan-Out And Arity
+
+Use the scoped-helper callback form for `parallel()` and `pipeline()`:
+
+```js
+await parallel([
+  async ({ agent }) => await agent("first task"),
+  async ({ agent }) => await agent("second task"),
+]);
+
+await pipeline(items,
+  async (previous, { agent, item, itemIndex, stageIndex }) => await agent(`inspect ${item}`),
+  async (finding, { agent, item }) => await agent(`review ${item}: ${finding}`),
+);
+```
+
+Callback functions must declare the expected parameters. The kernel hard-errors
+ambiguous arity instead of guessing whether a zero-arg thunk should be scoped or
+legacy sequential behavior. Keep call order deterministic so lane signatures and
+resume replay stay stable.
+
+Guard every wave's outcome. A wave that silently drops most lanes can feed empty
+data into synthesis and produce a false "nothing found" result. Use `failFast`
+or explicit result-count checks when missing lanes invalidate the next phase.
+
+## Models, Effort, And Roles
+
+Set `modelTiers: { fast, deep }` on `workflow_run` and tag lanes with
+`tier: "fast"` or `tier: "deep"` when a workflow needs different model strength.
+Run `workflow_models` first and keep tiers inside the session family unless the
+user approves a deviation.
+
+OpenAI lanes may additionally request `effort: "minimal" | "low" | "medium" |
+"high"`. This is applied through OpenAI `chat.params` provider options and fails
+before child launch for unsupported providers.
+
+Pass `role: "explorer" | "skeptic" | "verifier" | "synthesizer" |
+"implementer"` to prepend a specialist prompt. Role `.md` files stay pure prompt
+text; optional sibling `roles.json` defaults can set model/tier, tools/readOnly,
+retry/timeout, and narrow policy knobs before explicit lane opts override them.
+Use `workflow_roles` to inspect available role files, hashes, and defaults.
+
+## Budgets And Scaling
+
+`maxAgents` caps total child lanes launched. `concurrency` caps in-flight lanes.
+Each `agent()` call consumes one slot; pure-JavaScript synthesis consumes none.
+
+Use `budget.remainingAgents()`, `budget.remaining()`, and `budget.ceilings()` to
+self-scale loops. Budget headroom includes live spend, replayed spend, and
+in-flight reservations, so a loop can stop before launching the next child.
+Setting `maxCost` or `maxTokens` is an approval-envelope decision, not a casual
+throttle.
+
+## Schema Lanes
+
+Use `schema` when a lane result must be structured. Native structured output is
+used when available; otherwise the kernel uses structured-text instructions plus
+Ajv validation. Correctable schema/text failures can retry in the same child
+session according to `correctiveRetries`, and exhausted validation failures are
+journaled distinctly from transient provider errors.
+
+## Nested Workflows
+
+Use direct static literals only: `workflow("saved-name", args)` or
+`workflow({ source: "return 1;", args })`. Dynamic or aliased nested workflow
+calls are rejected before approval because the source cannot be snapshotted into
+the hash. Only one nesting level is supported, and nested lanes share the parent
+run's `maxAgents`, concurrency, and budget ceilings.
+
+## Launch And Readback
+
+Default launch is two-phase: call `workflow_run` for a preview, then call again
+with `approve: true` and the matching `approvalHash`. With configured
+`options.autoApprove`, eligible readOnly/worktree/all-tier runs can launch on
+the first call; a per-call `autoApprove` argument may narrow that ceiling.
+
+Foreground runs return a size-capped, secrets-redacted inline result when it
+fits. Always prefer `workflow_status({ runId, detail: "result" })` for the final
+answer path, especially for large results where inline output is omitted or
+partial.
+
+## Background Runs
+
+Explicit `background: true` returns quickly with a run id while execution
+continues in the current OpenCode process. When `background` is omitted, the
+kernel defaults wide, deep, or long runs to background using the
+wide/deep/long heuristic; explicit `background: true` or `false` wins, and
+resume keeps the pinned mode. Background execution is not durable across process
+death; use `workflow_status`, `workflow_cancel`, `workflow_pause`, and
+`workflow_reconcile` for inspection and lifecycle control.
+
+## Edit And Apply
+
+Edit authority is only a cap. A lane receives edit tools only when it explicitly
+requests edit/worktree behavior. Edit-capable lanes run in isolated workflow
+worktrees or directories. Primary-tree writes happen through `workflow_apply`
+after source/base/diff/domain hashes and Git state are checked. Successful
+non-dry Beads drain is the special trusted extension path that can finalize
+in-run after its launch approval.
+
+## Review Checklist
+
+- Top-level body ends in `return`; only `export const meta` is exported.
+- No Node, imports, clocks, timers, randomness, or filesystem assumptions.
+- `parallel()` / `pipeline()` callbacks use explicit scoped-helper arity.
+- Fan-out waves check dropped/null lane outcomes before synthesis.
+- `maxAgents`, `concurrency`, timeouts, and budget ceilings match expected
+  lane count and cost risk.
+- Model tiers, per-lane `effort`, roles, and schemas are deliberate.
+- Nested workflow calls are static and one level deep.
+- Readbacks use inline result only when it fits; otherwise use
+  `workflow_status({ detail: "result" })`.
+- Edit lanes stop at `workflow_apply` unless using a trusted autonomous drain.
+- After changing workflow source, commands, skills, plugin code, or registration
+  behavior, restart OpenCode or use a fresh child process.

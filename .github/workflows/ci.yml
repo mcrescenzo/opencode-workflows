@@ -1,0 +1,56 @@
+name: Public Release Gate
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release-no-token:
+    name: No-token release matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Set up Go for Beads CLI
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache: true
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install Beads CLI
+        run: |
+          go install -tags=gms_pure_go github.com/steveyegge/beads/cmd/bd@v1.0.3
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Verify public-gate prerequisites
+        run: |
+          node --version
+          npm --version
+          bun --version
+          git --version
+          bd --version
+
+      - name: Run no-token release gate
+        run: npm run release:no-token

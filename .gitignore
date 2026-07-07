@@ -1,0 +1,38 @@
+
+# Beads / Dolt files (added by bd init)
+.beads/
+.dolt/
+*.db
+.beads-credential-key
+
+# Local secrets
+.env
+.env.*
+!.env.example
+__workflow_secret_read_probe__
+
+# OpenCode local runtime and install state
+.opencode/
+
+# Claude Code local settings (hooks in .claude/settings.json auto-execute on
+# checkout; never rely solely on an operator's global excludesfile for this)
+.claude/
+
+# Local runtime / agent state (not part of the plugin)
+.remember/
+.hermes-bughunt/
+node_modules/
+# bun.lock is the canonical tracked lockfile; do not commit a divergent npm lockfile.
+package-lock.json
+*.log
+.probe-events.log
+
+# Nested opencode-child runtime registry (process state, not config — can be huge)
+.opencode/opencode-child/
+.opencode/opencode-child-smoke/
+.analyze.mjs
+.extract.mjs
+.check-undef.mjs
+.cleanup-map.mjs
+.rt.mjs
+.repo-review/
