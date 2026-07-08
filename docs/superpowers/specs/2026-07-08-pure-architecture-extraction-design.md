@@ -1,5 +1,7 @@
 # Pure-Architecture Extraction — Design
 
+> Status: Approved design (2026-07-08). Implemented on branch `pure-architecture-extraction`.
+
 **Date:** 2026-07-08
 **Status:** Approved
 **Decision:** The plugin ships zero pre-built workflows, zero commands, and zero

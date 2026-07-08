@@ -1,5 +1,7 @@
 # Pure-Architecture Extraction Implementation Plan
 
+> Status: Active implementation plan (2026-07-08). Executed on branch `pure-architecture-extraction`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** The plugin ships zero pre-built workflows, commands, or domain logic (pure workflow architecture); the nine repo-* workflows move to the user's global workflow registry; the beads domain is deleted.
