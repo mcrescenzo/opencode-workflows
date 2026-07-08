@@ -430,12 +430,17 @@ export async function createIntegrationLaneWorktree(pluginContext, run, toolCont
   if (!run.integrationPlan) throw new WorkflowAuthorityError("Integration lane requested without integration plan");
   if (!run.worktreeAdapter) {
     const primary = path.resolve(toolContext.worktree || toolContext.directory);
-    run.worktreeAdapter = await createWorktreeAdapter({
+    // Memoize the in-flight construction promise on `run` so two integration lanes racing into
+    // this lazy-init before either await lands (both see `!run.worktreeAdapter` synchronously)
+    // share one createWorktreeAdapter() call instead of each redundantly running requireGitRepo's
+    // git rev-parse calls and clobbering the other's assignment (bughunt concurrency-3).
+    run.worktreeAdapterPromise ??= createWorktreeAdapter({
       directory: primary,
       worktreeRoot: path.join(path.dirname(primary), `${path.basename(primary)}.workflow-worktrees`),
       integrationValidator: pluginContext?.__workflowIntegrationValidator,
       signal: run.abortController.signal,
     });
+    run.worktreeAdapter = await run.worktreeAdapterPromise;
   }
   const laneId = hash(callId).slice(0, 12);
   const record = await run.worktreeAdapter.createLaneWorktree({

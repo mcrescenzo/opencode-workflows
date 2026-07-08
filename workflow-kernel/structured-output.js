@@ -15,9 +15,10 @@ const VALIDATOR_HASH_CACHE_MAX = 256;
 // invariant. Uses the same oldest-first eviction as BoundedTimestampSet in
 // workflow-kernel/lifecycle-control.js (Map preserves insertion order).
 class BoundedValidatorCache {
-  constructor({ max = VALIDATOR_HASH_CACHE_MAX } = {}) {
+  constructor({ max = VALIDATOR_HASH_CACHE_MAX, onEvict } = {}) {
     this.max = max;
     this.items = new Map();
+    this.onEvict = typeof onEvict === "function" ? onEvict : undefined;
   }
 
   get(key) {
@@ -30,7 +31,9 @@ class BoundedValidatorCache {
     while (this.items.size > this.max) {
       const oldest = this.items.keys().next().value;
       if (oldest === undefined) break;
+      const oldestValue = this.items.get(oldest);
       this.items.delete(oldest);
+      if (this.onEvict) this.onEvict(oldest, oldestValue);
     }
     return this;
   }
@@ -51,7 +54,11 @@ const validatorHashCache = new BoundedValidatorCache();
 // stale wrong rules. We record the content hash per id so we can detect drift and
 // remove+recompile instead of trusting the id string forever. Bounded for the same
 // module-level-map reason as validatorHashCache.
-const registeredSchemaIdHashes = new BoundedValidatorCache();
+// Lockstep eviction: this map's bound (256) only keeps our own bookkeeping bounded. ajv's
+// internal registry (ajv.refs) is a SEPARATE store that ajv.compile() populates for every
+// $id-bearing schema and never shrinks on its own, so an evicted id here must also be
+// removed from ajv or the shared, process-lifetime ajv instance accumulates unboundedly.
+const registeredSchemaIdHashes = new BoundedValidatorCache({ onEvict: (id) => ajv.removeSchema(id) });
 
 // Compile `schema` into an AJV validator, reusing an already-registered $id validator ONLY when
 // the schema content still hashes to what was registered under that $id. On content drift (a reused

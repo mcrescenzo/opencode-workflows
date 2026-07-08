@@ -304,8 +304,11 @@ function terminalTitleStatus(snapshot, g) {
 function phaseBreadcrumb(snapshot, g) {
   const phases = snapshot.phase.phases;
   if (!phases.length) return `${g.phase} ${snapshot.phase.name}`;
+  // Current phase name has no match in meta.phases (phaseSnapshot leaves index undefined for
+  // that case): render just the phase name rather than guessing it's the last declared one.
+  if (snapshot.phase.index === undefined) return `${g.phase} ${snapshot.phase.name}`;
   const failed = ["failed", "apply-failed", "failed-with-diff-plan", "timed-out", "cancelled", "budget_stopped"].includes(snapshot.status);
-  const current = snapshot.phase.index ?? phases.length - 1;
+  const current = snapshot.phase.index;
   return phases.map((phase, index) => {
     const mark = failed && index === current ? g.failure : index <= current || !failed ? g.success : g.queued;
     return `${mark} ${phase}`;

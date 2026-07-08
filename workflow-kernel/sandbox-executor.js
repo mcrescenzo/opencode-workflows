@@ -665,17 +665,18 @@ async function executeSandbox(pluginContext, toolContext, run, body, args, deps)
 
   async function settlePendingHostOps() {
     if (pendingHostOps.size === 0) return;
+    // Collect the aborts and settle them concurrently (mirrors abortRunChildren in
+    // lifecycle-control.js) instead of awaiting each abortChild inside the loop, which would
+    // serialize N lanes' CHILD_ABORT_TIMEOUT_MS-bounded aborts into an N-times-longer wait.
+    const aborts = [];
     for (const lane of run.activeLaneAbortControllers?.values?.() ?? []) {
       try { lane.abortController?.abort?.(); } catch {}
-      if (lane.childID) {
-        try {
-          if (lane.childAbortRequested !== true) {
-            lane.childAbortRequested = true;
-            await abortChild(pluginContext, lane.childID, lane.directory ?? toolContext.directory);
-          }
-        } catch {}
+      if (lane.childID && lane.childAbortRequested !== true) {
+        lane.childAbortRequested = true;
+        aborts.push(abortChild(pluginContext, lane.childID, lane.directory ?? toolContext.directory));
       }
     }
+    await Promise.allSettled(aborts);
     try { rejectWaitingAgents(run, new WorkflowCancelledError("Workflow host operation was not awaited")); } catch {}
     const settleTimeoutMs = Number.isFinite(pluginContext?.__workflowPendingHostOpSettleTimeoutMs) && pluginContext.__workflowPendingHostOpSettleTimeoutMs > 0
       ? pluginContext.__workflowPendingHostOpSettleTimeoutMs

@@ -64,6 +64,18 @@ async function createWorktreeAdapter(options = {}) {
   const integrationValidator = options.integrationValidator;
   const execOptions = { signal: options.signal };
 
+  // Concurrent `git worktree add`/`worktree remove` against the same repo race inside git's own
+  // `.git/worktrees/` bookkeeping (observed: transient exit-128 "fatal: failed to read
+  // .git/worktrees/<sibling>/commondir: Success" under parallel integration lanes), so serialize
+  // them through a promise-chain mutex per adapter -- same idiom as writeState's stateWriteChains
+  // and writeLaneProjection's laneProjectionWriteChains.
+  let worktreeMutationChain = Promise.resolve();
+  function withWorktreeMutationLock(task) {
+    const current = worktreeMutationChain.catch(() => {}).then(task);
+    worktreeMutationChain = current.catch(() => {});
+    return current;
+  }
+
   async function createManagedWorktree(input, role) {
     const runId = safeSlug(input.runId ?? "run", "runId");
     const laneId = role === "lane" ? safeSlug(input.laneId, "laneId") : undefined;
@@ -80,7 +92,7 @@ async function createWorktreeAdapter(options = {}) {
       return normalizeCreatedWorktree(input, data, fallback);
     }
 
-    await createRawWorktree({ root, targetPath, branch, baseRef, execOptions });
+    await withWorktreeMutationLock(() => createRawWorktree({ root, targetPath, branch, baseRef, execOptions }));
     return normalizeCreatedWorktree(input, undefined, fallback);
   }
 
@@ -184,7 +196,7 @@ async function createWorktreeAdapter(options = {}) {
         await nativeWorktreeClient.remove({ body: input.id ? { id: input.id } : {}, query: { directory: target } });
         return { removed: true, path: target };
       }
-      await git(root, ["worktree", "remove", target], execOptions);
+      await withWorktreeMutationLock(() => git(root, ["worktree", "remove", target], execOptions));
       // `git worktree remove` deletes the directory + admin record but leaves the
       // lane branch behind; over many autonomous-drain runs those orphaned
       // branches accumulate unbounded. Delete it with a capture helper that

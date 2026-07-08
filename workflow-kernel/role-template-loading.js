@@ -289,7 +289,13 @@ async function resolveRole(roleName, roleDir = ROLE_DIR) {
   const manifest = await ensureRoleFiles(roleDir);
   const defaults = await loadRoleDefaultsManifest(roleDir);
   const filePath = path.join(roleDir, roleFileName(roleName));
-  const content = await fs.readFile(filePath, "utf8");
+  let content;
+  try {
+    content = await fs.readFile(filePath, "utf8");
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+    throw new Error(`Workflow role "${roleName}" was not found (expected ${filePath})`);
+  }
   const contentHash = hash(content);
   const shippedHash = DEFAULT_ROLES[roleName] ? hash(DEFAULT_ROLES[roleName]) : manifest.roles?.[roleName]?.shippedHash;
   return {
