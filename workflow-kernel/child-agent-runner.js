@@ -17,6 +17,7 @@
 // @typedef {import("./run-context.js").RunContext} RunContext
 
 import fs from "node:fs/promises";
+import fsSync from "node:fs";
 import path from "node:path";
 import {
   DEFAULT_RETRY_COUNT,
@@ -145,6 +146,29 @@ export function sessionPermissionEchoStatus(created, expectedRules = []) {
     missing,
     unexpected,
   };
+}
+
+// Deterministic replacement for the deleted LLM directory-echo probe: the typed opencode Session
+// always echoes `directory` on servers >= MIN_OPENCODE_SERVER_VERSION, so a lane can assert the
+// child session actually landed in the lane's directory (worktree or primary) without asking the
+// child to self-report. Symlink-aware: this plugin repo is itself commonly reached through a
+// symlinked config directory in production, so the server may echo either the requested path or
+// its realpath (or vice versa) — path.resolve is tried first, then realpathSync on both sides.
+export function sessionDirectoryEchoStatus(created, expectedDirectory) {
+  const echoed = created?.data?.directory ?? created?.directory;
+  const expected = String(expectedDirectory ?? "");
+  if (echoed === undefined || echoed === null || echoed === "") return { state: "not-echoed", expected };
+  const same = (a, b) => {
+    if (path.resolve(String(a)) === path.resolve(String(b))) return true;
+    try {
+      return fsSync.realpathSync(String(a)) === fsSync.realpathSync(String(b));
+    } catch {
+      return false;
+    }
+  };
+  return same(echoed, expected)
+    ? { state: "verified", echoed: String(echoed), expected }
+    : { state: "mismatch", echoed: String(echoed), expected };
 }
 
 export function laneTaskSummary(prompt, opts = {}, title) {
@@ -381,6 +405,10 @@ export async function createEditWorktree(run, toolContext, callId) {
     directory: toolContext.directory,
   });
   const worktreePath = created?.path || created?.directory || created?.dir || fallbackPath;
+  const resolvedWorktreePath = path.resolve(worktreePath);
+  if (resolvedWorktreePath === path.resolve(toolContext.directory)) {
+    throw new WorkflowAuthorityError(`Edit worktree path resolves to the primary tree (${resolvedWorktreePath}); refusing to run edit lanes against the primary checkout`);
+  }
   // Register the tracking record BEFORE the defensive mkdir below. createWorktree() has already
   // created the real worktree dir + branch (workflow/<runId>/<hash>); cleanupWorktrees() and
   // reclaimStrandedWorktrees() iterate ONLY run.editWorktrees / persisted state.editWorktrees, so
@@ -935,6 +963,35 @@ export async function runChildAgent(pluginContext, toolContext, run, payload, de
             await appendEvent(run, { type: "agent.permission_mismatch", callId, childID, permissionEcho });
             throw new WorkflowAuthorityError(`Child session permission echo mismatch for ${callId}`);
           }
+
+          const directoryEcho = sessionDirectoryEchoStatus(child, laneDirectory);
+          if (directoryEcho.state === "mismatch") {
+            await writeLaneProjection(run, callId, {
+              status: "directory-mismatch",
+              enqueuedAt: laneEnqueuedAt,
+              startedAt: laneStartedAt,
+              queueWaitMs: laneQueueWaitMs,
+              attempt,
+              childID,
+              title,
+              taskSummary,
+              model: resolved.modelKey,
+              agent,
+              role,
+              timeoutMs,
+              policyMode: policy.policyMode,
+              worktreePath: worktreeRecord?.path,
+              integrationLane,
+              permissionPolicy: resolved.policy,
+              permissionEcho,
+              directoryEcho,
+              signatureHash: sig,
+            });
+            await appendEvent(run, { type: "agent.directory_mismatch", callId, childID, directoryEcho });
+            throw new WorkflowAuthorityError(`Child session directory echo mismatch for ${callId}: expected ${directoryEcho.expected}, got ${directoryEcho.echoed}`);
+          }
+          // "not-echoed" is tolerated: Session.directory is typed-required on >= MIN_OPENCODE_SERVER_VERSION,
+          // and the fingerprint refuses elevated authority below that floor.
 
           await writeLaneProjection(run, callId, {
             status: "running",

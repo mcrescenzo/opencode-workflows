@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
+import os from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import WorkflowPlugin from "../workflow-kernel/index.js";
@@ -28,6 +29,8 @@ const {
   normalizePatches,
   addEditPlanFromResult,
   runChildAgent,
+  sessionDirectoryEchoStatus,
+  createEditWorktree,
   writeLaneCheckpoint,
   applyLaneEffortParams,
   clearLaneEffort,
@@ -1419,5 +1422,41 @@ return await agent("persistently overloaded", { retryCount: 1 });`;
     assert.equal(lane.retryable, true, "a transient-class failure stays retryable for a later resume");
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("sessionDirectoryEchoStatus verifies the typed create echo", () => {
+  assert.equal(sessionDirectoryEchoStatus({ data: { id: "s", directory: "/tmp/lane-a" } }, "/tmp/lane-a").state, "verified");
+  assert.equal(sessionDirectoryEchoStatus({ data: { id: "s", directory: "/tmp/other" } }, "/tmp/lane-a").state, "mismatch");
+  assert.equal(sessionDirectoryEchoStatus({ data: { id: "s" } }, "/tmp/lane-a").state, "not-echoed");
+});
+
+test("sessionDirectoryEchoStatus tolerates symlink-realpath divergence", async (t) => {
+  // The plugin repo itself is reached via a symlinked config dir in production;
+  // the server may echo the realpath of the directory it was given.
+  const real = await fs.mkdtemp(path.join(os.tmpdir(), "echo-real-"));
+  const link = `${real}-link`;
+  await fs.symlink(real, link);
+  t.after(() => fs.rm(real, { recursive: true, force: true }).then(() => fs.rm(link, { force: true })));
+  assert.equal(sessionDirectoryEchoStatus({ data: { id: "s", directory: real } }, link).state, "verified");
+});
+
+test("createEditWorktree throws when the adapter's worktree path resolves to the primary directory", async () => {
+  const { root, dir } = await tempRunDir("child-agent-worktree-distinctness");
+  try {
+    const run = minimalChildRun(dir, {
+      adapter: {
+        async createWorktree() {
+          return { path: root };
+        },
+      },
+    });
+    const toolContext = { directory: root, sessionID: "parent-session" };
+    await assert.rejects(
+      createEditWorktree(run, toolContext, "lane:edit"),
+      /worktree path resolves to the primary tree/,
+    );
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
   }
 });
