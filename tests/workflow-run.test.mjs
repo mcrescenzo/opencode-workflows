@@ -2145,9 +2145,17 @@ test("public workflow tool schemas describe non-obvious arguments", async () => 
   try {
     assert.match(tools.workflow_apply.description, /workflow_status/);
     assert.match(tools.workflow_apply.description, /workflow_apply_approval_mismatch/);
+    assert.ok(
+      !/apply-preview/.test(tools.workflow_apply.description),
+      "workflow_apply must not cite the nonexistent workflow_run apply-preview",
+    );
+    assert.ok(
+      !("reconcile" in tools.workflow_status.args),
+      "workflow_status must not expose the always-rejected reconcile arg",
+    );
     for (const [toolName, fields] of Object.entries({
       workflow_apply: ["runId", "approvedSourceHash", "baseCommit", "diffPlanHash", "domainMutationHash", "approvalIntent"],
-      workflow_cleanup: ["dryRun", "keep"],
+      workflow_cleanup: ["dryRun", "keep", "interruptedTtlMs"],
       workflow_salvage: ["runId", "callIds", "approve", "approvalHash"],
       workflow_template_save: ["template", "name", "scope", "overwrite"],
     })) {

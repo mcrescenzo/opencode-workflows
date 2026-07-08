@@ -2738,14 +2738,13 @@ async function WorkflowPlugin(pluginContext, options) {
       },
     }),
     workflow_status: tool({
-      description: "Show recent workflow runs or one workflow run state.",
+      description: "Show recent workflow runs or one workflow run state. Read-only; for stale-run recovery use workflow_reconcile.",
       args: {
         runId: tool.schema.string().optional(),
         limit: tool.schema.number().int().positive().max(100).optional(),
         includePendingApproval: tool.schema.boolean().optional(),
         format: tool.schema.enum(["summary", "json"]).optional(),
         detail: tool.schema.enum(["compact", "full", "result"]).optional(),
-        reconcile: tool.schema.boolean().optional(),
       },
       async execute(args, context) {
         return await statusText(context, args);
@@ -2839,17 +2838,18 @@ async function WorkflowPlugin(pluginContext, options) {
       },
     }),
     workflow_cleanup: tool({
-      description: "Dry-run or apply workflow run retention cleanup while preserving active, corrupt, and ambiguous edit runs.",
+      description: "Dry-run or apply workflow run retention cleanup. Always preserves locked, active, pinned, corrupt/ambiguous-edit, and resumable runs (paused, failed, budget_stopped, retryable apply-failed); interrupted runs are preserved until a recovery TTL elapses.",
       args: {
         dryRun: tool.schema.boolean().optional().describe("When true or omitted, only previews which completed run dirs would be removed. Set false to delete eligible old runs."),
-        keep: tool.schema.number().int().min(0).max(1000).optional().describe("Number of newest completed terminal runs to preserve; active, corrupt, ambiguous edit, and pinned runs are always preserved."),
+        keep: tool.schema.number().int().min(0).max(1000).optional().describe("Number of newest completed terminal runs to preserve (default 30); active, corrupt, ambiguous edit, and pinned runs are always preserved."),
+        interruptedTtlMs: tool.schema.number().int().positive().optional().describe("Override the interrupted-run protection TTL in milliseconds (default 604800000 = 7 days); interrupted runs older than this become eligible for deletion."),
       },
       async execute(args, context) {
         return await cleanupRuns(context, args);
       },
     }),
     workflow_apply: tool({
-      description: "Apply an awaiting workflow diff plan to the primary tree after explicit hash-gated approval. Use hash fields copied from a prior workflow_status({detail:\"full\"}) or workflow_run apply-preview for the same run; stale or missing hashes fail closed with a structured workflow_apply_approval_mismatch payload.",
+      description: "Apply an awaiting workflow diff plan to the primary tree after explicit hash-gated approval. Use hash fields copied from a prior workflow_status({detail:\"full\"}) for the same run — workflow_run's own terminal message surfaces only the diff plan hash, not the full apply hash set; stale or missing hashes fail closed with a structured workflow_apply_approval_mismatch payload.",
       args: {
         runId: tool.schema.string().describe("Run id currently in awaiting-diff-approval, apply-failed, failed-with-diff-plan, applied, or an interrupted recovery state."),
         approvedSourceHash: tool.schema.string().describe("Exact sourceHash copied from workflow_status detail:\"full\" for this run; proves the workflow source that produced the diff plan."),
