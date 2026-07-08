@@ -2693,10 +2693,10 @@ async function WorkflowPlugin(pluginContext, options) {
       description:
         "Run a sandboxed OpenCode workflow. By default this is two-phase: call WITHOUT approve=true to get the plan summary (use format=json for a structured workflow_preview with approvalHash, models, lane budget, authority, and cost), then call WITH approve=true and the matching approvalHash to execute; missing/stale hashes return approval_mismatch with executed=false. If the plugin is configured with options.autoApprove, an eligible call may launch immediately without approvalHash when the resolved authority tier is covered by the configured ceiling; args.autoApprove can only narrow that configured ceiling for one call. workflow_apply remains independently hash-gated.",
       args: {
-        name: tool.schema.string().optional(),
+        name: tool.schema.string().optional().describe("Saved workflow name, resolved project > global > extension > bundled."),
         scriptPath: tool.schema.string().optional(),
         allowExternalScriptPath: tool.schema.boolean().optional(),
-        source: tool.schema.string().optional(),
+        source: tool.schema.string().optional().describe("Inline workflow source: export const meta = {...} plus top-level statements ending in return."),
         includeSourceSnippet: tool.schema.boolean().optional(),
         sourceSnippetMaxChars: tool.schema.number().int().positive().max(2000).optional(),
         // Object-typed so the model-facing JSON schema carries `type: "object"`. Under a permissive
@@ -2704,13 +2704,13 @@ async function WorkflowPlugin(pluginContext, options) {
         // drain authority validator then has to reject. `.passthrough()` preserves the free-form
         // "any keys allowed" semantics of the args bag while constraining the top-level type.
         args: tool.schema.object({}).passthrough().optional(),
-        approve: tool.schema.boolean().optional(),
-        approvalHash: tool.schema.string().optional(),
-        autoApprove: tool.schema.enum(["readOnly", "worktree", "all"]).optional(),
+        approve: tool.schema.boolean().optional().describe("Omit or false to get the approval preview; true executes when approvalHash matches the preview."),
+        approvalHash: tool.schema.string().optional().describe("Hash returned by the immediately prior preview for this exact envelope; any envelope change re-keys it."),
+        autoApprove: tool.schema.enum(["readOnly", "worktree", "all"]).optional().describe("Narrow the plugin-configured autoApprove ceiling for this call (readOnly < worktree < all); it can never widen the configured ceiling."),
         format: tool.schema.enum(["summary", "json"]).optional(),
-        resumeRunId: tool.schema.string().optional(),
-        resumePolicy: tool.schema.enum(["extend-deadline"]).optional(),
-        editAndResume: tool.schema.boolean().optional(),
+        resumeRunId: tool.schema.string().optional().describe("Resume a prior resumable run by id; unchanged lanes replay as zero-spend cache hits from the persisted journal."),
+        resumePolicy: tool.schema.enum(["extend-deadline"]).optional().describe("Resume-only, and only valid when resuming a timed-out run: pass together with a larger maxRuntimeMs to grant that run a new deadline instead of rejecting the resume."),
+        editAndResume: tool.schema.boolean().optional().describe("Resume-only opt-in to resume with changed workflow source; re-keys sourceHash/approvalHash so a fresh approval is required, while unchanged lanes still cache-hit."),
         maxAgents: tool.schema.number().int().positive().max(100000).optional(),
         concurrency: tool.schema.number().int().positive().max(hardConcurrencyLimit).optional(),
         laneTimeoutMs: tool.schema.number().int().positive().max(MAX_CHILD_PROMPT_TIMEOUT_MS).optional(),
@@ -2720,18 +2720,18 @@ async function WorkflowPlugin(pluginContext, options) {
           fast: tool.schema.string().optional(),
           deep: tool.schema.string().optional(),
         }).optional(),
-        profile: tool.schema.enum(Object.keys(WORKFLOW_AUTHORITY_PROFILES)).optional(),
-        background: tool.schema.boolean().optional(),
+        profile: tool.schema.enum(Object.keys(WORKFLOW_AUTHORITY_PROFILES)).optional().describe("Named authority preset: read-only-review, inspect-with-shell, drain-dry-run, drain-autonomous-local, edit-plan-only, or apply-approved-plan. Omitted resolves to the ad-hoc profile driven by meta/args authority flags."),
+        background: tool.schema.boolean().optional().describe("true returns a runId immediately while execution continues in-process; false forces foreground; omitted defers to the wide/deep/long heuristic."),
         debugCapture: tool.schema.boolean().optional(),
         // Object-typed: resolveRunAuthority spreads args.authority as an object, so a stringified
         // value would silently no-op into profile defaults instead of erroring. Same model-
         // stringification risk as `args` above; constrain the type so the model emits an object.
-        authority: tool.schema.object({}).passthrough().optional(),
+        authority: tool.schema.object({}).passthrough().optional().describe("Ad-hoc authority flag object (readOnly, shell, edit, worktreeEdit, network, mcp, integration); the resolved authority is shown in the approval preview."),
         baseCommit: tool.schema.string().optional(),
-        maxCost: tool.schema.number().nonnegative().optional(),
-        maxTokens: tool.schema.number().int().nonnegative().optional(),
+        maxCost: tool.schema.number().nonnegative().optional().describe("Run-level cost ceiling in USD across all lanes; exceeding it stops the run resumably as budget_stopped. Part of the approved envelope."),
+        maxTokens: tool.schema.number().int().nonnegative().optional().describe("Run-level token ceiling across all lanes; exceeding it stops the run resumably as budget_stopped. Part of the approved envelope."),
         guestDeadlineMs: tool.schema.number().int().positive().max(60_000).optional(),
-        maxRuntimeMs: tool.schema.number().int().positive().max(24 * 60 * 60 * 1000).optional(),
+        maxRuntimeMs: tool.schema.number().int().positive().max(24 * 60 * 60 * 1000).optional().describe("Run-level wall-clock deadline; distinct from laneTimeoutMs, which bounds one child prompt."),
       },
       async execute(args, context) {
         return await startWorkflow(pluginContext, context, args);
@@ -2744,7 +2744,7 @@ async function WorkflowPlugin(pluginContext, options) {
         limit: tool.schema.number().int().positive().max(100).optional(),
         includePendingApproval: tool.schema.boolean().optional(),
         format: tool.schema.enum(["summary", "json"]).optional(),
-        detail: tool.schema.enum(["compact", "full", "result"]).optional(),
+        detail: tool.schema.enum(["compact", "full", "result"]).optional().describe("compact (default) for summaries; full for complete state including the workflow_apply hash fields; result for the final result payload (requires runId)."),
       },
       async execute(args, context) {
         return await statusText(context, args);
@@ -2807,13 +2807,13 @@ async function WorkflowPlugin(pluginContext, options) {
       },
     }),
     workflow_save: tool({
-      description: "Save a reusable workflow script to the project workflow directory by default, or globally with an explicit globalScopeIntent opt-in.",
+      description: "Save a reusable workflow script (export const meta = {...} plus top-level statements ending in return; no imports, no export default) to the project workflow directory by default, or globally with the explicit globalScopeIntent opt-in. See the opencode-workflow-authoring skill for the full authoring contract.",
       args: {
-        name: tool.schema.string(),
-        source: tool.schema.string(),
-        scope: tool.schema.enum(["global", "project"]).optional(),
-        globalScopeIntent: tool.schema.literal("save-global-workflow").optional(),
-        overwrite: tool.schema.boolean().optional(),
+        name: tool.schema.string().describe("Saved workflow slug; becomes <name>.js in the destination workflow directory."),
+        source: tool.schema.string().describe("Full workflow source; parsed and validated before writing — invalid shape fails the save."),
+        scope: tool.schema.enum(["global", "project"]).optional().describe("Destination workflow directory; omitted defaults to project (<root>/.opencode/workflows)."),
+        globalScopeIntent: tool.schema.literal("save-global-workflow").optional().describe("Required with scope:\"global\": the literal string confirms writing into the shared global workflow directory."),
+        overwrite: tool.schema.boolean().optional().describe("Set true to replace an existing saved workflow with the same name."),
       },
       async execute(args, context) {
         return await saveWorkflow(context, args);
@@ -2901,7 +2901,7 @@ async function WorkflowPlugin(pluginContext, options) {
       },
     }),
     workflow_templates: tool({
-      description: "List shipped v2 workflow templates without writing files; pass includeSource=true to retrieve source bodies explicitly.",
+      description: "List shipped starter workflow templates without writing files; pass includeSource=true to retrieve source bodies explicitly.",
       args: {
         format: tool.schema.enum(["summary", "json"]).optional(),
         template: tool.schema.string().optional(),
@@ -2912,7 +2912,7 @@ async function WorkflowPlugin(pluginContext, options) {
       },
     }),
     workflow_template_save: tool({
-      description: "Save a shipped v2 workflow template to project or global workflows.",
+      description: "Save a shipped starter workflow template to project or global workflows.",
       args: {
         template: tool.schema.string().describe("Bundled template name from workflow_templates, for example first-run-slice or scoped-parallel."),
         name: tool.schema.string().optional().describe("Saved workflow slug; omitted uses the template name."),

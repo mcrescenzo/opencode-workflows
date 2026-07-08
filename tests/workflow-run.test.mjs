@@ -2158,6 +2158,8 @@ test("public workflow tool schemas describe non-obvious arguments", async () => 
       workflow_cleanup: ["dryRun", "keep", "interruptedTtlMs"],
       workflow_salvage: ["runId", "callIds", "approve", "approvalHash"],
       workflow_template_save: ["template", "name", "scope", "overwrite"],
+      workflow_run: ["profile", "authority", "autoApprove", "background", "maxCost", "maxTokens", "maxRuntimeMs", "resumeRunId", "resumePolicy", "editAndResume"],
+      workflow_save: ["name", "source", "scope", "globalScopeIntent", "overwrite"],
     })) {
       for (const field of fields) {
         assert.equal(
@@ -2171,6 +2173,10 @@ test("public workflow tool schemas describe non-obvious arguments", async () => 
         );
       }
     }
+    assert.ok(
+      !/\bv2\b/i.test(tools.workflow_templates.description) && !/\bv2\b/i.test(tools.workflow_template_save.description),
+      "template tool descriptions must not use undefined v2 jargon",
+    );
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }

@@ -102,8 +102,8 @@ return {
 
 const DEFAULT_TEMPLATES = {
   "first-run-slice": FIRST_RUN_SLICE_TEMPLATE,
-  "scoped-parallel": "export const meta = { name: \"scoped-parallel\", description: \"V2 scoped-helper parallel template\", maxAgents: 4 };\n\nconst items = args?.items ?? [\"one\", \"two\"];\nconst results = await parallel(items.map((item) => async ({ agent }) => {\n  return await agent(`Inspect ${item}`, { role: \"explorer\" });\n}));\n\nreturn { results };\n",
-  "edit-review": `export const meta = { name: "edit-review", description: "V2 edit/apply template", authority: { edit: true }, maxAgents: 1 };\n\nreturn await agent("Prepare an edit plan", { role: "implementer", edit: true, schema: { type: "object", properties: { patches: { type: "array" } }, required: ["patches"] } });\n`,
+  "scoped-parallel": "export const meta = { name: \"scoped-parallel\", description: \"Scoped-helper parallel starter template\", maxAgents: 4 };\n\nconst items = args?.items ?? [\"one\", \"two\"];\nconst results = await parallel(items.map((item) => async ({ agent }) => {\n  return await agent(`Inspect ${item}`, { role: \"explorer\" });\n}));\n\nreturn { results };\n",
+  "edit-review": `export const meta = { name: "edit-review", description: "Schema-gated edit/apply starter template", authority: { edit: true }, maxAgents: 1 };\n\nreturn await agent("Prepare an edit plan", { role: "implementer", edit: true, schema: { type: "object", properties: { patches: { type: "array" } }, required: ["patches"] } });\n`,
 };
 
 function roleFileName(name) {
