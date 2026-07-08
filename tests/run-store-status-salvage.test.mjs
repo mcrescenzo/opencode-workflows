@@ -141,7 +141,7 @@ test("lastProgressAt considers durable event activity beyond lane state transiti
   assert.equal(__test.computeLastProgressAt(run), "2026-06-24T00:03:00.000Z");
 });
 
-test("reconciled interrupted run surfaces orphaned lane childIDs with a session_read hint", async () => {
+test("reconciled interrupted run surfaces orphaned lane childIDs with a workflow_salvage hint", async () => {
   const root = await tempDir("salvage-interrupted");
   const runId = "salvage-interrupted-run";
   const dir = __test.runDirForRoot(root, runId);
