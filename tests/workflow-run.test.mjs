@@ -232,7 +232,7 @@ test("authority profiles carry no gate vocabulary; elevated launch consults the 
   // requiredGates, and resolveRunAuthority's output carries none either. What replaces the old
   // profile-declared gate ceiling is a deterministic, launch-time check — the server-fingerprint
   // version floor (workflow-plugin.js's assertServerSupportsElevatedAuthority for
-  // edit/worktreeEdit/integration authority) plus per-lane permission-echo/directory-echo
+  // edit/worktreeEdit/integration/shell authority) plus per-lane permission-echo/directory-echo
   // assertions in child-agent-runner.js — proven end-to-end by the fingerprint tests below.
   const readOnly = __test.resolveRunAuthority({ profile: "read-only-review" }, {});
   assert.equal(readOnly.profile, "read-only-review");

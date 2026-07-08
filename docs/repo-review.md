@@ -172,7 +172,8 @@ If `modelTiers` is omitted, every tier degrades to the session-inherited default
 ## Authority profile: read-only by default
 
 Every shipped `repo-*` leaf and the meta declare **`profile: "read-only-review"`**:
-read-only authority, **no elevated live-gate preflight** (`requiredGates: []`). Each
+read-only authority; the profile carries no gate vocabulary at all — Design C
+deleted `requiredGates`. Each
 lane is contained by a deny-by-default permission ruleset — no shell, no edit, no git,
 no network, no MCP. The QuickJS guest also physically cannot write files or import
 modules. The suite performs pure read-only analysis and returns an in-memory envelope.
@@ -185,11 +186,11 @@ command-scoped shell) for two documented parity gaps only:
 - `repo-complexity` — a git-history/churn lens that benefits from `git log` style data.
 - `repo-deps` — deeper lockfile/manifest inspection.
 
-These exceptions are **deferred**. `inspect-with-shell` requires the
-`permissionEnforcement` and `commandScopedBash` live gates to be **verified**; under
-the current runtime those gates are still `available-unverified`, so no shipped leaf
-opts into shell mode. Until those gates are verified, every `repo-*` lane runs under
-plain `read-only-review` (complexity derives churn from read-only file reads; deps does
+These exceptions are **deferred** as a product-scope decision, not a runtime
+limitation: `inspect-with-shell` is fully supported by the deterministic
+permission-rule and server-fingerprint checks, but no shipped leaf has opted
+into shell mode yet. Every `repo-*` lane runs under
+plain `read-only-review` today (complexity derives churn from read-only file reads; deps does
 read-only manifest/lockfile parsing). Do not assume shell access is available when
 sizing or reviewing a run.
 
@@ -300,7 +301,7 @@ Leaves declare schema lanes via `agent(prompt, { schema, tier, onFailure:
    the model's JSON text back.
 
 **Production reality:** native structured output is currently **unavailable** in this
-runtime (the live-gate probe reports `structuredOutput: failed-with-evidence`), so the
+runtime, so the
 **structured-text fallback is the production path**. The guest source is identical for
 both paths; the operator-visible difference is that malformed JSON from the model gets
 one same-session corrective turn by default before an exhausted validation failure is

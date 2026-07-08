@@ -18,13 +18,12 @@ npm run release:no-token
 
 That script runs `npm run test:lockfile-sync`, the full `npm test` matrix, and
 `npm pack --dry-run --json` without model-token prompts. `npm test` includes the
-workflow-kernel, live-gate, beads-drain, workflow, adapter, extension-seam,
+workflow-kernel, beads-drain, workflow, adapter, extension-seam,
 docs/package, permission, redaction, and release-script regression suites.
 
 For narrower iteration before the full release gate, use:
 
 ```sh
-npm run test:live-gates
 npm run test:workflow-kernel
 npm run test:beads-drain
 npm run test:workflows
@@ -74,11 +73,10 @@ The required smoke must exercise and capture evidence for, at minimum:
 - child ID, PID, port, and trust mode
 - project directory and explicit plugin path (`opencode-workflows.js`)
 - startup health and OpenCode version
-- command registry entries (at least `repo-bughunt`, `repo-review`, and
-  `workflow-live-gates-release-check`; `beads-drain` only when the Beads
-  extension is configured)
-- tool registry entries (at least `workflow_run`, `workflow_status`,
-  `workflow_live_gates`)
+- command registry entries (at least `repo-bughunt` and `repo-review`;
+  `beads-drain` only when the Beads extension is configured)
+- tool registry entries (at least `workflow_run`, `workflow_status`, and
+  `workflow_list`)
 - a deterministic workflow tool execution (the child-session tool smoke below)
 - restart/reload evidence (`oc_child_restart` or a fresh child, per the Restart
   And Plugin Reload Check section)
@@ -111,9 +109,9 @@ Manual fallback path:
    discovery when startup import/lifecycle is the behavior under test.
 3. Inspect child health, PID, port, trust mode, startup logs, command registry,
    tool registry, and plugin command entries.
-4. Verify the bundled commands include `repo-bughunt`, `repo-review`, and
-   `workflow-live-gates-release-check`. Verify `beads-drain` only when the
-   Beads extension is configured for this child.
+4. Verify the bundled commands include `repo-bughunt` and `repo-review`.
+   Verify `beads-drain` only when the Beads extension is configured for this
+   child.
 5. Stop the child and verify cleanup evidence shows the process is gone, such as
    `processAlive: false` or an equivalent disposed-child status.
 
@@ -122,10 +120,10 @@ registration even when the explicit plugin path is present. If the safe child is
 healthy but the workflow commands or tools are absent, record that as a
 safe-mode registration limitation, not as release evidence. Use an inherited
 child for the actual plugin registration proof, then verify that `/command`
-contains `workflow-live-gates-release-check` plus the repo-review commands
+contains the `repo-bughunt` and `repo-review` commands
 (`beads-drain` when the Beads extension is configured) and that
 `/experimental/tool/ids` contains workflow tools such as `workflow_run`,
-`workflow_status`, and `workflow_live_gates`.
+`workflow_status`, and `workflow_list`.
 
 The `oc_plugin_smoke_test` helper is acceptable for this layer when it reports:
 child ID, PID, port, `trustMode: "safe"`, healthy startup, registry samples, and
@@ -162,7 +160,7 @@ npm run test:workflows
 
 The regression named `representative workflow tools execute without model
 prompts` calls `workflow_list`, `workflow_roles`, `workflow_templates`,
-`workflow_live_gates` without probes, `workflow_run` approval and execution,
+`workflow_run` approval and execution,
 `workflow_status`, and `workflow_cleanup`. Its prompt callback throws, so any
 unexpected LLM-backed prompt fails the test.
 
@@ -173,12 +171,11 @@ child-session smoke after the safe-mode startup smoke succeeds:
    `projectDir`, explicit plugin config pointing at `opencode-workflows.js`, and
    `cleanupPolicy: "delete-on-stop"`.
 2. Inspect child status or routes and record `/experimental/tool/ids` evidence
-   for `workflow_list`, `workflow_status`, `workflow_run`, and
-   `workflow_live_gates`.
+   for `workflow_list`, `workflow_status`, and `workflow_run`.
 3. Create a child session with `oc_session_create`.
 4. Run a bounded `oc_shell` Node smoke from the repository directory that imports
    `./opencode-workflows.js`, creates a temporary execution directory, calls the plugin
-   tool APIs for `workflow_list`, `workflow_live_gates` without probes,
+   tool APIs for `workflow_list`,
    `workflow_run`, and `workflow_status`, prints JSON evidence, and removes the
    temporary directory.
 5. Capture `oc_shell` output, `oc_inspect` or `oc_events` entries that identify
@@ -198,7 +195,7 @@ Record these fields for child-session tool smoke evidence:
 
 - child ID, PID, port, trust mode, project directory, and plugin path
 - workflow tool IDs observed in the child registry
-- Node smoke JSON showing `gatesConfigured`, run ID, final status/result, and
+- Node smoke JSON showing run ID, final status/result, and
   extension workflow discovery when an extension is configured
 - relevant child session events or logs
 - cleanup result, including `processAlive: false`
@@ -234,39 +231,3 @@ Classify restart failures this way:
   or fixture-change problem
 - behavior only appears after a fresh child, not `oc_child_restart`: restart
   reload-path problem to capture as a follow-up
-
-## Permission Gate Diagnostics
-
-Run focused permission diagnostics when `workflow_live_gates` reports failed or
-blocked permission gates. Prefer deterministic child/session endpoints and raw
-tool JSON over model prose.
-
-Primary evidence path:
-
-1. Start an inherited child only when the failure depends on normal user or
-   project config.
-2. Run `/workflow-live-gates-release-check` with `oc_command` to prove the child
-   command can reach `workflow_live_gates`.
-3. Capture the command result and classify `permissionEnforcement`,
-   `commandScopedBash`, and `secretReadDeny` as `verified`, `blocked`, or
-   `failed-with-evidence`.
-4. If the command output is too compact, run a focused `workflow_live_gates` call
-   with only permission probe flags enabled and record the raw JSON.
-5. Use `oc_inspect` and `oc_events` to capture permission sessions, tool events,
-   and logs when they clarify whether a denial was enforced, bypassed, or not
-   observable.
-
-Record these permission-specific fields:
-
-- denied-bash probe result and whether the command completed
-- command-scoped bash probe result and whether the denied pattern completed
-- secret-read probe result and whether a read attempt was denied, allowed, or not
-  observable
-- child/session permission rules, when available
-- relevant `oc_shell`, `oc_permission`, `oc_events`, or `oc_inspect` evidence
-- whether the issue appears to be plugin logic, OpenCode runtime behavior, or
-  configuration/trust posture
-
-If a permission gate fails with evidence, do not claim autonomous non-dry release
-readiness. Create or update a durable Beads blocker unless an existing epic
-already tracks the runtime gate failure.

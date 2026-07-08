@@ -226,9 +226,8 @@ model` from `run.modelTiers`.
    back with `parseStructuredTextResult` (extracts the outermost `{...}`). (child-agent-runner.js
    lines 335, 342, 347, 565-568; `workflow-kernel/structured-output.js`.)
 
-**Production reality:** native structured output is NOT available in the current runtime (the
-live-gate probes report `structuredOutput: "unavailable"` under the deny-by-default permission
-ruleset), so the **fallback is the DEFAULT path**. Leaves MUST therefore author schemas that are
+**Production reality:** native structured output is NOT available in the current runtime, so the
+**fallback is the DEFAULT path**. Leaves MUST therefore author schemas that are
 **text-JSON-parse-friendly**:
 
 - Prefer plain `object`/`array`/`string`/`integer`/`boolean` and `enum` constraints.

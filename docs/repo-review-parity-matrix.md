@@ -158,14 +158,14 @@ These hold for every leaf and are what the `repo-review` meta relies on.
   `summary`, `counts` (5-tier), `findings`, `truncatedFindings`, `reportMarkdown`
   (`null` for empty/aborted or when dropped to fit).
 - **Profile:** every leaf ships under `profile:"read-only-review"` (authority
-  readOnly, `requiredGates:[]`). The `inspect-with-shell` profile is NOT used by
-  any shipped leaf (gates unverified per the `rrev.1` Stage-0 gate).
+  readOnly; the profile carries no gate vocabulary at all — Design C deleted
+  `requiredGates`). The `inspect-with-shell` profile is NOT used by
+  any shipped leaf (a deferred product-scope decision, not a runtime limitation — see F.4/F.6).
 - **Structured-output policy (contract §9):** every schema lane is declared via
   `agent(prompt, { schema, tier, onFailure:"returnNull" })`. The guest source is
   IDENTICAL for both paths: native structured output (when
   `capabilities.structuredOutput === "available"`) and the structured-text
-  fallback (the production default — live-gate probes report structuredOutput
-  `"unavailable"`). Every leaf test covers the structured-text fallback path and
+  fallback (the production default). Every leaf test covers the structured-text fallback path and
   the fingerprint sentinel.
 - **Guest purity:** every leaf is import-free (no `import`/`require`, no
   `tests/helpers/` reference) — enforced by the contract test's no-import proof.
@@ -200,7 +200,7 @@ merge. (Sources: each OpenCode workflow header comment + `SUITE-CONTRACT.md`.)
    installs, no package-manager mutation, no advisory-database fetch. CVE/outdated
    claims not provable from local files are reported at REDUCED confidence with the
    gap noted. The optional `inspect-with-shell` read-only-command allowlist for deps
-   is DEFERRED until those live gates verify.
+   remains DEFERRED as a product-scope decision (see F above), not a runtime-verification gap.
 5. **`deps` CVEs are non-critical.** `deps` keeps `critical:0`; CVE findings are
    reported at high/medium/low. Consistent with the contract's "only `security`
    populates critical" rule (a deliberate suite-wide normalization, not a bug).

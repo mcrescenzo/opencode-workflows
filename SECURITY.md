@@ -31,8 +31,9 @@ plugin's Node process with normal local privileges before exported capabilities
 are structurally validated. The core plugin does not currently enforce extension
 signatures, hash pins, or a module allowlist.
 
-The kernel's authority, path, approval, and live-gate checks protect core guest
-and tool flows. They do not automatically sandbox extension-contributed tools,
+The kernel's authority, path, approval, and deterministic launch-time checks
+(server-fingerprint version floor, lane rooting/permission-echo assertions)
+protect core guest and tool flows. They do not automatically sandbox extension-contributed tools,
 drain adapters, or mutation finalizers. Extension code can call provided guard
 helpers, but that is part of the extension's trusted implementation. Only load
 extensions you trust as local code.

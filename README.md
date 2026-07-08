@@ -59,7 +59,7 @@ npm run test:workflows
 ```
 
 This wrapper covers the core `workflow_run` / `workflow_apply` paths and the
-`repo-*` review workflows. Beads-drain, extension-seam, live-gate, and durable
+`repo-*` review workflows. Beads-drain, extension-seam, and durable
 state coverage live in the focused scripts below and in the catch-all `npm test`
 matrix.
 
@@ -72,13 +72,7 @@ npm run test:workflow-adapters
 npm run test:extension-seam
 ```
 
-Run mocked, no-token live-gate probe coverage from this directory:
-
-```sh
-npm run test:live-gates
-```
-
-Run the full plugin test matrix (all workflow, adapter, runtime, live-gate,
+Run the full plugin test matrix (all workflow, adapter, runtime,
 durable-state, and beads-drain integration tests) from this directory:
 
 ```sh
@@ -123,8 +117,8 @@ Canonical safety references: apply authority and primary-tree writes are in
 `Authority Profiles And Apply Boundary`; raw run artifacts, transcript fallback,
 debug capture, and event access are in `Source Of Truth And Transcript Fallback`;
 lifecycle recovery and cleanup are in `Durable Lifecycle And Cleanup`;
-live-gate behavior is in `Live Gates`; and the complete `workflow_*` tool table
-is in `docs/workflow-plugin.md#workflow-tool-reference`.
+the deterministic launch-time trust checks are in `Runtime Trust Model`; and the
+complete `workflow_*` tool table is in `docs/workflow-plugin.md#workflow-tool-reference`.
 
 ## Hooks
 
@@ -137,12 +131,12 @@ opencode plugin hooks:
 | `event` | Fire-and-forget lifecycle listener. Tracks session idle state and delivers best-effort background workflow-completion notifications; failures are swallowed so a notification error can never destabilize the session. |
 | `dispose` | Clears in-memory notification runtime state when the plugin instance is torn down. |
 | `"chat.params"` | Applies lane-effort model-tiering parameters to outgoing chat requests. |
-| `tool` | Registers the `workflow_*` tool family (`workflow_run`, `workflow_status`, `workflow_events`, `workflow_reconcile`, `workflow_cancel`, `workflow_pause`, `workflow_kill`, `workflow_save`, `workflow_list`, `workflow_cleanup`, `workflow_apply`, `workflow_salvage`, `workflow_roles`, `workflow_models`, `workflow_templates`, `workflow_template_save`, `workflow_live_gates`), plus any NET-NEW tools contributed by a configured trusted extension. See `docs/workflow-plugin.md#workflow-tool-reference` for the full per-tool contract. |
+| `tool` | Registers the `workflow_*` tool family (`workflow_run`, `workflow_status`, `workflow_events`, `workflow_reconcile`, `workflow_cancel`, `workflow_pause`, `workflow_kill`, `workflow_save`, `workflow_list`, `workflow_cleanup`, `workflow_apply`, `workflow_salvage`, `workflow_roles`, `workflow_models`, `workflow_templates`, `workflow_template_save`), plus any NET-NEW tools contributed by a configured trusted extension. See `docs/workflow-plugin.md#workflow-tool-reference` for the full per-tool contract. |
 
 ## Command And Skill Registration
 
 At opencode startup the plugin config hook registers the bundled commands —
-`workflow-live-gates-release-check`, `repo-bughunt`, and `repo-review` — plus any
+`repo-bughunt` and `repo-review` — plus any
 commands contributed by configured extensions (e.g. `beads-drain` from the beads
 extension), and adds this plugin's `skills` directory (and extension skill dirs) to
 `skills.paths`. Restart opencode after
@@ -162,8 +156,8 @@ protect guest workflow execution and core tool paths. They do not automatically
 wrap extension-contributed tools, drain adapters, or mutation finalizers. An
 extension can voluntarily call injected guard helpers, but a configured extension
 must be treated as full-privilege host code that can read/write local files,
-spawn processes, use network-capable APIs, and declare its own drain live-gate
-requirements. Only install extensions you would trust as local code.
+spawn processes, use network-capable APIs, and declare its own drain adapter
+behavior. Only install extensions you would trust as local code.
 
 ## Source Versus Local State
 
@@ -205,15 +199,15 @@ are making progress but timing out, pass top-level `laneTimeoutMs` (or the alias
 `childPromptTimeoutMs`) up to `3600000` milliseconds; keep `maxAgents` low until
 successful lane closeout is proven.
 
-Non-dry Beads drain fails closed before adapter discovery, Beads mutation, or
-lane launch unless the required active-runtime live gates are verified:
-permission enforcement, command-scoped bash denial, secret-read denial,
-structured output, directory rooting, local Git integration worktree isolation,
-and cancellation. `unsafeAcceptUnverifiedPermissions` is not a non-dry bypass;
-run `mode: "dry-run"` or fix the reported live gates before retrying
-`mode: "autonomous-local"`.
-Use `/workflow-live-gates-release-check` only after explicit approval for
-token/worktree/background/notification side effects.
+Non-dry Beads drain requires a one-time launch approval; the kernel verifies
+the server version floor (`GET /global/health`, minimum opencode `1.17.13`)
+and asserts lane rooting and permissions deterministically at launch — there
+is no live-gate preflight step and no separate release-check command. Lanes
+get local Git integration worktree isolation (not the native opencode
+worktree API), and each lane's deny-by-default permission ruleset is sent with
+the session and checked against the create echo. A server below the minimum,
+or a failed rooting/permission assertion, refuses the launch instead of
+degrading silently.
 
 The extension `beads-drain` script is a thin wrapper around the host-owned
 `drain({ adapter: "beads" })` primitive. The trusted kernel and Beads adapter own
@@ -245,7 +239,7 @@ that runs all eight with one shared recon pass and merges/ranks findings cross-d
 and two commands: `/repo-bughunt` (single-domain) and `/repo-review` (full-suite).
 
 Every leaf and the meta run under `profile: "read-only-review"` — no shell, edit, git,
-network, or MCP, and no live-gate preflight. The QuickJS guest physically cannot write
+network, or MCP. The QuickJS guest physically cannot write
 files, so every envelope carries `reportPath: null`; **guests return data, they never
 write**. Only the command wrapper persists a report under the gitignored
 `.repo-review/runs/` directory (`<run-id>-bughunt-report.md` or
@@ -279,10 +273,10 @@ the whole tree (see "Sizing `maxAgents`" below). Read the merged result via
 `workflow_apply`, git writes, and Beads mutation are separate explicit follow-ups and
 are never run by any repo-review workflow or command. The optional
 `inspect-with-shell` carve-outs (the `repo-complexity` churn lens and `repo-deps`
-manifest inspection) are deferred until the `permissionEnforcement` and
-`commandScopedBash` live gates are verified; until then every `repo-*` lane stays plain
-read-only-review. Note also that native structured output is currently unavailable in
-this runtime, so the kernel's structured-text fallback is the production path.
+manifest inspection) are deferred as a product-scope decision, not a runtime
+limitation — every `repo-*` lane stays plain read-only-review today. Note also
+that native structured output is currently unavailable in this runtime, so the
+kernel's structured-text fallback is the production path.
 
 The full user-facing guide, per-domain one-liners, the arg tables, the nested-restriction
 and budgeting details, and the deferred-mutation boundary live in
@@ -320,24 +314,33 @@ child-agent accounting") for the full accounting and the code references.
 Workflow authority is approved once at launch. The approval hash covers the
 source hash, runtime args, profile-expanded authority, budgets, concurrency,
 child model, nested workflow snapshots, and base commit when edits are possible.
-Approved runs must not stop mid-run for interactive permission prompts; they
-fail closed before lane launch when required live gates are unavailable,
-`available-unverified`, `blocked`, or `failed-with-evidence`.
+Approved runs must not stop mid-run for interactive permission prompts. Elevated
+authority (`edit`, `worktreeEdit`, `integration`, or `shell`) additionally
+consults a memoized per-server `GET /global/health` fingerprint at launch and
+refuses to start on an opencode server older than `1.17.13` (see "Runtime Trust
+Model").
 
-| Profile | Purpose | Auto-Approve Tier | Required Gate Shape |
-| --- | --- | --- | --- |
-| `read-only-review` | Read-only analysis lanes. | `readOnly` | No elevated authority gates. Child-capable runs still preflight `permissionEnforcement` (read-only child lanes are contained by a deny-by-default permission ruleset). |
-| `inspect-with-shell` | Read-only work plus a command-scoped, audited read-only shell (e.g. `git ls-files`, `git log --numstat`, `npm ls --depth=0`, `cargo tree`, `pip list`, `go list`). Shell chaining, redirection, filesystem mutation, network fetch, and package install/publish are denied at the permission-rule level. | `readOnly` | Permission enforcement and command-scoped bash denial. |
-| `drain-dry-run` | Safe drain preview. | `readOnly` | No elevated authority gates. Child-capable runs still preflight `permissionEnforcement`. |
-| `drain-autonomous-local` | Non-dry local drain through integration worktrees. | `all` | Permission enforcement, command-scoped bash denial, secret-read denial, structured output, directory rooting, integration worktree isolation, cancellation. |
-| `edit-plan-only` | Native isolated edit plans. | `worktree` | Permission, native worktree API, directory rooting, worktree edit isolation. |
-| `apply-approved-plan` | Hash-gated primary-tree apply. | `worktree` | Permission enforcement, native worktree API, directory rooting, worktree edit isolation. |
+| Profile | Purpose | Auto-Approve Tier |
+| --- | --- | --- |
+| `read-only-review` | Read-only analysis lanes. | `readOnly` |
+| `inspect-with-shell` | Read-only work plus a command-scoped, audited read-only shell (e.g. `git ls-files`, `git log --numstat`, `npm ls --depth=0`, `cargo tree`, `pip list`, `go list`). Shell chaining, redirection, filesystem mutation, network fetch, and package install/publish are denied at the permission-rule level. | `readOnly` |
+| `drain-dry-run` | Safe drain preview. | `readOnly` |
+| `drain-autonomous-local` | Non-dry local drain through integration worktrees. | `all` |
+| `edit-plan-only` | Native isolated edit plans. | `worktree` |
+| `apply-approved-plan` | Hash-gated primary-tree apply. | `worktree` |
+
+Every profile's deny-by-default permission ruleset is sent with the child
+session and re-checked against the session create echo; a mismatch fails that
+lane closed. Profiles that create a worktree (`edit-plan-only`,
+`apply-approved-plan`, `drain-autonomous-local`) additionally assert directory
+rooting and worktree path-distinctness from the typed API fields returned at
+creation time, not from model-reported text.
 
 > **Network/MCP workflow authority is permission-rule enforced.** Ad-hoc `network`/`mcp`
-> authority (via `args.authority` or `meta.authority`) launches after the normal approval and
-> permission-enforcement gates. The runtime emits `webfetch`/`websearch`/MCP permission rules from
+> authority (via `args.authority` or `meta.authority`) launches after the normal approval
+> handshake. The runtime emits `webfetch`/`websearch`/MCP permission rules from
 > the resolved authority profile. `networkAccess` remains an informational reserved diagnostic;
-> `mcpAccess` has an opt-in behavioral probe, and `mcpPolicy: { allow, deny }` can scope MCP
+> `mcpAccess` is diagnostic by default, and `mcpPolicy: { allow, deny }` can scope MCP
 > server/tool patterns at the run or lane level without allowing lane escalation.
 
 `workflow_apply` is the normal explicit primary-tree write boundary for edit or
@@ -351,13 +354,11 @@ tree (accepted code changes land; staged Beads closes/followups finalize) instea
 of stopping at `awaiting-diff-approval`. Every other edit/integration run keeps
 `workflow_apply` as the explicit, hash-gated write boundary; failed autonomous
 drains keep `failed-with-diff-plan` for review through `workflow_apply`.
-Elevated workflow launch may run required live-gate preflight probes after
-approval and before mutation or lane launch. Permission, structured-output,
-directory-rooting, integration-worktree-isolation, and cancellation probes each
-spawn a short-lived child session (model token use), and the worktree/
-directory-rooting probes create and remove scratch worktrees. The approval
-preview itself never probes; these side effects begin only after the run is
-approved.
+Elevated workflow launch consults the server-fingerprint version floor once per
+server before any lane launches; unlike the deleted probe subsystem, this check
+spends no model tokens and creates no scratch worktrees. The approval preview
+itself never contacts the server; the fingerprint check runs only after the run
+is approved, before mutation or lane launch.
 Apply/finalization state is durable and retryable: `apply-running` and
 `apply-failed` runs are protected from cleanup, and domain mutations finalize
 only after the patch apply path succeeds.
@@ -615,98 +616,26 @@ Recommended manual TUI check after changing toast timing or formatting:
 4. If glyphs misrender, enable the ASCII flag instead of changing the default
    renderer.
 
-## Live Gates
+## Runtime Trust Model
 
-`workflow_live_gates({ format: "json" })` is token-free by default. It reports
-API shape and configuration as `available-unverified` until a behavioral probe is
-run or a test injects forced gate evidence. Permission safety probes use the
-child-session `session.prompt` path with tools enabled, matching workflow lanes;
-direct `session.shell` behavior is diagnostic only and is not sufficient Beads
-lane safety evidence.
+Every workflow needs a one-time hashed human approval before it runs. Lanes
+work inside real git worktrees; their edits land on your tree only through the
+controller, after a clean-base check and a diff-plan hash match. Lane rooting
+and worktree isolation are asserted from typed API fields at creation time, and
+each lane's deny-by-default permission ruleset is sent with the session and
+re-checked against the create echo. The kernel trusts opencode itself — the
+plugin runs inside it — and verifies compatibility once per server via
+`GET /global/health`, refusing edit-, worktreeEdit-, integration-, and
+shell-granting ("elevated") profiles below opencode `1.17.13`.
 
-Opt-in probe flags include:
-
-```json
-{
-  "approvalIntent": "probe",
-  "probePermissionEnforcement": true,
-  "probeCommandScopedBash": true,
-  "probeSecretReadDeny": true,
-  "probeStructuredOutput": true,
-  "probeWorktreeApi": true,
-  "probeDirectoryRooting": true,
-  "probeWorktreeEditIsolation": true,
-  "probeIntegrationWorktreeIsolation": true,
-  "probeBackgroundContinuation": true,
-  "probeConcurrencyCapacity": true,
-  "concurrencyProbeLimit": 16,
-  "probeCancellation": true,
-  "probeWorkflowNotification": true
-}
-```
-
-Live probes require `approvalIntent: "probe"` and an active opencode server/client. Session probes can spend
-model tokens; the concurrency-capacity probe launches `concurrencyProbeLimit`
-child prompt calls at the same time and can expose provider or runtime rate
-limits. Worktree probes can create and remove throwaway worktrees. Gate
-states mean:
-
-| State | Meaning |
-| --- | --- |
-| `blocked` | Required API shape or precondition is unavailable. |
-| `available-unverified` | API shape exists, but behavior was not live-probed. |
-| `verified` | Behavioral evidence was observed. |
-| `failed-with-evidence` | A probe ran and did not prove the safety claim. |
-
-Workflow features that depend on permissions, native worktrees, directory
-rooting, local Git integration worktrees, or worktree edit isolation fail closed
-when required capabilities are unavailable or `available-unverified`. Only
-`verified` live-gate evidence, or explicit test capability evidence, is
-sufficient for elevated workflow authority.
-
-A verified gate's `evidenceStrength` distinguishes directly-observed target
-behavior (`observed`) from weaker evidence: `no-attempt-fallback` (permission
-fallback when the denied tool is hidden) and `in-process-smoke`
-(`backgroundContinuation`, which only yields the event loop and does not
-exercise the opencode background subsystem or imply restart survival).
-Directory-rooting and integration-worktree rooting no longer verify from
-model-reported cwd text alone; a text-only echo is reported as
-`available-unverified` until a tool-anchored sentinel read proves the behavior.
-`concurrencyCapacity` is diagnostic: it characterizes whether this active runtime
-can complete an N-wide burst of trivial `session.prompt` calls. It is not required
-for read-only or Beads safety gates, but it is the evidence to consult before
-raising the hard concurrency ceiling for production runs.
-See `/workflow-live-gates-release-check` for the weak-evidence release policy.
-
-Non-dry Beads drain requires the local Git `integrationWorktreeIsolation` gate
-instead of the native opencode `worktreeApi` and `worktreeEditIsolation` gates,
-because integration lanes use the plugin-local Git worktree adapter. Native
-worktree gates still report edit-mode readiness separately.
-
-`unsafeAcceptUnverifiedPermissions` is intentionally not a bypass for non-dry
-Beads drain. Permission gates (`permissionEnforcement`, `commandScopedBash`, and
-`secretReadDeny`) must be verified alongside structured output, directory
-rooting, local Git integration worktree isolation, and cancellation. If any gate
-is unverified, blocked, or failed-with-evidence, use dry-run mode or fix the
-reported live gates before retrying non-dry.
-
-### Active Runtime Release Check
-
-The opt-in slash command `/workflow-live-gates-release-check` runs every
-behavioral `workflow_live_gates` probe in the active opencode runtime and
-reports raw JSON evidence. Use it only after explicit approval for token,
-worktree, background, and notification side effects.
-
-Readiness is reported per capability tier, not as a single all-gates verdict:
-non-dry `beads-drain` uses local Git `integrationWorktreeIsolation` and does
-not require the native `worktreeApi` or `worktreeEditIsolation` gates, so a
-blocked native worktree gate does not by itself block Beads. Each tier passes
-only when `configured: true` and every gate in that tier's required subset is
-`state: "verified"`; any `blocked`, `available-unverified`, or
-`failed-with-evidence` gate in the relevant tier blocks that tier's release
-claim. See `/workflow-live-gates-release-check` for the exact full-edit and
-beads-non-dry subsets and the evidence-strength caveats. Normal `npm test`,
-`npm run test:live-gates`, and `npm run test:workflows` remain no-token by
+There is no LLM-probe live-gate subsystem, no `workflow_live_gates` tool, and no
+opt-in release-check command. None of the checks above spend model tokens,
+spawn child sessions, or create/remove scratch worktrees to prove themselves —
+they are ordinary deterministic checks that run at the moment each property is
+actually used. A failed check (a too-old server, a permission-echo mismatch, a
+dirty base, or a diff-plan hash mismatch) throws before the affected lane or
+apply proceeds, so failure is loud rather than degrading to an unverified
+middle state. Normal `npm test` and `npm run test:workflows` remain no-token by
 default.
 
 ## Workflow Recipes

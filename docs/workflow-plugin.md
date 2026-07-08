@@ -29,7 +29,6 @@ is the operator-facing summary, and this file is the deeper architecture note.
 | `workflow_models` | Read-only. | None. | This is the model availability readback surface. |
 | `workflow_templates` | Read-only; source retrieval is explicit. | None. | This is the shipped-template readback surface. |
 | `workflow_template_save` | Writes saved workflow source from a shipped template. | No approval hash; write-permission gated. | `workflow_list({ format: "json" })`. |
-| `workflow_live_gates` | No-probe report is read-only; probes/reset can create child sessions, scratch worktrees, and mutate probe cache. | Probe/reset flags require `approvalIntent: "probe"`; no hash. | `workflow_live_gates({ format: "json" })`; use `/workflow-live-gates-release-check` for full release evidence. |
 
 ## Role Prompts And Defaults
 

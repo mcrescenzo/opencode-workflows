@@ -55,9 +55,6 @@ export default {
       // Called by the host with the live run context; build your adapter from it.
       createAdapter: ({ pluginContext, toolContext, run, options }) => ({
         ...createMyAdapter({ /* cwd, actor, scope, signal, ... */ }),
-        // The host enforces these live gates before any non-dry mutation/lane launch.
-        requiredGates: ["permissionEnforcement", "commandScopedBash", "secretReadDeny",
-          "structuredOutput", "directoryRooting", "integrationWorktreeIsolation", "cancellation"],
       }),
       supportsAutoApply: true,        // opt into in-run auto-apply (autonomous-local)
       mutationOperations: ["my-domain.close", "my-domain.note"],
@@ -180,7 +177,10 @@ core tool name or a name another extension already contributed. `review_material
   host code, loaded only from explicit config.
 - Child lanes never get domain-mutation authority; the controller owns all domain
   writes.
-- Non-dry drains fail closed unless the adapter's required live gates are verified.
+- Non-dry drains launch through the same deterministic checks as any other
+  elevated run: the server-fingerprint version floor, and per-lane
+  rooting/permission-echo assertions — there is no separate adapter-declared
+  gate list.
 - Auto-apply (in-run primary-tree write + domain finalization, no second approval)
   requires: `harness === "drain"`, autonomous-local authority (read from persisted
   state — resume-safe), a **trusted source** (core-bundled or extension-registered,

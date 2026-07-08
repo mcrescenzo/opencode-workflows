@@ -55,6 +55,9 @@ test("workflow tool reference lists every registered workflow tool and approval 
   assert.equal(tools.length, 16, "expected the current workflow tool registry size");
   assert.match(doc, /## Workflow Tool Reference/);
   for (const tool of tools) assert.ok(doc.includes(`\`${tool}\``), `tool reference missing ${tool}`);
+  // Design C deleted the live-gate probe subsystem and its `approvalIntent: "probe"` vocabulary
+  // along with the `workflow_live_gates` tool; "probe" is no longer a valid approvalIntent value
+  // anywhere in the kernel, so it is intentionally absent from this list.
   for (const term of [
     "approvalHash",
     "approvedSourceHash",
@@ -62,7 +65,6 @@ test("workflow tool reference lists every registered workflow tool and approval 
     "diffPlanHash",
     "domainMutationHash",
     'approvalIntent: "apply"',
-    'approvalIntent: "probe"',
   ]) {
     assert.ok(doc.includes(term), `tool reference missing ${term}`);
   }

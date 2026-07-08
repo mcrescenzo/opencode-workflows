@@ -117,10 +117,12 @@ test("README documents first-class beads-drain behavior and release caveats", as
   assert.match(readme, /workflow_run\(\{ name: "beads-drain"/);
   assert.match(readme, /mode: "dry-run"/);
   assert.match(readme, /Dry-run is the default safe path/);
-  assert.match(readme, /Non-dry Beads drain fails closed/);
+  assert.match(readme, /Non-dry Beads drain requires a one-time launch approval/);
   assert.match(readme, /local Git integration worktree isolation/);
-  assert.match(readme, /unsafeAcceptUnverifiedPermissions.*not a non-dry bypass/s);
-  assert.match(readme, /workflow-live-gates-release-check/);
+  // Design C: no live-gate preflight and no separate release-check command; the kernel verifies
+  // the server version floor and asserts lane rooting/permissions deterministically at launch.
+  assert.match(readme, /there\s+is no live-gate preflight step and no separate release-check command/s);
+  assert.match(readme, /asserts lane rooting and permissions deterministically at launch/);
   assert.match(readme, /host-owned\s+`drain\(\{ adapter: "beads" \}\)` primitive/s);
   assert.doesNotMatch(readme, /script-body agent-orchestrated loop/);
   assert.match(readme, /autonomous-local.*applied to the local\s+primary tree in-run|applied to the local\s+primary tree in-run/s);
@@ -135,7 +137,8 @@ test("README documents first-class beads-drain behavior and release caveats", as
   assert.match(readme, /`workflow_apply` is the normal explicit primary-tree write boundary/);
   assert.match(readme, /intentional in-run apply exception is the extension-trusted non-dry `beads-drain`/);
   assert.match(readme, /launch approval\s+authorizes in-run apply of a verified successful diff plan/s);
-  assert.match(readme, /Elevated workflow launch may run required live-gate preflight probes after\s+approval/s);
+  // Design C: no live-gate preflight probes; a memoized server-fingerprint check replaces them.
+  assert.match(readme, /Elevated workflow launch consults the server-fingerprint version floor once per\s+server/s);
   assert.match(readme, /scratch worktrees/);
   assert.match(readme, /Raw `result\.json`, ledgers, diff plans, request files, and run state/);
   assert.match(readme, /## Durable Lifecycle And Cleanup/);
@@ -155,7 +158,9 @@ test("plugin system-test docs define safe-mode startup smoke evidence", async ()
   assert.match(doc, /command registry/);
   assert.match(doc, /tool registry/);
   assert.match(doc, /beads-drain/);
-  assert.match(doc, /workflow-live-gates-release-check/);
+  // Design C deleted workflow_live_gates and its /workflow-live-gates-release-check command;
+  // the safe-mode registry proof now cites workflow_list instead.
+  assert.match(doc, /workflow_list/);
   assert.match(doc, /safe-mode registration limitation/);
   assert.match(doc, /Use an inherited\s+child for the actual plugin registration proof/s);
   assert.match(doc, /workflow_run/);

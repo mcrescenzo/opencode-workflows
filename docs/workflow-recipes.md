@@ -225,12 +225,12 @@ Notes that keep this safe:
   when running a command *is the evidence* (you need the actual output, not a
   file's contents). An explicit `authority.shell = { allow, deny }` override
   still wins over the audited list for a deliberate per-run scope.
-- Network/MCP workflow authority is enforced by generated permission rules plus
-  the verified `permissionEnforcement` gate. `networkAccess` is still reported
-  as an informational reserved diagnostic. `mcpAccess` is also diagnostic by
-  default, but `workflow_live_gates({ approvalIntent: "probe", probeMcpAccess:
-  true })` can run an explicit MCP allow/deny probe when the active runtime has
-  observable probe MCP tools.
+- Network/MCP workflow authority is enforced by generated permission rules;
+  launch follows the normal one-time approval handshake, not a separate
+  permission probe. `networkAccess` is still reported as an informational
+  reserved diagnostic. `mcpAccess` is diagnostic by default; `mcpPolicy: {
+  allow, deny }` can scope MCP server/tool patterns at the run or lane level
+  without allowing lane escalation.
 
 ### Safe `workflow_run` shape (source)
 
@@ -371,10 +371,10 @@ What keeps this recipe honest:
   `meta.concurrency` / `workflow_run({ concurrency })` can go higher, up to the
   configured hard ceiling (default 64; set
   `OPENCODE_WORKFLOWS_HARD_CONCURRENCY_LIMIT` or plugin option
-  `hardConcurrencyLimit`). Before relying on higher fan-out in production, run
-  `workflow_live_gates({ approvalIntent: "probe", probeConcurrencyCapacity: true, concurrencyProbeLimit: N })`
-  against the active runtime and treat the result as environment-specific
-  evidence, not a universal guarantee.
+  `hardConcurrencyLimit`). There is no built-in concurrency-capacity probe;
+  before relying on higher fan-out in production, raise it incrementally
+  against a representative workload and watch for stalls/timeouts rather than
+  trusting a single synthetic number.
 
 ### Loop until budget
 

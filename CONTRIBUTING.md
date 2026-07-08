@@ -45,7 +45,6 @@ npm run test:workflows         # workflow_run / workflow_apply / repo-* regressi
 npm run test:beads-drain       # beads-drain workflow/adapter/assets/scratch coverage
 npm run test:workflow-adapters # drain adapter focused suites
 npm run test:extension-seam    # extension registration and trusted asset seams
-npm run test:live-gates        # mocked live-gate probe coverage
 npm run release:no-token       # complete public no-token release gate
 ```
 

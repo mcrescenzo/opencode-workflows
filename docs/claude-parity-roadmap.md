@@ -27,11 +27,14 @@ Statements here are backed by the plugin's actual behavior, not aspiration.
   sessions via the server API (`child-session-runner.js`: `runChildAgent`,
   `runNestedWorkflow`, slot accounting). These reuse OpenCode's **native agent
   registry**; the plugin has **no custom-subagent registry of its own**.
-- **Live gates** **[shipped]**: behavioral probes
-  (`workflow_live_gates`) verify permission enforcement, command-scoped bash
-  denial, secret-read denial, structured output, directory rooting, worktree
-  isolation, cancellation, background continuation, and notification delivery
-  before elevated authority is granted.
+- **Deterministic runtime trust model** **[shipped]**: there is no LLM-probe
+  live-gate subsystem. Elevated (`edit`/`worktreeEdit`/`integration`/
+  `shell`-granting) authority is checked once per server via a memoized
+  `GET /global/health` fingerprint that refuses servers below opencode
+  `1.17.13`; lane rooting and worktree isolation are asserted from typed API
+  fields at creation time; and each lane's deny-by-default permission ruleset
+  is sent with the session and re-checked against the create echo (README
+  "Runtime Trust Model").
 - **Hash-gated apply boundary** **[shipped]**: `workflow_apply` is the only
   primary-tree write path, gated by approved source hash, base commit, diff-plan
   hash, domain-mutation hash, and clean primary dirty state.
@@ -79,8 +82,10 @@ the gap in this plugin, and a proposed shape.
   automatically. Proposed: an optional detached supervisor process (or
   server-attached lifecycle) that owns long-running drains, persists a log
   stream, allows `attach` from a later session, and can respawn a failed lane
-  within budget. Must preserve the existing fail-closed gate model — a supervisor
-  must never bypass `workflow_apply` hash gates or live-gate requirements.
+  within budget. Must preserve the existing fail-closed model — a supervisor
+  must never bypass `workflow_apply` hash gates or the deterministic
+  launch-time checks (server-fingerprint version floor, permission/rooting
+  assertions).
 - **Plugin-local custom-subagent registry.** Claude Code subagents are defined as
   markdown files with frontmatter (model, tools, description) and surface via
   `SubagentStart`/`SubagentStop`. This plugin currently dispatches every lane
