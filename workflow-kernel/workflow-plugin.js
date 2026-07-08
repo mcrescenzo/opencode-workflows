@@ -2777,7 +2777,7 @@ async function WorkflowPlugin(pluginContext, options) {
         // "any keys allowed" semantics of the args bag while constraining the top-level type.
         args: tool.schema.object({}).passthrough().optional().describe("Runtime args bag for the workflow body (a JSON object, not a JSON-encoded string; a stringified object is decoded once and normalized before hashing)."),
         approve: tool.schema.boolean().optional().describe("Omit or false to get the approval preview; true executes when approvalHash matches the preview."),
-        approvalHash: tool.schema.string().optional().describe("Hash returned by the immediately prior preview for this exact envelope; any envelope change re-keys it (mismatch responses list changedFields). With approve: true and no source/name, the previewed inline source is reused for this hash (approve-by-reference)."),
+        approvalHash: tool.schema.string().optional().describe("Hash returned by the immediately prior preview for this exact envelope; any envelope change re-keys it (mismatch responses list changedFields). With approve: true and no source/scriptPath/name, the previewed inline source is reused for this hash (approve-by-reference)."),
         autoApprove: tool.schema.enum(["readOnly", "worktree", "all"]).optional().describe("Narrow the plugin-configured autoApprove ceiling for this call (readOnly < worktree < all); it can never widen the configured ceiling."),
         format: tool.schema.enum(["summary", "json"]).optional(),
         resumeRunId: tool.schema.string().optional().describe("Resume a prior resumable run by id; unchanged lanes replay as zero-spend cache hits from the persisted journal."),

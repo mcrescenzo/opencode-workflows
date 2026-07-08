@@ -180,8 +180,10 @@ what to do:
   runs cannot request `allowEdits` (it throws), so keep the slice read-only.
 - **Stale `approvalHash`.** If approve fails with a hash mismatch, your `source`
   or `args` changed after the preview — the mismatch response's `changedFields`
-  names exactly which envelope field re-keyed. For inline `source` the usual
-  cause is re-transmission drift (a single re-typed byte re-keys the hash): do
+  names which envelope fields re-keyed when the supplied hash matches a
+  still-recorded preview (null otherwise — re-preview to get a fresh hash).
+  For inline `source` the usual cause is re-transmission drift (a single
+  re-typed byte re-keys the hash): do
   not re-send the source on the retry — approve with only `approve: true` and
   the `freshApprovalHash` (approve-by-reference), or `workflow_save` the body
   once and run it by `name`, which re-reads byte-stable bytes from disk. Either

@@ -212,8 +212,8 @@ Model").
 Approving an inline-source preview does not require re-transmitting the source:
 an approve call may send only `approve: true` + `approvalHash`, and the
 previewed bytes are reused from a bounded in-memory store (approve-by-reference).
-A mismatched approve returns `changedFields` naming exactly which envelope
-fields re-keyed.
+A mismatched approve returns `changedFields` naming which envelope fields
+re-keyed (null when the supplied hash no longer matches a recorded preview).
 
 | Profile | Purpose | Auto-Approve Tier |
 | --- | --- | --- |
