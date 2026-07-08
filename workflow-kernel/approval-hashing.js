@@ -1,14 +1,21 @@
 import { hash, hashStable, stableStringify } from "./text-json.js";
 
 export function approvalSnapshotList(nestedSnapshots) {
-  return [...new Map([...(nestedSnapshots?.values?.() ?? [])].map((item) => [item.sourcePath, item])).values()]
+  // Dedup key: path-backed snapshots dedup by sourcePath (buildNestedSnapshots stores the same
+  // snapshot under BOTH its path key and its hash key, so it appears twice in .values()). Inline
+  // snapshots all share the "<inline>" sentinel path, so path-keyed dedup would collapse DISTINCT
+  // nested inline bodies last-wins and under-bind the approval envelope — key those by hash.
+  return [...new Map([...(nestedSnapshots?.values?.() ?? [])].map((item) => [
+    item.sourcePath === "<inline>" ? `<inline>:${item.sourceHash}` : item.sourcePath,
+    item,
+  ])).values()]
     .map(({ sourcePath, sourceHash }) => ({ sourcePath, sourceHash }))
     .sort((a, b) => `${a.sourcePath}:${a.sourceHash}`.localeCompare(`${b.sourcePath}:${b.sourceHash}`));
 }
 
 export function approvalEnvelope(approval) {
   return {
-    version: 2,
+    version: 3, // v3: nested inline snapshots dedup by hash (v2 collapsed distinct inline bodies on the shared "<inline>" path)
     sourcePath: approval.sourcePath,
     sourceHash: approval.sourceHash,
     runtimeArgs: approval.runtimeArgs ?? null,

@@ -81,3 +81,31 @@ test("approvalHash covers laneTimeoutMs", () => {
   assert.equal(approvalEnvelope(approval()).laneTimeoutMs, null);
   assert.notEqual(approvalHash(shortTimeout), approvalHash(longTimeout));
 });
+
+test("approvalSnapshotList keeps two distinct inline nested snapshots", () => {
+  const snapshots = new Map([
+    ["hash-a", { sourcePath: "<inline>", sourceHash: "hash-a", source: "return 1;" }],
+    ["hash-b", { sourcePath: "<inline>", sourceHash: "hash-b", source: "return 2;" }],
+  ]);
+  assert.deepEqual(approvalSnapshotList(snapshots), [
+    { sourcePath: "<inline>", sourceHash: "hash-a" },
+    { sourcePath: "<inline>", sourceHash: "hash-b" },
+  ]);
+});
+
+test("approvalSnapshotList still dedups path-backed snapshots stored under both path and hash keys", () => {
+  const snapshot = { sourcePath: "/abs/nested.js", sourceHash: "hash-c", source: "return 3;" };
+  const snapshots = new Map([["/abs/nested.js", snapshot], ["hash-c", snapshot]]);
+  assert.deepEqual(approvalSnapshotList(snapshots), [{ sourcePath: "/abs/nested.js", sourceHash: "hash-c" }]);
+});
+
+test("approvalEnvelope pins version 3", () => {
+  assert.equal(approvalEnvelope(approval()).version, 3);
+});
+
+test("approvalHash changes when only sourceHash changes", () => {
+  assert.notEqual(
+    approvalHash(approval({ sourceHash: "hash-a" })),
+    approvalHash(approval({ sourceHash: "hash-b" })),
+  );
+});
