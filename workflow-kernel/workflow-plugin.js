@@ -1865,6 +1865,7 @@ async function startWorkflow(pluginContext, toolContext, args) {
   // fingerprint on it here means run.diagnostics already carries it once the run object exists.
   const fingerprint = await serverFingerprint(pluginContext);
   adapter.diagnostics.serverFingerprint = fingerprint;
+  adapter.diagnostics.opencodeVersion = fingerprint.version ?? "unknown";
   if (authority.readOnly !== true) {
     assertServerSupportsElevatedAuthority(fingerprint);
   }

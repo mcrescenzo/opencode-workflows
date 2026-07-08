@@ -50,7 +50,7 @@ export function collectTextParts(value, parts = []) {
     return parts;
   }
   if (typeof value !== "object") return parts;
-  if (typeof value.text === "string") parts.push(value.text);
+  if (value.type === "text" && typeof value.text === "string") parts.push(value.text);
   if (Array.isArray(value.parts)) collectTextParts(value.parts, parts);
   if (Array.isArray(value.content)) collectTextParts(value.content, parts);
   if (value.data) collectTextParts(value.data, parts);
