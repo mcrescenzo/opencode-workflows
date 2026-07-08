@@ -533,8 +533,10 @@ The meta (`workflows/repo-review.js`) ships with the default parallel posture do
   runtime (§14.4), so the parent MUST be sized for the full tree.
 - **`concurrency: 16`** — bounds peak concurrent child sessions across the whole fan-out. This is
   an explicit repo-review posture, not the kernel-wide hard ceiling; operators can configure that
-  ceiling higher or lower and should use the concurrency-capacity live probe before treating larger
-  bursts as production-safe.
+  ceiling higher or lower. There is no built-in concurrency-capacity probe; before treating larger
+  bursts as production-safe, raise the ceiling incrementally against a representative workload in
+  the target environment and watch for stalls/timeouts rather than trusting a single synthetic
+  number.
 - **`modelTiers`: not declared on the meta.** The meta deliberately does NOT pin concrete models
   (the epic constraint: "use model tier intents tier fast and tier deep, never hard-code provider
   models"). The operator sets `modelTiers` at launch via `workflow_run({ modelTiers: { fast, deep } })`,

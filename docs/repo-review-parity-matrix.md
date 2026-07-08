@@ -209,7 +209,11 @@ merge. (Sources: each OpenCode workflow header comment + `SUITE-CONTRACT.md`.)
    best-effort/0 and `hotspotScore` approximates `complexityScore`; the engine emits
    `shellCoverage:"none"` + a `coverageLimitations` string explaining git churn was
    not measured. Enabling the shell/churn lens is a future, separately-approved
-   change gated on verified `inspect-with-shell` gates.
+   change that would run under the `inspect-with-shell` profile (one-time launch
+   approval, the audited read-only command allowlist enforced at the
+   permission-rule level, and the server version floor) — not a gate to verify,
+   since the profile carries no gate vocabulary at all (Design C deleted
+   `requiredGates`, consistent with F above).
 7. **Concurrency primitive.** OpenCode uses arity-1 thunks `(api) => ...` so
    `parallel()` runs them CONCURRENTLY. Zero-arg thunks now fail fast unless the
    call explicitly passes `{ sequential: true }`; default/rest parameters also
