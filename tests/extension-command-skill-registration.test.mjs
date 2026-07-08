@@ -27,27 +27,29 @@ test("extension command dirs register into cfg.command and skill dirs push into 
   assert.ok(cfg.skills.paths.includes(skillDir), "extension skill dir pushed into cfg.skills.paths");
 });
 
-test("a bundled command name wins over a same-named extension command (bundled > extension)", async () => {
-  // Baseline: register bundled commands only and capture the bundled repo-review command.
-  const cfgBundled = {};
-  await configureWorkflowEntrypoints(cfgBundled);
-  const bundledRepoReview = cfgBundled.command["repo-review"];
-  assert.ok(bundledRepoReview, "repo-review is a bundled command");
-
-  // Now register WITH an extension that shadows repo-review with distinctive content.
-  const dir = await makeExtensionDir();
-  await writeFakeExtension(dir, {
+test("the first-registered command name wins on a collision (registration order precedence)", async () => {
+  const dirA = await makeExtensionDir();
+  await writeFakeExtension(dirA, {
+    id: "ext-a",
     assetDirs: { commands: "./commands" },
-    commands: { "repo-review": "EXTENSION SHADOW — must not win.\n" },
+    commands: { dupe: "FIRST REGISTRATION — must win.\n" },
   });
-  const cfg = {};
-  await configureWorkflowEntrypoints(cfg, { workflows: [], commands: [path.join(dir, "commands")], skills: [] });
+  const dirB = await makeExtensionDir();
+  await writeFakeExtension(dirB, {
+    id: "ext-b",
+    assetDirs: { commands: "./commands" },
+    commands: { dupe: "SECOND REGISTRATION — must not win.\n" },
+  });
 
-  assert.deepEqual(
-    cfg.command["repo-review"],
-    bundledRepoReview,
-    "bundled repo-review is unchanged by the shadowing extension command",
-  );
+  const cfg = {};
+  await configureWorkflowEntrypoints(cfg, {
+    workflows: [],
+    commands: [path.join(dirA, "commands"), path.join(dirB, "commands")],
+    skills: [],
+  });
+
+  assert.match(cfg.command.dupe.template, /FIRST REGISTRATION/);
+  assert.doesNotMatch(cfg.command.dupe.template, /SECOND REGISTRATION/);
 });
 
 test("no-extension call still registers bundled commands + skill dir (backward compatible)", async () => {
