@@ -170,6 +170,31 @@ async function cleanupTempDirs() {
   return dirs;
 }
 
+// Single cleanup path shared by the normal try/finally exit AND the signal handlers below, guarded
+// so a SIGINT/SIGTERM that arrives while cleanup is already running (or after it already ran) never
+// re-enters stopServer()/cleanupTempDirs().
+let cleanupRan = false;
+async function runCleanupOnce() {
+  if (cleanupRan) return;
+  cleanupRan = true;
+  const stopOutcome = await stopServer();
+  const removedDirs = await cleanupTempDirs();
+  log("cleanup:", JSON.stringify({ stopOutcome, removedDirCount: removedDirs.length }));
+}
+
+// Without this, `kill <driver-pid>` (SIGTERM) or a stray SIGINT lands with no listener, Node's
+// default handling terminates the process immediately, and the try/finally around main() never
+// runs -- orphaning the spawned `opencode serve` child and the scratch temp dirs. Registered at
+// module load, before startServer() runs, so even a signal during server startup is covered.
+for (const signal of ["SIGINT", "SIGTERM"]) {
+  process.on(signal, () => {
+    log(`received ${signal}; running cleanup before exit...`);
+    runCleanupOnce()
+      .catch((error) => { console.error("[design-c-e2e] cleanup on signal failed:", error?.stack ?? error); })
+      .finally(() => process.exit(1));
+  });
+}
+
 // --- Scratch bd repo helpers (pattern: tests/beads-drain-scratch.test.mjs) ---
 
 async function bd(cwd, args) {
@@ -517,10 +542,15 @@ function truncate(text, max) {
 }
 
 function withTimeout(promise, ms, label) {
-  return Promise.race([
-    promise,
-    sleep(ms).then(() => { throw new Error(`${label} timed out after ${ms}ms`); }),
-  ]);
+  let timeoutId;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+  });
+  // The timeout side "loses" the race whenever `promise` settles first, leaving it to reject later
+  // with no reader -- attach a no-op catch so that rejection is never unhandled. clearTimeout as
+  // soon as either side settles so the timer doesn't linger and hold the event loop open.
+  timeoutPromise.catch(() => {});
+  return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timeoutId));
 }
 
 let exitCode = 0;
@@ -534,8 +564,6 @@ try {
   console.log("\n=== design-c-e2e PARTIAL RESULTS ===");
   console.log(JSON.stringify(results, null, 2));
 } finally {
-  const stopOutcome = await stopServer();
-  const removedDirs = await cleanupTempDirs();
-  log("cleanup:", JSON.stringify({ stopOutcome, removedDirCount: removedDirs.length }));
+  await runCleanupOnce();
 }
 process.exit(exitCode);
