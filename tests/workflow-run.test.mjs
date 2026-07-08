@@ -2284,10 +2284,16 @@ return true;`;
   }
 });
 
-test("read-only child lanes fail closed without verified per-session permissions", async () => {
-  const { tools, context, directory } = await makeHarness(async () => {
-    throw new Error("read-only child lane should fail before prompting");
-  }, {
+// Design C: the kernel trusts the platform's session.create permission contract instead of
+// refusing to spawn a lane until a probe confirms run.capabilities.permissions === "available".
+// An unverified (or even absent) permissions capability must no longer block a lane from
+// launching; the containment property that matters is that the permission ruleset is still
+// attached to the child session verbatim, with delivery checked per-lane by
+// sessionPermissionEchoStatus (which throws only on an actual mismatch, covered elsewhere).
+test("read-only child lanes launch without verified per-session permissions, ruleset still attached", async () => {
+  const { tools, context, directory, calls } = await makeHarness(async () => ({
+    data: { parts: [{ type: "text", text: "child ok" }], info: {} },
+  }), {
     capabilities: {
       childSession: "available",
       permissions: "available-unverified",
@@ -2301,7 +2307,16 @@ test("read-only child lanes fail closed without verified per-session permissions
     const source = `export const meta = { name: "read-only-child-permissions", profile: "read-only-review" };
 return await agent("inspect safely", { readOnly: true });`;
 
-    await assert.rejects(runApproved(tools, context, source), /Per-session permission rules are unavailable/);
+    const output = await runApproved(tools, context, source);
+    assert.match(output, /completed/);
+    assert.equal(calls.prompt.length, 1, "the lane must have launched and prompted");
+
+    const createPermissions = calls.create.map((input) => input.permission ?? input.body?.permission).find((permission) => Array.isArray(permission));
+    assert.ok(createPermissions, "child session should still receive the permission ruleset verbatim");
+    assert.ok(
+      createPermissions.some((rule) => rule.permission === "bash" && rule.pattern === "*" && rule.action === "deny"),
+      "read-only child permission rules should deny bash even though permissions capability is unverified",
+    );
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }
@@ -2407,9 +2422,13 @@ test("read-only child-capable run fails closed when permissionEnforcement is unv
     const source = `export const meta = { name: "read-only-child-permission-failed", readOnly: true, maxAgents: 2 };
 return await agent("inspect safely", { readOnly: true });`;
 
+    // Design C: resolveLanePolicy no longer throws on an unverified permissions capability
+    // (it always attaches the ruleset and trusts the platform); this run still fails closed
+    // via the separate ad-hoc-profile preflight gate in workflow-plugin.js, which requires a
+    // verified permissionEnforcement live gate before any child lane may spawn.
     await assert.rejects(
       runApproved(tools, context, source),
-      /Per-session permission rules are unavailable|Child-lane or elevated workflow authority requires verified permission enforcement/,
+      /Child-lane or elevated workflow authority requires verified permission enforcement/,
     );
     assert.equal(calls.prompt.length, 0, "no child lane should prompt when permissions are unverified");
   } finally {

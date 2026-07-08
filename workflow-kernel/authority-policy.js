@@ -653,9 +653,9 @@ export function resolveLanePolicy(run, opts = {}) {
     }
   }
 
-  if (run.capabilities.permissions !== "available") {
-    throw new WorkflowAuthorityError("Per-session permission rules are unavailable; child lane authority fails closed (read-only child lanes are contained by a deny-by-default permission ruleset, so the runtime must verify permissionEnforcement before any lane spawns — run a workflow_live_gates permissionEnforcement probe or ensure child-session permission rules are enforced)");
-  }
+  // Design C: permission rules are a typed platform contract (session.create body); the plugin
+  // trusts its host and verifies delivery per-lane via sessionPermissionEchoStatus (mismatch =>
+  // throw). Version floor enforced by server-fingerprint at launch.
 
   const extraSecretGlobs = Array.isArray(opts.secretGlobs) ? opts.secretGlobs : [];
   // Run-level integration authority approves integration MODE (path-disjoint lanes
@@ -676,7 +676,7 @@ export function resolveLanePolicy(run, opts = {}) {
     shellPolicy: authority.shellPolicy,
     tools,
     permissionRules,
-    policyMode: run.capabilities.permissions === "available" ? "permission-ruleset" : "legacy-tools-map",
+    policyMode: "permission-ruleset",
     mcpPolicy: authority.mcpPolicy,
     secretGlobs: [...new Set([...SECRET_GLOBS, ...extraSecretGlobs])],
   };
