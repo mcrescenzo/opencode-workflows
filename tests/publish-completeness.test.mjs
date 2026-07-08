@@ -33,7 +33,7 @@ test("scoped package is configured for public publish", () => {
 });
 
 test("files[] ships every runtime-loaded asset dir", () => {
-  for (const dir of ["commands/", "skills/"]) {
+  for (const dir of ["skills/"]) {
     assert.ok(pkg.files.includes(dir), `files[] must include ${dir}`);
   }
 });
@@ -42,10 +42,11 @@ test("files[] ships only the docs a shipped command/skill/workflow instructs an 
   // Amended files[] policy (2026-07-07): a shipped doc must be reachable from a shipped
   // runtime asset via an AGENT-FACING instruction string (prompt text a running agent will
   // follow), not merely cited from a code comment or README prose. docs/workflow-plugin.md
-  // is the only doc in this repo that clears that bar: commands/repo-bughunt.md,
-  // commands/repo-review.md each point a running agent at
-  // `docs/workflow-plugin.md#workflow-tool-reference` in their own
-  // "Canonical references" instruction line.
+  // is the only doc in this repo that clears that bar: as of the zero-bundled-commands
+  // pure-architecture cut (Task 6), it ships as the canonical workflow_* tool reference for
+  // the kernel API itself (workflow-kernel/), which every extension/skill/agent invoking
+  // workflow_run|workflow_apply|workflow_status directly depends on — no bundled command
+  // indirection is required for that dependency to hold.
   assert.ok(pkg.files.includes("docs/workflow-plugin.md"), "files[] must include docs/workflow-plugin.md");
   assert.equal(pkg.files.includes("docs/"), false, "files[] must not blanket-include docs/ (ships internal planning docs)");
   assert.ok(pkg.files.includes("CONTRIBUTING.md"), "CONTRIBUTING.md must be included when README references it");
@@ -60,11 +61,8 @@ test("files[] does not ship docs whose only references are code comments or READ
   const githubOnlyDocs = [
     "docs/workflow-recipes.md",           // only a `//` comment in workflow-kernel/role-template-loading.js
     "docs/plugin-system-tests.md",        // only README.md / AGENTS.md prose
-    "docs/repo-review.md",                // only README.md prose
     "docs/run-audit-playbook.md",         // only README.md prose
     "docs/goal-supervision-autonomous-drains.md", // only README.md / planning-doc prose
-    "docs/repo-review-leaf-contract.md",  // only `//` comments in workflows/*.js
-    "docs/repo-review-parity-matrix.md",  // only README.md prose
     "docs/workflow-extensions.md",        // only README.md prose
   ];
   for (const doc of githubOnlyDocs) {
@@ -112,10 +110,11 @@ test("package metadata and community-health files are present for public release
   assert.ok(pkg.files.includes("CHANGELOG.md"), "CHANGELOG.md must be included in the published package");
 });
 
-test("the bundled runtime-loaded command markdown files exist on disk", () => {
-  for (const f of ["repo-bughunt.md", "repo-review.md"]) {
-    assert.ok(existsSync(new URL(`commands/${f}`, root)), `commands/${f} must exist`);
-  }
+test("the plugin ships zero bundled workflows and zero bundled commands", () => {
+  assert.equal(existsSync(new URL("workflows/", root)), false);
+  assert.equal(existsSync(new URL("commands/", root)), false);
+  assert.equal((pkg.files ?? []).includes("workflows/"), false);
+  assert.equal((pkg.files ?? []).includes("commands/"), false);
 });
 
 test("no domain extension assets exist in the repo (pure-architecture invariant)", () => {
@@ -129,7 +128,14 @@ test("npm pack --dry-run tarball excludes any domain extension dir entirely", ()
   // --json prints a JSON array of pack manifests on stdout (notices go to stderr).
   const manifests = JSON.parse(res.stdout);
   const files = manifests.flatMap((m) => (m.files ?? []).map((f) => f.path));
-  const offenders = files.filter((p) => p.startsWith("workflow-domains/"));
+  const offenders = files.filter(
+    (p) =>
+      p.startsWith("workflow-domains/") ||
+      p.startsWith("workflows/") ||
+      p.startsWith("commands/") ||
+      p.startsWith("skills/repo-review-command-protocol") ||
+      p.startsWith("skills/beads-drain"),
+  );
   assert.deepEqual(offenders, [], `tarball must not ship domain extension assets, found: ${offenders.join(", ")}`);
   assert.ok(files.includes("SECURITY.md"), "tarball must ship SECURITY.md");
 });
@@ -139,7 +145,7 @@ test("packed README and command docs have no missing package-local references", 
   assert.equal(res.status, 0, `npm pack --dry-run failed: ${res.error?.message ?? res.stderr}`);
   const manifests = JSON.parse(res.stdout);
   const files = new Set(manifests.flatMap((m) => (m.files ?? []).map((f) => f.path)));
-  const docs = ["README.md", "commands/repo-bughunt.md", "commands/repo-review.md"];
+  const docs = ["README.md"];
   const missing = [];
 
   function normalizeRef(ref) {

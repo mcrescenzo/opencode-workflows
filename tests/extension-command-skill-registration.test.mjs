@@ -52,14 +52,14 @@ test("the first-registered command name wins on a collision (registration order 
   assert.doesNotMatch(cfg.command.dupe.template, /SECOND REGISTRATION/);
 });
 
-test("no-extension call still registers bundled commands + skill dir (backward compatible)", async () => {
+test("no-extension call registers no commands but still pushes the bundled skill dir", async () => {
   const cfg = {};
   await configureWorkflowEntrypoints(cfg); // no second arg
-  assert.ok(cfg.command["repo-review"], "bundled commands still registered with the default arg");
+  assert.equal(Object.keys(cfg.command ?? {}).length, 0, "pure-architecture plugin bundles no commands");
   assert.ok(Array.isArray(cfg.skills.paths) && cfg.skills.paths.length >= 1, "bundled skill dir still pushed");
 });
 
-test("bundled workflow authoring and repo-review command protocol skills ship in the skill dir", async () => {
+test("bundled workflow authoring skill ships in the skill dir", async () => {
   const root = path.resolve(import.meta.dirname, "..");
   const skillDir = path.join(root, "skills");
   const cfg = {};
@@ -74,11 +74,4 @@ test("bundled workflow authoring and repo-review command protocol skills ship in
   assert.match(authoring, /budget\.remaining\(\)/);
   assert.match(authoring, /arity/);
   assert.match(authoring, /inline result/i);
-
-  const protocol = await fs.readFile(path.join(skillDir, "repo-review-command-protocol", "SKILL.md"), "utf8");
-  assert.match(protocol, /^name: repo-review-command-protocol$/m);
-  assert.match(protocol, /workflow_run/);
-  assert.match(protocol, /workflow_status\(\{ runId, detail: "result" \}\)/);
-  assert.match(protocol, /\.repo-review\/runs/);
-  assert.match(protocol, /ONLY allowed workspace write/);
 });

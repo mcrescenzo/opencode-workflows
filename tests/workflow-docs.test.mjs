@@ -71,10 +71,7 @@ test("workflow tool reference lists every registered workflow tool and approval 
 });
 
 test("command docs link repeated safety caveats to canonical references", async () => {
-  const commandFiles = [
-    "commands/repo-bughunt.md",
-    "commands/repo-review.md",
-  ];
+  const commandFiles = [];
   for (const rel of commandFiles) {
     const text = await read(rel);
     assert.match(text, /Canonical references:/, `${rel} must point to canonical references`);

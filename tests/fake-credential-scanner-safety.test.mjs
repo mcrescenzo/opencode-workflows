@@ -5,9 +5,9 @@
 //
 // opencode-workflows-public-fake-credential-fixtures. This is a static, no-token test: it
 // reads the tracked source and asserts no full credential-shaped literal is present. The
-// redaction behavior itself is covered by tests/repo-review-secret-containment.test.mjs and
-// tests/free-text-redactor.test.mjs (whose fixtures are assembled at runtime, so they still
-// exercise detection without committing a full literal).
+// redaction behavior itself is covered by tests/free-text-redactor.test.mjs (whose fixtures
+// are assembled at runtime, so it still exercises detection without committing a full
+// literal).
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -20,9 +20,7 @@ const root = path.resolve(fileURLToPath(import.meta.url), "..", "..");
 // Tracked files known to plant or document fake credentials. A full literal fake token must
 // not appear in any of them.
 const SCAN_TARGETS = [
-  "tests/repo-review-secret-containment.test.mjs",
   "tests/free-text-redactor.test.mjs",
-  "docs/repo-review-leaf-contract.md",
   "docs/workflow-plugin.md",
 ];
 
@@ -58,11 +56,11 @@ test("tracked fake-credential fixtures contain no full literal token (scanner-sa
 });
 
 test("planted-secret fixture is assembled at runtime (no contiguous AKIA... literal in source)", async () => {
-  const text = await fs.readFile(path.join(root, "tests/repo-review-secret-containment.test.mjs"), "utf8");
+  const text = await fs.readFile(path.join(root, "tests/free-text-redactor.test.mjs"), "utf8");
   // The source must NOT contain the contiguous runtime value as a literal; it is assembled.
-  assert.doesNotMatch(text, /["']AKIA[A-Z0-9_-]{6,}["']/, "PLANTED_SECRET must not be a contiguous string literal");
+  assert.doesNotMatch(text, /["']AKIA[A-Z0-9_-]{6,}["']/, "awsKey fixture must not be a contiguous string literal");
   // And it must still assemble to an AWS-key-shaped value at runtime (detection is exercised).
   // eslint-disable-next-line no-eval
-  const assembled = eval('(() => { const PLANTED_SECRET = ["AK", "IA", "-FAKE-SECRET-VALUE-", "12345"].join(""); return PLANTED_SECRET; })()');
+  const assembled = eval('(() => { const awsKey = ["AK", "IA", "I" + "K".repeat(16) + "QABCD"].join(""); return awsKey; })()');
   assert.match(assembled, /^AKIA[A-Z0-9_-]{6,}$/, "assembled planted secret still matches the in-guest AKIA detector shape");
 });
