@@ -47,6 +47,9 @@ export const BUNDLED_SKILL_DIR = path.join(PLUGIN_DIR, "skills");
 export const ROLE_DIR = path.join(GLOBAL_WORKFLOW_DIR, "roles");
 export const TEMPLATE_DIR = path.join(GLOBAL_WORKFLOW_DIR, "templates");
 export const MAX_SOURCE_BYTES = 512 * 1024;
+// Bound for the in-memory pending-approval store (approve-by-reference). Worst case memory is
+// MAX_PENDING_APPROVALS * MAX_SOURCE_BYTES (16 * 512 KiB = 8 MiB); typical sources are a few KiB.
+export const MAX_PENDING_APPROVALS = 16;
 export const MAX_RESULT_BYTES = 256 * 1024;
 export const MAX_INLINE_RESULT_BYTES = 32 * 1024;
 export const MAX_RESULT_READBACK_BYTES = MAX_RESULT_BYTES;
