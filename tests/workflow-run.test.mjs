@@ -367,6 +367,50 @@ return true;`;
   }
 });
 
+test("inspect-with-shell launch refuses a sub-floor server", async () => {
+  // Task 10 fix pass: shell-granting authority is now ALSO gated by the server-fingerprint
+  // version floor (workflow-plugin.js's `authority.edit || authority.worktreeEdit ||
+  // authority.integration || authority.shell` check) — before this fix, inspect-with-shell
+  // (shell:true, but none of edit/worktreeEdit/integration) slipped past the gate entirely.
+  // The audited shell command allowlist/denylist is enforced ONLY by the session permission
+  // ruleset, which is exactly the contract the version floor guarantees; the per-lane
+  // permission echo tolerates "not-echoed" as a pass, so it cannot substitute for the floor.
+  const tooOldHealth = { data: { healthy: true, version: "1.0.0" } };
+  const { tools, context, directory, calls } = await makeHarness(async () => { throw new Error("must not prompt a child lane"); }, {
+    pluginContext: { __workflowServerHealth: tooOldHealth, serverUrl: "http://fingerprint-shell.test" },
+  });
+  try {
+    const source = `export const meta = { name: "shell-version-floor", profile: "inspect-with-shell" };
+return await agent("would spawn a lane if not gated");`;
+    await assert.rejects(runApproved(tools, context, source), /requires opencode server >= /);
+    assert.equal(calls.create.length, 0, "the fingerprint check must reject before any session.create");
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("drain-autonomous-local launch refuses a sub-floor server", async () => {
+  // Companion to the shell test above, exercised through the real beads-drain entry point
+  // (name: "beads-drain") rather than a synthetic inline profile assertion. drain-autonomous-local
+  // is integration:true, so it was already inside the elevated gate before this fix; this proves
+  // the production drain launch path is refused pre-lane too, before the drain adapter or any
+  // lane is ever touched (the assertion here is the pre-lane rejection, not drain mechanics).
+  const tooOldHealth = { data: { healthy: true, version: "1.0.0" } };
+  const { tools, context, directory, calls } = await makeHarness(async () => { throw new Error("must not prompt a child lane"); }, {
+    pluginContext: { __workflowServerHealth: tooOldHealth, serverUrl: "http://fingerprint-drain.test" },
+  });
+  try {
+    await initGitRepo(directory);
+    await assert.rejects(
+      runApprovedRequest(tools, context, { name: "beads-drain", args: { mode: "autonomous-local" }, background: false }),
+      /requires opencode server >= /,
+    );
+    assert.equal(calls.create.length, 0, "the fingerprint check must reject before any session.create");
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("ad hoc authority remains supported and intentionally mapped", () => {
   const authority = __test.resolveRunAuthority({ authority: { shell: true } }, {});
   assert.equal(authority.profile, "ad-hoc");
