@@ -109,3 +109,49 @@ test("a non-JSON string args bag fails loudly at plan time", async () => {
     await fs.rm(directory, { recursive: true, force: true });
   }
 });
+
+test("approve-by-reference: approve with only approvalHash reuses the previewed inline source", async () => {
+  const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }));
+  try {
+    const preview = JSON.parse(await tools.workflow_run.execute({ source: SOURCE, format: "json" }, context));
+    assert.equal(preview.approveByReference, true);
+    const result = await tools.workflow_run.execute(
+      { approve: true, approvalHash: preview.approvalHash, format: "json" },
+      context,
+    );
+    assertNotMismatch(result);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("approve-by-reference after a drift mismatch recovers using freshApprovalHash alone", async () => {
+  const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }));
+  try {
+    const hashA = approvalHashFromJsonPreview(await tools.workflow_run.execute({ source: SOURCE, format: "json" }, context));
+    const mismatch = JSON.parse(await tools.workflow_run.execute(
+      { source: `${SOURCE}\n`, format: "json", approve: true, approvalHash: hashA },
+      context,
+    ));
+    // The escape hatch from the oscillation: no source re-transmission on the retry.
+    const result = await tools.workflow_run.execute(
+      { approve: true, approvalHash: mismatch.freshApprovalHash, format: "json" },
+      context,
+    );
+    assertNotMismatch(result);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("approve-by-reference with an unknown hash fails loudly with recovery guidance", async () => {
+  const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }));
+  try {
+    await assert.rejects(
+      tools.workflow_run.execute({ approve: true, approvalHash: "0".repeat(64) }, context),
+      /no pending preview.*Re-run the preview/s,
+    );
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});

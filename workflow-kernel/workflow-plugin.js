@@ -68,10 +68,16 @@ import {
   normalizeBudgetCeilings,
 } from "./budget-accounting.js";
 import {
+  approvalEnvelope,
   approvalSnapshotList,
   approvalHash,
   computeDiffPlanHash,
 } from "./approval-hashing.js";
+import {
+  clearPendingApprovals,
+  peekPendingApproval,
+  recordPendingApproval,
+} from "./pending-approvals.js";
 import {
   appendApplyLedger,
   appendEvent,
@@ -669,6 +675,7 @@ function approvalPreviewEnvelope(run) {
       ...run.sourceMetadata,
     },
     approvalHash: approvedHash,
+    approveByReference: true,
     runtimeArgsPreview: run.argsPreview,
     laneBudget: {
       maxAgents: run.maxAgents,
@@ -798,11 +805,23 @@ function approvalSummary(run) {
     ...preview.consent.map((line) => `Consent: ${line}`),
     `approvalHash covers ${preview.approvalHashCovers}.`,
     "Re-run with approve: true and approvalHash set to this approvalHash to execute this exact workflow envelope.",
+    "Inline-source callers may instead omit source on that approve call: the previewed bytes are retained in-memory for this approvalHash (bounded store, cleared on restart), avoiding byte-identical re-transmission drift.",
   ].join("\n");
 }
 
 function approvalPreviewResponse(run, args) {
   return args.format === "json" ? workflowPreviewJson(run) : approvalSummary(run);
+}
+
+// Snapshot of a previewed envelope for the pending store: the exact source bytes (reused by an
+// approve-by-reference call) plus the hashed envelope (diffed field-by-field on mismatch).
+function pendingApprovalEntry(run, source) {
+  return {
+    source,
+    sourcePath: run.sourcePath,
+    envelope: approvalEnvelope(run),
+    byteLength: run.sourceMetadata?.byteLength ?? Buffer.byteLength(source, "utf8"),
+  };
 }
 
 function approvalMismatchResponse(run, args) {
@@ -1840,10 +1859,39 @@ async function planWorkflowEnvelope(pluginContext, toolContext, args) {
 
 async function startWorkflow(pluginContext, toolContext, args) {
   assertWriteWorkflowAllowed(toolContext, "workflow_run");
+  // Approve-by-reference: an approve call may omit source/scriptPath/name and present only the
+  // approvalHash from a prior preview in this process; the previewed source bytes are reused from
+  // the in-memory pending store. This removes the need to re-transmit a large inline source
+  // byte-identically (re-emission drift re-keys sourceHash and can never lock). The stored bytes
+  // still flow through planWorkflowEnvelope and the exact-hash compare below, so nothing executes
+  // that the presented approvalHash does not bind.
+  if (args.approve === true && !hasExplicitWorkflowSource(args) && !args.resumeRunId && typeof args.approvalHash === "string") {
+    const pending = peekPendingApproval(args.approvalHash);
+    if (!pending) {
+      throw new Error(
+        `approvalHash ${args.approvalHash} has no pending preview in this process (the store is in-memory, bounded, and cleared on restart). Re-run the preview, or re-send the full source/scriptPath/name with approve: true.`,
+      );
+    }
+    if (pending.sourcePath !== "<inline>") {
+      throw new Error(
+        `approvalHash ${args.approvalHash} was previewed from ${pending.sourcePath}; re-send the same name/scriptPath with approve: true (approve-by-reference applies to inline source only).`,
+      );
+    }
+    args = { ...args, source: pending.source };
+  }
   const { resumeRunId, resumeEntry, priorState, source, body, adapter, meta, approval } = await planWorkflowEnvelope(pluginContext, toolContext, args);
+  const approvedHash = approvalHash(approval);
   const autoApproved = args.approve === true ? null : workflowAutoApproval(pluginContext, args, approval);
-  if (args.approve !== true && !autoApproved) return approvalPreviewResponse(approval, args);
-  if (args.approve === true && args.approvalHash !== approvalHash(approval)) return approvalMismatchResponse(approval, args);
+  if (args.approve !== true && !autoApproved) {
+    recordPendingApproval(approvedHash, pendingApprovalEntry(approval, source));
+    return approvalPreviewResponse(approval, args);
+  }
+  if (args.approve === true && args.approvalHash !== approvedHash) {
+    // Record the fresh envelope too: the agent's next call may approve freshApprovalHash by
+    // reference instead of re-transmitting the source yet again.
+    recordPendingApproval(approvedHash, pendingApprovalEntry(approval, source));
+    return approvalMismatchResponse(approval, args);
+  }
   const {
     sourcePath,
     sourceHash,
@@ -2692,6 +2740,7 @@ async function WorkflowPlugin(pluginContext, options) {
     },
     dispose: async () => {
       clearNotificationRuntimeState();
+      clearPendingApprovals();
     },
     "chat.params": async (input, output) => {
       applyLaneEffortParams(input, output);
