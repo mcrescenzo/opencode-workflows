@@ -101,9 +101,9 @@
  * @property {number} hostCalls Host-op call counter (per-run scaled host-call guard).
  *
  * --- capability / adapter surface ---
- * @property {object} capabilities Resolved client capabilities (childSession, structuredOutput, worktree, ...).
- * @property {object} diagnostics Capability/probe diagnostics (incl. drainLiveGates).
- * @property {object} adapter Capability adapter (getStructured, createWorktree, removeWorktree, ...).
+ * @property {object} capabilities Resolved shape-only client capabilities (childSession, worktree, toast).
+ * @property {object} diagnostics Capability diagnostics (incl. serverFingerprint).
+ * @property {object} adapter Capability adapter (createWorktree, removeWorktree, ...).
  * @property {object} [worktreeAdapter] Native integration worktree adapter (lazily created).
  *
  * --- edit / integration / worktrees ---

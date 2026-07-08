@@ -95,10 +95,6 @@ export function validateStructuredResult(schema, value) {
   throw new Error(ajv.errorsText(validate.errors, { separator: "\n", dataVar: "result" }));
 }
 
-export function structuredFormat(schema) {
-  return { type: "json_schema", schema };
-}
-
 export function boundedSchemaSnapshot(schema, maxBytes = MAX_SCHEMA_SNAPSHOT_BYTES) {
   if (!schema) return { status: "absent" };
   const canonical = stableStringify(schema);

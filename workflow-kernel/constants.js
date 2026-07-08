@@ -87,8 +87,9 @@ export function resolveHardConcurrencyLimit(env = process.env, fallback = DEFAUL
 // evidence. The ceiling is a separate operator policy knob: set
 // OPENCODE_WORKFLOWS_HARD_CONCURRENCY_LIMIT or plugin option `hardConcurrencyLimit` to
 // raise/lower the schema/runtime clamp. Larger bursts can amplify provider rate limits or
-// reproduce the 2026-06-22 stall, so use workflow_live_gates({probeConcurrencyCapacity})
-// to characterize a runtime before treating higher values as safe production headroom.
+// reproduce the 2026-06-22 stall; characterize a runtime empirically before treating higher
+// values as safe production headroom (the live-gate concurrency-capacity probe that used to
+// live here was deleted with the probe subsystem — see Design C, 2026-07-07).
 export const DEFAULT_CONCURRENCY = 4;
 export const HARD_CONCURRENCY_LIMIT = resolveHardConcurrencyLimit();
 export const DEFAULT_CONCURRENCY_PROBE_LIMIT = 16;
@@ -98,7 +99,6 @@ export const MAX_CORRECTIVE_RETRY_COUNT = 2;
 export const DEFAULT_CHILD_CREATE_TIMEOUT_MS = 30_000;
 export const DEFAULT_CHILD_PROMPT_TIMEOUT_MS = 10 * 60 * 1000;
 export const MAX_CHILD_PROMPT_TIMEOUT_MS = 60 * 60 * 1000;
-export const DEFAULT_LIVE_PROBE_TIMEOUT_MS = 60_000;
 // Floor verified against a live opencode 1.17.13: GET /global/health exists and
 // returns {healthy,version}; Session.directory is a typed required create echo.
 export const MIN_OPENCODE_SERVER_VERSION = "1.17.13";

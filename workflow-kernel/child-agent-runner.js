@@ -390,8 +390,12 @@ export function retagRehydratedLanePlan(run, originalCallId, callId, entry) {
 }
 
 export async function createEditWorktree(run, toolContext, callId) {
-  if (run.capabilities.worktree !== "available" || run.capabilities.directoryRooting !== "available") {
-    throw new WorkflowAuthorityError("Edit mode requires available native worktree and child directory-rooting capabilities");
+  // Design C: directoryRooting is no longer a shape capability (deleted with the probe
+  // subsystem); the worktree-distinctness check just below (the resolved worktree path must
+  // not equal the primary tree) plus sessionDirectoryEchoStatus at child-launch time are the
+  // deterministic replacements. Only the native-worktree-client shape check remains here.
+  if (run.capabilities.worktree !== "available") {
+    throw new WorkflowAuthorityError("Edit mode requires an available native worktree client");
   }
   const fallbackPath = path.join(run.dir, "worktrees", callId.replace(/[^a-z0-9_.-]+/gi, "_"));
   await fs.mkdir(path.dirname(fallbackPath), { recursive: true });

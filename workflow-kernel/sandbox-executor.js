@@ -31,7 +31,6 @@ import {
   MAX_PENDING_JOB_DRAIN_ITERATIONS,
   MAX_STATUS_STRING_CHARS,
 } from "./constants.js";
-import { NON_DRY_DRAIN_REQUIRED_GATES } from "./authority-policy.js";
 import {
   extractTextFromError,
   hash,
@@ -42,12 +41,6 @@ import {
 import { WorkflowCancelledError } from "./errors.js";
 import { assertResultSize } from "./structured-output.js";
 import { abortChild, rejectWaitingAgents } from "./lifecycle-control.js";
-import {
-  compactLiveGateStatus,
-  liveGateProbeArgsForNames,
-  liveGateReport,
-  nonVerifiedGateSummaries,
-} from "./capability-adapter.js";
 import { budgetSnapshot, checkBudgetBeforeLaunch } from "./budget-accounting.js";
 import {
   appendEvent,
@@ -256,26 +249,6 @@ function drainLaneReadyForIntegration(laneReport) {
   return laneReport?.readyForIntegration === true && laneReport.outcome === "implemented";
 }
 
-function nonVerifiedDrainBlockers(gateStatus) {
-  return Object.entries(gateStatus).filter(([, gate]) => gate?.verified !== true)
-    .map(([name, gate]) => `${name}=${gate?.state ?? "missing"}`);
-}
-
-async function drainGateStatus(pluginContext, toolContext, options = {}) {
-  // Probe only the gates this run actually requires (the resolved authority floor); a drain whose
-  // authority requires no gates needs no probing. Gate-union/floor model (invariant #5).
-  const requiredGates = Array.isArray(options.requiredGates) && options.requiredGates.length
-    ? options.requiredGates
-    : NON_DRY_DRAIN_REQUIRED_GATES;
-  const probeRequired = options.probeRequired === true;
-  const probeOptions = liveGateProbeArgsForNames(requiredGates);
-  for (const key of Object.keys(probeOptions)) {
-    if (key !== "format") probeOptions[key] = probeRequired;
-  }
-  const report = JSON.parse(await liveGateReport(pluginContext, toolContext, probeOptions));
-  return compactLiveGateStatus(report, requiredGates);
-}
-
 async function markDrainLaneIntegration(run, callId, laneReport, acceptedForIntegration, reason) {
   const lane = findIntegrationLane(run, callId);
   if (!lane) return undefined;
@@ -312,30 +285,10 @@ async function runHostDrain(pluginContext, toolContext, run, payload, deps) {
   const drainLaneTimeoutMs = deps.laneTimeoutAliasValue(runtimeOptions, "drain") ?? run.laneTimeoutMs;
   const dryRun = payload.dryRun === true;
   const rawAdapter = await createDrainAdapter(pluginContext, toolContext, run, { ...runtimeOptions, adapter: adapterName });
-  // Live-gate enforcement is generic to every drain and keyed on the ADAPTER's declared required
-  // gates (the gate-union floor). Guest workflow source cannot supply gateStatus/gates: those fields
-  // are host-only evidence and are stripped before adapter construction and runtime execution. Non-dry
-  // drains must have all required gates verified before any domain mutation or lane launch. An adapter
-  // that declares no gates (a pure test double) needs no probing.
-  const requiredGates = Array.isArray(rawAdapter.requiredGates) ? rawAdapter.requiredGates : [];
-  const gateStatus = requiredGates.length ? await drainGateStatus(pluginContext, toolContext, { probeRequired: !dryRun, requiredGates }) : undefined;
-  if (gateStatus) {
-    run.diagnostics.drainLiveGates = gateStatus;
-    const nonVerified = nonVerifiedGateSummaries(gateStatus);
-    const blockers = nonVerifiedDrainBlockers(gateStatus);
-    await appendEvent(run, {
-      type: "drain.live_gates",
-      adapter: adapterName,
-      dryRun,
-      gateStatus,
-      verified: nonVerified.length === 0,
-      blockers,
-    });
-    await writeState(run);
-    if (!dryRun && blockers.length > 0) {
-      throw new Error(`Non-dry drain requires verified live gates before domain mutation or lane launch: ${blockers.join(", ")}. Run a dry-run or fix the reported live gates before retrying.`);
-    }
-  }
+  // Design C: no probe preflight. Non-dry drain safety = one-time approval (hash),
+  // server-fingerprint floor (workflow-plugin launch path), per-lane permission +
+  // directory echo assertions, integration worktrees, and controller-only mutation
+  // staging. A dead server or dishonored ruleset fails loud at the first lane.
   await appendEvent(run, { type: "drain.started", adapter: adapterName, dryRun });
   const adapter = {
     ...rawAdapter,
@@ -368,7 +321,6 @@ async function runHostDrain(pluginContext, toolContext, run, payload, deps) {
   const report = await runDrainRuntime({
     ...runtimeOptions,
     adapter,
-    gateStatus,
     checkLifecycle: () => {
       throwIfAborted(run, toolContext);
     },
@@ -1122,7 +1074,6 @@ function __setSandboxHostOpTestHook(hook) {
 export {
   executeSandbox,
   runNestedWorkflow,
-  drainGateStatus,
   maxHostCallsForRun,
   persistRunArtifacts,
   quickJSAsyncModule,

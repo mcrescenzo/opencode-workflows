@@ -36,6 +36,7 @@ import {
   truncateText,
 } from "./text-json.js";
 import {
+  WorkflowAuthorityError,
   WorkflowCancelledError,
   WorkflowBudgetStoppedError,
 } from "./errors.js";
@@ -55,17 +56,14 @@ import {
   writeCompletionNotification,
 } from "./lifecycle-control.js";
 import {
-  assertLiveGateProbeAllowed,
   collectTextParts,
   createCapabilityAdapter,
-  liveGateReport,
-  promoteCapabilities,
-  promoteVerifiedGateCapabilities,
   unwrapClientResult,
-  verifyRequiredAuthorityGates,
-  verifyNetworkMcpAuthorityGates,
-  VERIFIED_PROBE_TTL_MS,
 } from "./capability-adapter.js";
+import {
+  assertServerSupportsElevatedAuthority,
+  serverFingerprint,
+} from "./server-fingerprint.js";
 import {
   normalizeBudgetCeilings,
 } from "./budget-accounting.js";
@@ -653,7 +651,6 @@ function approvalPreviewEnvelope(run) {
   const backgroundHint = backgroundRecommendation(run) || null;
   const backgroundDefault = backgroundDefaultLine(run) || null;
   const notificationWarning = backgroundNotificationWarning(run) || null;
-  const requiredGates = Array.isArray(run.authority?.requiredGates) ? [...run.authority.requiredGates] : [];
   return {
     type: "workflow_preview",
     status: "approval_required",
@@ -710,7 +707,6 @@ function approvalPreviewEnvelope(run) {
     },
     authority: {
       profile: run.authority.profile || AD_HOC_AUTHORITY_PROFILE,
-      requiredGates,
       isolation: authorityIsolationSummary(run.authority),
       summary: authoritySummary(run.authority),
       details: run.authority,
@@ -728,18 +724,11 @@ function approvalPreviewEnvelope(run) {
     nestedBudgetNotes: nestedBudgetNotes(run),
     capabilities: {
       childSession: run.capabilities.childSession,
-      permissions: run.capabilities.permissions,
-      structuredOutput: run.capabilities.structuredOutput,
       worktree: run.capabilities.worktree,
-      directoryRooting: run.capabilities.directoryRooting,
-      worktreeEditIsolation: run.capabilities.worktreeEditIsolation,
     },
     consent: [
       ...(run.meta?.harness === "drain" && run.authority?.profile === "drain-autonomous-local"
         ? ["for an autonomous-local drain, this launch approval authorizes in-run apply of a verified successful diff plan to the local primary tree (accepted changes land; staged domain mutations finalize) instead of stopping at awaiting-diff-approval. Failed drains keep failed-with-diff-plan for review via workflow_apply."]
-        : []),
-      ...(requiredGates.length
-        ? ["after approval, elevated launch may run required live-gate preflight probes before mutation/lane launch; probes spawn short-lived child sessions (model token use) and, for worktree/directory-rooting gates, create and remove scratch worktrees. The preview never probes; these side effects begin only after approval."]
         : []),
       ...(run.debugCapture === true
         ? ["debug capture is enabled; lane prompts, schemas, and child transcripts are persisted under the private run directory after secrets redaction and size caps. This increases local sensitive evidence and disk usage."]
@@ -790,7 +779,6 @@ function approvalSummary(run) {
     ...(preview.background.recommendation ? [preview.background.recommendation] : []),
     ...(preview.background.notificationWarning ? [preview.background.notificationWarning] : []),
     `Authority profile: ${preview.authority.profile}`,
-    `Required gates: ${preview.authority.requiredGates.length ? preview.authority.requiredGates.join(", ") : "none"}`,
     `Isolation: ${preview.authority.isolation}`,
     `Authority: ${preview.authority.summary}`,
     ...(preview.autoApprove ? [autoApprovePreviewLine(preview.autoApprove)] : []),
@@ -804,8 +792,8 @@ function approvalSummary(run) {
     `sourceHash: ${preview.source.sourceHash}`,
     ...(preview.source.external ? [`External source (allowExternalScriptPath opt-in): true`] : []),
     `approvalHash: ${preview.approvalHash}`,
-    `Capability summary: childSession=${preview.capabilities.childSession}, permissions=${preview.capabilities.permissions}, structuredOutput=${preview.capabilities.structuredOutput}, worktree=${preview.capabilities.worktree}, directoryRooting=${preview.capabilities.directoryRooting}, worktreeEditIsolation=${preview.capabilities.worktreeEditIsolation}`,
-    "Capability note: available-unverified is API shape only, not behavioral proof; elevated authority fails closed unless required capabilities are available/verified.",
+    `Capability summary: childSession=${preview.capabilities.childSession}, worktree=${preview.capabilities.worktree}`,
+    "Capability note: shape-only (client/session API surface present or not); elevated authority is enforced deterministically at launch via the server-fingerprint check, not by behavioral capability probes.",
     ...preview.consent.map((line) => `Consent: ${line}`),
     `approvalHash covers ${preview.approvalHashCovers}.`,
     "Re-run with approve: true and approvalHash set to this approvalHash to execute this exact workflow envelope.",
@@ -1481,7 +1469,10 @@ async function readActiveSessionModel(pluginContext, toolContext) {
   return { model: null, source: "none" };
 }
 
-const WORKFLOW_PROVIDER_LIST_TTL_MS = VERIFIED_PROBE_TTL_MS;
+// Was aliased to capability-adapter.js's VERIFIED_PROBE_TTL_MS before Design C deleted the
+// live-gate probe cache; the provider-list cache is unrelated to that subsystem, so it now
+// owns its own TTL constant (same 10-minute value).
+const WORKFLOW_PROVIDER_LIST_TTL_MS = 10 * 60 * 1000;
 const workflowProviderListCache = new Map();
 const workflowProviderListClientKeys = new WeakMap();
 let workflowProviderListClientKeySeq = 0;
@@ -1867,34 +1858,18 @@ async function startWorkflow(pluginContext, toolContext, args) {
     debugCapture,
     debugCaptureSource,
   } = approval;
-  // Verify shape-derived capabilities with live probes before the run starts (after the
-  // approval check, so the approval envelope is hashed over pre-probe state and a preview
-  // never probes). This settles run.capabilities before any lane executes.
-  await promoteCapabilities(pluginContext, toolContext, adapter, authority, { childLanesAllowed: maxAgents > 0 });
-  // A non-dry drain manages its own integration-worktree isolation internally (the drain runtime),
-  // so it delegates those capability checks rather than requiring them pre-launch here.
-  const drainDelegatesIntegrationGates = meta.harness === "drain" && args.args?.dryRun !== true;
-  const requiredGateStatus = await verifyRequiredAuthorityGates(pluginContext, toolContext, adapter, authority);
-  // Keep the historical network/MCP verifier hook for diagnostics compatibility.
-  // webfetch/websearch/mcp authority is enforced by permission rules plus the
-  // permissionEnforcement gate; networkAccess remains informational/reserved,
-  // while mcpAccess can be probed explicitly through workflow_live_gates.
-  await verifyNetworkMcpAuthorityGates(pluginContext, toolContext, authority);
-  promoteVerifiedGateCapabilities(adapter, requiredGateStatus);
-  if (authority.profile === AD_HOC_AUTHORITY_PROFILE) {
-    const needsPermissions = authority.shell || authority.network || authority.mcp || authority.edit || authority.worktreeEdit || authority.integration || maxAgents > 0;
-    const needsWorktreeIsolation = authority.edit || authority.worktreeEdit || authority.integration;
-    function requireCapability(name, reason) {
-      if (adapter.capabilities[name] !== "available") {
-        throw new Error(`${reason}; ${name}=${adapter.capabilities[name]} (available-unverified is not behavioral proof)`);
-      }
-    }
-    if (needsPermissions) requireCapability("permissions", "Child-lane or elevated workflow authority requires verified permission enforcement");
-    if (needsWorktreeIsolation && !drainDelegatesIntegrationGates) {
-      requireCapability("worktree", "Edit/worktreeEdit/integration workflows require verified worktree API behavior");
-      requireCapability("directoryRooting", "Edit/worktreeEdit/integration workflows require verified child directory rooting");
-      requireCapability("worktreeEditIsolation", "Edit/worktreeEdit/integration workflows require verified worktree edit isolation");
-    }
+  // Design C (2026-07-07): no live-gate probe preflight. A deterministic server-fingerprint
+  // check gates elevated authority instead (server-fingerprint.js); per-lane permission and
+  // directory-echo assertions in child-agent-runner.js cover the rest at launch time. adapter
+  // is the same object whose .diagnostics becomes run.diagnostics below, so stashing the
+  // fingerprint on it here means run.diagnostics already carries it once the run object exists.
+  const fingerprint = await serverFingerprint(pluginContext);
+  adapter.diagnostics.serverFingerprint = fingerprint;
+  if (authority.readOnly !== true) {
+    assertServerSupportsElevatedAuthority(fingerprint);
+  }
+  if ((authority.edit || authority.worktreeEdit) && adapter.capabilities.worktree !== "available") {
+    throw new WorkflowAuthorityError("Edit-mode workflows require the native worktree client, which this opencode server/SDK does not expose");
   }
 
   const root = resumeEntry?.root ?? await ensureRunRoot(toolContext);
@@ -2930,38 +2905,6 @@ async function WorkflowPlugin(pluginContext, options) {
       },
       async execute(args, context) {
         return await saveTemplate(context, args);
-      },
-    }),
-    workflow_live_gates: tool({
-      description: "Report workflow v2 live-gate capability status for the active runtime.",
-      args: {
-        format: tool.schema.enum(["summary", "json"]).optional(),
-        probePermissionEnforcement: tool.schema.boolean().optional(),
-        probeDeniedBash: tool.schema.boolean().optional(),
-        probeCommandScopedBash: tool.schema.boolean().optional(),
-        probeSecretReadDeny: tool.schema.boolean().optional(),
-        probeStructuredOutput: tool.schema.boolean().optional(),
-        probeWorktreeApi: tool.schema.boolean().optional(),
-        probeDirectoryRooting: tool.schema.boolean().optional(),
-        probeWorktreeEditIsolation: tool.schema.boolean().optional(),
-        probeIntegrationWorktreeIsolation: tool.schema.boolean().optional(),
-        probeBackgroundContinuation: tool.schema.boolean().optional(),
-        probeConcurrencyCapacity: tool.schema.boolean().optional(),
-        concurrencyProbeLimit: tool.schema.number().int().positive().max(hardConcurrencyLimit).optional(),
-        probeCancellation: tool.schema.boolean().optional(),
-        probeWorkflowNotification: tool.schema.boolean().optional(),
-        probeNetworkAccess: tool.schema.boolean().optional(),
-        probeMcpAccess: tool.schema.boolean().optional(),
-        resetProbeCache: tool.schema.boolean().optional(),
-        resetProbeCacheScope: tool.schema.enum(["runtime", "all"]).optional(),
-        approvalIntent: tool.schema.literal("probe").optional(),
-      },
-      async execute(args, context) {
-        assertLiveGateProbeAllowed(context, args);
-        if (args.resetProbeCache === true) {
-          invalidateWorkflowProviderListCache(args.resetProbeCacheScope === "all" ? "all" : pluginContext);
-        }
-        return await liveGateReport(pluginContext, context, args);
       },
     }),
     // review_materialize is contributed by the beads extension (workflow-domains/beads/beads-extension.js
