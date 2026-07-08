@@ -1245,7 +1245,10 @@ async function runWorkflowExecution(pluginContext, toolContext, run, body, args)
       }
     } else {
       run.editPlan = undefined;
-      run.status = "completed";
+      // A drain that failed without producing any patches must not read as success:
+      // drainFailed (line ~1172) already detects failed/not_dry/max_waves_exceeded/
+      // budget_exhausted drain bodies. Zero patches + failed drain => failed run.
+      run.status = drainFailed ? "failed" : "completed";
     }
     // Autonomous-local auto-apply (.5): a trusted autonomous-local drain applies a verified, successful
     // diff plan in-run instead of stopping at awaiting-diff-approval. Failed drains keep failed-with-diff-plan.
@@ -1257,7 +1260,10 @@ async function runWorkflowExecution(pluginContext, toolContext, run, body, args)
     run.resultPath = path.join(run.dir, "result.json");
     await writeJsonAtomic(run.resultPath, redactDurableValue({ output }));
     await appendEvent(run, {
-      type: run.status === "awaiting-diff-approval" ? "run.awaiting_diff_approval" : run.status === "failed-with-diff-plan" ? "run.failed_with_diff_plan" : run.status === "apply-failed" ? "run.apply_failed" : "run.completed",
+      // A zero-patch failed drain lands on run.status "failed" above; reuse the same "run.failed"
+      // event type the catch-block failure path emits (diagnostics.js maps it to outcome
+      // "failure") rather than falling through to the default "run.completed" ("success").
+      type: run.status === "awaiting-diff-approval" ? "run.awaiting_diff_approval" : run.status === "failed-with-diff-plan" ? "run.failed_with_diff_plan" : run.status === "apply-failed" ? "run.apply_failed" : run.status === "failed" ? "run.failed" : "run.completed",
       diffPlanHash: run.editPlan?.diffPlanHash,
       awaitingDiffApprovalAt: run.approvalWait?.startedAt,
       drainStatus: typeof output === "object" && output ? output.status : undefined,
@@ -1267,7 +1273,7 @@ async function runWorkflowExecution(pluginContext, toolContext, run, body, args)
     await maybeDeliverCompletionNotification(pluginContext, notification);
     await showWorkflowRunToast(pluginContext, run, "terminal");
     return [
-      `Workflow ${run.id} ${run.status === "awaiting-diff-approval" ? "awaiting diff approval" : run.status === "failed-with-diff-plan" ? "failed with diff plan for review" : run.status === "apply-failed" ? "auto-apply failed" : "completed"}.`,
+      `Workflow ${run.id} ${run.status === "awaiting-diff-approval" ? "awaiting diff approval" : run.status === "failed-with-diff-plan" ? "failed with diff plan for review" : run.status === "apply-failed" ? "auto-apply failed" : run.status === "failed" ? "failed" : "completed"}.`,
       ...workflowInlineResultLines(run, output),
       `Result file: ${run.resultPath}`,
       ...workflowResultReadbackLines(run),

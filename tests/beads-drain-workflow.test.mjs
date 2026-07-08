@@ -417,7 +417,8 @@ test("beads-drain non-dry by name records a failed lane without closing it", asy
   try {
     await initGitRepo(directory);
     const output = await runApproved(tools, context, { name: "beads-drain", args: { mode: "autonomous-local" }, background: false });
-    const runId = runIdFrom(output);
+    // A failed, zero-patch drain now reports run status "failed" (not "completed"/"started"),
+    // which runIdFrom does not recognize; the run id is not needed by this test's assertions.
     const result = await readResult(output);
 
     assert.deepEqual(result.output.closed, []);

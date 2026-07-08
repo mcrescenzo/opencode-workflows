@@ -2767,6 +2767,27 @@ return { mode: args?.mode ?? null };`;
   }
 });
 
+test("a fully-failed drain with zero patches reports run status failed, not completed", async () => {
+  const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }));
+  try {
+    // A drain body can report a DRAIN_FAILURE_STATUSES status (e.g. "failed", when
+    // report.failed.length > 0) without ever reaching the integration/diff-plan path, so
+    // run.editPlan never gets patches. The zero-patch else branch (workflow-plugin.js ~1246)
+    // must consult drainFailed instead of defaulting to "completed" -- a failed drain with no
+    // patches is not a success.
+    const source = `export const meta = { name: "fully-failed-drain", profile: "read-only-review" };
+return { status: "failed", failed: [{ itemId: "x" }] };`;
+    const output = await runApproved(tools, context, source);
+    // The "failed" wording isn't in runIdFrom's recognized-status alternation (same reason the
+    // failed-with-diff-plan test above extracts the run id from the result path instead).
+    const runId = path.basename(path.dirname(resultPath(output)));
+    const status = JSON.parse(await tools.workflow_status.execute({ runId, format: "json" }, context));
+    assert.equal(status.status, "failed");
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("non-dry beads-drain fails closed before Beads mutation when gates are unverified", async () => {
   const calls = [];
   const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }), {
@@ -3240,11 +3261,16 @@ test("workflow drain records dirty timeout salvage before releasing a claim", as
     const source = `export const meta = { name: "fake-drain-timeout-salvage", authority: { integration: true }, maxAgents: 1 };
 return await drain({ adapter: "fake", dryRun: false, maxAttempts: 1, maxWaves: 1 });`;
     const output = await runApprovedRequest(tools, context, { source, laneTimeoutMs: 1 });
-    const runId = runIdFrom(output);
+    // "failed" isn't in runIdFrom's recognized-status alternation; extract the run id from the
+    // result path instead (same approach the failed-with-diff-plan test below uses).
+    const runId = path.basename(path.dirname(resultPath(output)));
     const result = await readResult(output);
     const status = JSON.parse(await tools.workflow_status.execute({ runId, format: "json", detail: "full" }, context));
 
     assert.equal(result.output.status, "failed");
+    // A salvaged (uncommitted) lane is never integrable, so this drain produces zero patches; a
+    // failed drain body with zero patches must surface as a failed run, not a masked "completed".
+    assert.equal(status.status, "failed");
     assert.equal(result.output.salvaged.length, 1);
     assert.equal(result.output.salvaged[0].itemId, "item-1");
     assert.equal(result.output.salvaged[0].salvage.dirty, true);
@@ -3296,12 +3322,16 @@ test("workflow drain rejected lanes are recorded but excluded from integration",
 return await drain({ adapter: "fake", dryRun: false, maxAttempts: 1, maxWaves: 1 });`;
 
     const output = await runApproved(tools, context, source);
-    const runId = runIdFrom(output);
+    // "failed" isn't in runIdFrom's recognized-status alternation; extract the run id from the
+    // result path instead (same approach the failed-with-diff-plan test below uses).
+    const runId = path.basename(path.dirname(resultPath(output)));
     const result = await readResult(output);
     const status = JSON.parse(await tools.workflow_status.execute({ runId, format: "json", detail: "full" }, context));
 
     assert.equal(result.output.status, "failed");
-    assert.equal(status.status, "completed");
+    // The rejected lane is excluded from integration, so this drain produces zero patches; a
+    // failed drain body with zero patches must surface as a failed run, not a masked "completed".
+    assert.equal(status.status, "failed");
     assert.equal(status.integrationPlan.lanes.length, 1);
     assert.equal(status.integrationPlan.lanes[0].acceptedForIntegration, false);
     assert.equal(status.integrationPlan.integrationResult, undefined);
@@ -3337,12 +3367,16 @@ test("workflow drain invalid lane reports do not create integration lanes", asyn
 return await drain({ adapter: "fake", dryRun: false, maxAttempts: 1, maxWaves: 1 });`;
 
     const output = await runApproved(tools, context, source);
-    const runId = runIdFrom(output);
+    // "failed" isn't in runIdFrom's recognized-status alternation; extract the run id from the
+    // result path instead (same approach the failed-with-diff-plan test below uses).
+    const runId = path.basename(path.dirname(resultPath(output)));
     const result = await readResult(output);
     const status = JSON.parse(await tools.workflow_status.execute({ runId, format: "json", detail: "full" }, context));
 
     assert.equal(result.output.status, "failed");
-    assert.equal(status.status, "completed");
+    // An invalid lane report never reaches integration, so this drain produces zero patches; a
+    // failed drain body with zero patches must surface as a failed run, not a masked "completed".
+    assert.equal(status.status, "failed");
     assert.equal(status.integrationPlan.lanes.length, 0);
     assert.equal(status.editPlan, undefined);
     assert.equal(status.laneRecords.some((record) => record.outcome === "failure"), true);
