@@ -43,6 +43,28 @@ export function authorityAutoApproveTier(authority = {}) {
   return "readOnly";
 }
 
+// Rendered into every child lane's system prompt so a lane knows its tool
+// ceiling up front instead of discovering it through permission denials.
+export function laneAuthorityInstruction(authority = {}) {
+  const granted = [];
+  const denied = [];
+  if (authority.edit) granted.push("edit");
+  else if (authority.worktreeEdit) granted.push("worktree edit (isolated worktree only)");
+  else denied.push("edit");
+  if (authority.shell) granted.push("shell");
+  else denied.push("shell");
+  if (authority.network) granted.push("network");
+  else denied.push("network");
+  if (authority.mcp) granted.push("mcp");
+  else denied.push("mcp");
+  if (authority.integration) granted.push("integration");
+  const grantText = granted.length ? `read/search plus ${granted.join(", ")}` : "read/search only";
+  const denyText = denied.length
+    ? ` Not permitted: ${denied.join(", ")} — such tool calls are denied by policy; do not retry them.`
+    : "";
+  return `Lane authority: ${grantText}.${denyText}`;
+}
+
 export function effectiveAutoApproveCeiling(configured, requested) {
   const configuredRank = autoApproveTierRank(configured);
   if (configuredRank <= 0) return false;

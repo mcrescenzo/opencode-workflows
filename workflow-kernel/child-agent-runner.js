@@ -78,6 +78,7 @@ import {
   writeState,
 } from "./run-store-status.js";
 import {
+  laneAuthorityInstruction,
   modelKey,
   normalizeAgentOptions,
   resolveLaneModel,
@@ -643,17 +644,18 @@ export async function runChildAgent(pluginContext, toolContext, run, payload, de
     // one production-proven route (see commit 0b48f51); native `format:` was gated behind
     // a probe that no longer exists. Text is now the only structured path.
     const useStructuredTextFallback = Boolean(schema);
+    policy = resolveLanePolicy(run, opts);
     baseSystem = [
       "You are a child worker for an OpenCode workflow.",
       "Your final response is consumed as the workflow return value.",
       "Be concise and return raw findings/results, not a conversational status update.",
+      laneAuthorityInstruction(policy.authority),
       roleInfo ? `Role ${roleInfo.name}:\n${roleInfo.content}` : "",
       opts.system || "",
       useStructuredTextFallback ? structuredTextInstruction(schema) : "",
     ]
       .filter(Boolean)
       .join("\n\n");
-    policy = resolveLanePolicy(run, opts);
     outputFormat = { type: "text" };
     resolved = {
       opts,

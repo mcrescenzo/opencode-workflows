@@ -14,6 +14,7 @@ import {
   DEFAULT_LANE_RETRY_BASE_MS,
   MAX_LANE_RETRY_DELAY_MS,
 } from "../workflow-kernel/errors.js";
+import { laneAuthorityInstruction } from "../workflow-kernel/authority-policy.js";
 
 // Direct unit coverage for the pure/semi-pure lane-scoped helpers exported from
 // workflow-kernel/child-agent-runner.js: the resume cache-hit and checkpoint-hit discriminators,
@@ -1473,6 +1474,43 @@ test("createEditWorktree throws when the adapter's worktree path resolves to the
       createEditWorktree(run, toolContext, "lane:edit"),
       /worktree path resolves to the primary tree/,
     );
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("laneAuthorityInstruction renders grants and denials from authority flags", () => {
+  assert.equal(
+    laneAuthorityInstruction({ readOnly: true }),
+    "Lane authority: read/search only. Not permitted: edit, shell, network, mcp — such tool calls are denied by policy; do not retry them.",
+  );
+  assert.match(
+    laneAuthorityInstruction({ edit: true, shell: true, network: true, mcp: true, integration: true }),
+    /read\/search plus edit, shell, network, mcp, integration/,
+  );
+  assert.match(laneAuthorityInstruction({ worktreeEdit: true }), /worktree edit \(isolated worktree only\)/);
+  assert.match(laneAuthorityInstruction(undefined), /read\/search only/);
+});
+
+test("child lane system prompt discloses the lane's resolved authority ceiling", async () => {
+  const { root, dir } = await tempRunDir("child-agent-authority-line");
+  const calls = { create: [], prompt: [], abort: [] };
+  const pluginContext = directPluginContext(async () => ({
+    data: {
+      parts: [{ type: "text", text: "ok" }],
+      info: { tokens: { input: 1, output: 1, reasoning: 0 }, cost: 0 },
+    },
+  }), calls);
+  const toolContext = { directory: root, sessionID: "parent-session", abort: new AbortController().signal };
+  const run = minimalChildRun(dir);
+  try {
+    await runChildAgent(pluginContext, toolContext, run, {
+      callId: "lane:authority-line",
+      prompt: "inspect",
+      opts: {},
+    }, directDeps());
+    assert.match(calls.prompt[0].body.system, /Lane authority: read\/search only\./);
+    assert.match(calls.prompt[0].body.system, /Not permitted: edit, shell, network, mcp/);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
