@@ -69,6 +69,7 @@ import {
 } from "./budget-accounting.js";
 import {
   approvalEnvelope,
+  approvalEnvelopeDiff,
   approvalSnapshotList,
   approvalHash,
   computeDiffPlanHash,
@@ -826,14 +827,28 @@ function pendingApprovalEntry(run, source) {
 
 function approvalMismatchResponse(run, args) {
   const freshPreview = approvalPreviewEnvelope(run);
+  // If the SUPPLIED hash matches a recorded preview, diff that envelope against the fresh one so
+  // the caller learns exactly which field re-keyed instead of guessing from two opaque hashes.
+  const prior = typeof args.approvalHash === "string" ? peekPendingApproval(args.approvalHash) : undefined;
+  const changedFields = prior ? approvalEnvelopeDiff(prior.envelope, approvalEnvelope(run)) : null;
+  const inlineSourceDrift = Boolean(prior) && run.sourcePath === "<inline>"
+    && (changedFields ?? []).some((entry) => entry.field === "sourceHash");
   return JSON.stringify({
     type: "workflow_approval_mismatch",
     status: "approval_mismatch",
     executed: false,
     reason: typeof args.approvalHash === "string" && args.approvalHash.length > 0 ? "approval_hash_mismatch" : "missing_approval_hash",
-    message: "Workflow approval required: nothing executed because approve:true did not include the current approvalHash for this workflow envelope. Review the freshPreview and re-run with its approvalHash if the plan is acceptable.",
+    message: "Workflow approval required: nothing executed because approve:true did not include the current approvalHash for this workflow envelope. Review changedFields (when present) and the freshPreview, then re-run with freshApprovalHash if the plan is acceptable — inline-source callers may omit source on that retry (approve-by-reference).",
     suppliedApprovalHash: typeof args.approvalHash === "string" ? args.approvalHash : null,
     freshApprovalHash: freshPreview.approvalHash,
+    changedFields,
+    ...(inlineSourceDrift
+      ? {
+          hint:
+            `Inline source re-transmission drift: this call's source (sha256 ${run.sourceHash.slice(0, 12)}…, ${run.sourceMetadata.byteLength} bytes) differs from the one previewed under the supplied approvalHash (sha256 ${String(prior.envelope.sourceHash).slice(0, 12)}…, ${prior.byteLength} bytes). ` +
+            "Re-approve with approve: true and freshApprovalHash WITHOUT re-sending source, or save the body with workflow_save and run it by name.",
+        }
+      : {}),
     freshPreview,
   }, null, 2);
 }

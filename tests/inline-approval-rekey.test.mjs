@@ -155,3 +155,50 @@ test("approve-by-reference with an unknown hash fails loudly with recovery guida
     await fs.rm(directory, { recursive: true, force: true });
   }
 });
+
+test("mismatch response names the drifted field and hints at inline re-transmission drift", async () => {
+  const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }));
+  try {
+    const hashA = approvalHashFromJsonPreview(await tools.workflow_run.execute({ source: SOURCE, format: "json" }, context));
+    const mismatch = JSON.parse(await tools.workflow_run.execute(
+      { source: `${SOURCE}\n`, format: "json", approve: true, approvalHash: hashA },
+      context,
+    ));
+    assert.deepEqual(mismatch.changedFields.map((entry) => entry.field), ["sourceHash"]);
+    assert.match(mismatch.hint, /re-transmission drift/);
+    assert.match(mismatch.hint, /workflow_save/);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("mismatch from changed runtime args names runtimeArgs and carries no inline-drift hint", async () => {
+  const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }));
+  try {
+    const source = `export const meta = { name: "rekey-args-drift", profile: "read-only-review", maxAgents: 0 };
+return args;`;
+    const hash = approvalHashFromJsonPreview(await tools.workflow_run.execute({ source, format: "json", args: { n: 1 } }, context));
+    const mismatch = JSON.parse(await tools.workflow_run.execute(
+      { source, format: "json", args: { n: 2 }, approve: true, approvalHash: hash },
+      context,
+    ));
+    assert.deepEqual(mismatch.changedFields.map((entry) => entry.field), ["runtimeArgs"]);
+    assert.equal(mismatch.hint, undefined);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("mismatch with a hash the store has never seen reports changedFields: null", async () => {
+  const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }));
+  try {
+    const mismatch = JSON.parse(await tools.workflow_run.execute(
+      { source: SOURCE, format: "json", approve: true, approvalHash: "f".repeat(64) },
+      context,
+    ));
+    assert.equal(mismatch.status, "approval_mismatch");
+    assert.equal(mismatch.changedFields, null);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
