@@ -27,7 +27,7 @@ test("repo-review command asset exists with valid frontmatter", async () => {
 
 test("repo-review plugin command registration resolves under configureWorkflowEntrypoints", async () => {
   // (2) Bundled commands are not auto-discovered; registration requires the coordinated
-  // constants.js + configureWorkflowEntrypoints edits, mirroring repo-bughunt/beads-drain.
+  // constants.js + configureWorkflowEntrypoints edits, mirroring repo-bughunt.
   const cfg = {};
 
   await __test.configureWorkflowEntrypoints(cfg);
@@ -38,8 +38,8 @@ test("repo-review plugin command registration resolves under configureWorkflowEn
   assert.equal(Object.hasOwn(cfg.command["repo-review"], "prompt"), false);
   assert.equal(Object.hasOwn(cfg.command["repo-review"], "agent"), false);
 
-  // beads-drain moved to the beads extension (covered by beads-drain-assets); a bundled-only call
-  // does not register it.
+  // A drain command is contributed only by a trusted extension's asset dirs; a bundled-only call
+  // does not register one.
   assert.ok(cfg.command["repo-bughunt"]);
 });
 
@@ -91,7 +91,7 @@ test("repo-review command is report-only: forbids automatic mutation", async () 
   const command = await readCommand();
 
   // Each mutating surface is named under an explicit prohibition.
-  for (const forbidden of [/materialize/, /beads-drain/, /workflow_apply/, /git/, /\bbd\b/]) {
+  for (const forbidden of [/materialize/, /drain/, /workflow_apply/, /git/, /\bbd\b/]) {
     assert.match(command, forbidden, "boundary must name this mutating surface");
   }
   assert.match(command, /avoid|do not|must not|never|forbidden|out of scope/i);
@@ -102,7 +102,7 @@ test("repo-review command is report-only: forbids automatic mutation", async () 
   // verb+mutator adjacency this guards against.
   assert.doesNotMatch(
     command,
-    /\b(?:run|call|invoke|execute)\s+(?:the\s+)?(?:materialize|beads-drain|workflow_apply|bd\s+(?:create|update|close|claim))\b/i,
+    /\b(?:run|call|invoke|execute)\s+(?:the\s+)?(?:materialize|drain|workflow_apply|bd\s+(?:create|update|close|claim))\b/i,
   );
   // And no instruction to commit/push the report artifact.
   assert.match(command, /do not stage or commit|do not commit|gitignored/i);
@@ -173,6 +173,6 @@ test("repo-review command surfaces the materialization readiness gate", async ()
   // Even though materialize is mentioned, the command must NOT auto-run it.
   assert.doesNotMatch(
     command,
-    /\b(?:run|call|invoke|execute)\s+(?:the\s+)?(?:materialize|beads-drain|workflow_apply|bd\s+(?:create|update|close|claim))\b/i,
+    /\b(?:run|call|invoke|execute)\s+(?:the\s+)?(?:materialize|drain|workflow_apply|bd\s+(?:create|update|close|claim))\b/i,
   );
 });

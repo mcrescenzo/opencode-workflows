@@ -16,7 +16,7 @@ async function readCommand() {
 test("repo-bughunt command asset exists with valid frontmatter", async () => {
   // (1) The file exists and carries YAML frontmatter. The runtime
   // parser split is proven by the registration test below (configureWorkflowEntrypoints calls
-  // parseCommandMarkdown and surfaces .description/.template), mirroring beads-drain-assets.
+  // parseCommandMarkdown and surfaces .description/.template).
   const command = await readCommand();
 
   assert.match(command, /^---\n[\s\S]*?\n---\n/m, "command must open with a YAML frontmatter block");
@@ -27,7 +27,7 @@ test("repo-bughunt command asset exists with valid frontmatter", async () => {
 
 test("repo-bughunt plugin command registration resolves under configureWorkflowEntrypoints", async () => {
   // (2) Bundled commands are not auto-discovered; registration requires the coordinated
-  // constants.js + configureWorkflowEntrypoints edits, mirroring beads-drain.
+  // constants.js + configureWorkflowEntrypoints edits.
   const cfg = {};
 
   await __test.configureWorkflowEntrypoints(cfg);
@@ -38,8 +38,8 @@ test("repo-bughunt plugin command registration resolves under configureWorkflowE
   assert.equal(Object.hasOwn(cfg.command["repo-bughunt"], "prompt"), false);
   assert.equal(Object.hasOwn(cfg.command["repo-bughunt"], "agent"), false);
 
-  // beads-drain is now an extension-contributed command (see beads-drain-assets), so a bundled-only
-  // configureWorkflowEntrypoints call does not register it.
+  // A drain command is contributed only by a trusted extension's asset dirs, so a bundled-only
+  // configureWorkflowEntrypoints call does not register one.
 });
 
 test("repo-bughunt command invokes workflow_run by NAME, never by path", async () => {
@@ -86,7 +86,7 @@ test("repo-bughunt command is report-only: forbids automatic mutation", async ()
   const command = await readCommand();
 
   // Each mutating surface is named under an explicit prohibition.
-  for (const forbidden of [/materialize/, /beads-drain/, /workflow_apply/, /git/, /\bbd\b/]) {
+  for (const forbidden of [/materialize/, /drain/, /workflow_apply/, /git/, /\bbd\b/]) {
     assert.match(command, forbidden, "boundary must name this mutating surface");
   }
   assert.match(command, /avoid|do not|must not|never|forbidden|out of scope/i);
@@ -97,7 +97,7 @@ test("repo-bughunt command is report-only: forbids automatic mutation", async ()
   // verb+mutator adjacency this guards against.
   assert.doesNotMatch(
     command,
-    /\b(?:run|call|invoke|execute)\s+(?:the\s+)?(?:materialize|beads-drain|workflow_apply|bd\s+(?:create|update|close|claim))\b/i,
+    /\b(?:run|call|invoke|execute)\s+(?:the\s+)?(?:materialize|drain|workflow_apply|bd\s+(?:create|update|close|claim))\b/i,
   );
   // And no instruction to commit/push the report artifact.
   assert.match(command, /do not stage or commit|do not commit|gitignored/i);

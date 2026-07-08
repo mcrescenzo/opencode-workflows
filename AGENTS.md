@@ -7,7 +7,7 @@
 
 - This is an independently publishable opencode plugin package (`@mcrescenzo/opencode-workflows`) that can also be developed inside a private parent monorepo checkout. Runtime package dependencies are declared in `package.json`; parent-tree integrations are optional test/dev conveniences, not required package metadata.
 - Plugin entrypoint is `opencode-workflows.js`, which exports `workflow-kernel/workflow-plugin.js`.
-- Intentional source lives in `.github/`, `commands/`, `docs/`, `skills/`, `tests/`, `workflow-domains/`, `workflow-kernel/`, `workflows/`, `opencode-workflows.js`, `package.json`, `README.md`, and the other root package/community files.
+- Intentional source lives in `.github/`, `commands/`, `docs/`, `skills/`, `tests/`, `workflow-kernel/`, `workflows/`, `opencode-workflows.js`, `package.json`, `README.md`, and the other root package/community files.
 - `.opencode/`, `.beads/`, `.remember/`, `node_modules/`, logs, and child runtime registries are local runtime state; do not commit or publish them.
 
 ## Verification Commands
@@ -15,9 +15,9 @@
 - Run from this directory unless noted.
 - Full no-token plugin matrix: `npm test`.
 - Nested workflow regression wrapper for `workflow_run`, `workflow_apply`, and repo-review workflows: `npm run test:workflows`.
-- Focused suites: `npm run test:workflow-kernel`, `npm run test:workflow-adapters`, `npm run test:beads-drain`, `npm run test:extension-seam`.
+- Focused suites: `npm run test:workflow-kernel`, `npm run test:workflow-adapters`, `npm run test:extension-seam`.
 - Optional parent config regression from this directory: `npm run test:parent-integration`; equivalent from the parent tree: `npm --prefix ../.. run test:workflows`.
-- Tests use Node’s built-in `node --test`; many tests create temporary Git/Beads repos and call `git`/`bd` via `execFile`.
+- Tests use Node’s built-in `node --test`; many tests create temporary Git repos and call `git` via `execFile`.
 
 ## OpenCode Plugin Testing
 
@@ -27,10 +27,10 @@
 
 ## Workflow Boundaries
 
-- Bundled core workflow source is under `workflows/`. In source checkouts, the reference Beads extension contributes trusted host extension code for `beads-drain` from `workflow-domains/beads/workflows/beads-drain.js`; invoke it by name with `workflow_run({ name: "beads-drain", ... })`, not by path.
-- Empty or omitted `beads-drain` args default to safe dry-run behavior. Non-null args must be a JSON object; strings and arrays are rejected before approval preview.
-- Non-dry `beads-drain` (`mode: "autonomous-local"`) requires a one-time launch approval; the kernel verifies the server version floor (`GET /global/health`, minimum opencode 1.17.13) and asserts lane rooting/permissions deterministically at launch — there is no live-gate preflight step.
-- Normal edit/integration workflows stop at the hash-gated `workflow_apply` boundary. The intentional exception is successful non-dry `beads-drain`, whose launch approval authorizes in-run local primary-tree apply and Beads finalization.
+- Bundled core workflow source is under `workflows/`. The core kernel ships no domain drain workflow; a drain workflow (`harness: "drain"`) is contributed by a configured trusted extension and invoked by name with `workflow_run({ name: "<drain-workflow>", ... })`, not by path. The generic drain mechanism is exercised in-tree by the synthetic `fixture-drain` extension under `tests/fixtures/drain-extension/`.
+- Empty or omitted drain args default to safe dry-run behavior. Non-null args must be a JSON object; strings and arrays are rejected before approval preview.
+- A non-dry drain (`mode: "autonomous-local"`) requires a one-time launch approval; the kernel verifies the server version floor (`GET /global/health`, minimum opencode 1.17.13) and asserts lane rooting/permissions deterministically at launch — there is no live-gate preflight step.
+- Normal edit/integration workflows stop at the hash-gated `workflow_apply` boundary. The intentional exception is a successful non-dry drain workflow, whose launch approval authorizes in-run local primary-tree apply and domain-mutation finalization.
 - Schema lanes under `permission-ruleset` mode require the `structured_output` permission key to be explicitly allowed. The deny-by-default `*` rule hides the StructuredOutput tool from child sessions, which prevents schema-constrained lanes from completing and causes 10-minute timeouts. `permissionRulesForAuthority()` includes an explicit allow for `structured_output` after the catch-all deny.
 - Structured-output is text-only: there is no native `json_schema` output-format route and no capability probe for one. Schema lanes get a JSON-schema instruction appended to the system prompt; the reply text is parsed and Ajv-validated against the schema, with corrective retries on failure (`workflow-kernel/child-agent-runner.js`, `workflow-kernel/structured-output.js`).
 

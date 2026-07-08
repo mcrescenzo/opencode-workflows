@@ -235,10 +235,10 @@ async function processReadyItem(ctx, { item, classification, context, wave }) {
   let closed = false;
   // Tracks whether any internal release site (in runLaneAttempt or the
   // post-loop guard below) has already invoked releaseClaimedItem for this
-  // claim. The catch block must not issue a second real bd release: for the
-  // beads adapter the release mutationKey embeds the free-text reason, so a
-  // fresh "drain exception: ..." reason produces a different idempotency marker
-  // and can double-apply against the git-synced issue (opencode-workflows-5rzm).
+  // claim. The catch block must not issue a second real release: when a domain
+  // adapter's release mutationKey embeds the free-text reason, a fresh
+  // "drain exception: ..." reason produces a different idempotency marker
+  // and can double-apply against the synced item (opencode-workflows-5rzm).
   const releaseState = { attempted: false };
   try {
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {

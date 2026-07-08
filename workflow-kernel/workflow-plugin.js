@@ -2924,8 +2924,8 @@ async function WorkflowPlugin(pluginContext, options) {
         return await saveTemplate(context, args);
       },
     }),
-    // review_materialize is contributed by the beads extension (workflow-domains/beads/beads-extension.js
-    // `tools` factory); the core kernel ships no beads-specific tool.
+    // The core kernel ships no domain-specific tools (e.g. review_materialize); a trusted extension
+    // contributes net-new tools through its `tools` factory, merged into the static tool map below.
   },
   };
   // Merge extension-contributed tools into the static tool map (Stage 4). toolKit injects the kernel's

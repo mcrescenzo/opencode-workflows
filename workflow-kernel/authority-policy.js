@@ -389,7 +389,7 @@ export function authorityArgsForWorkflow(meta = {}, args = {}) {
   // into an object so the agent can reach the preview/launch path instead of being rejected. A
   // non-JSON string, or a non-string non-object (array/boolean/number), still falls through to the
   // rejection below. This is a normalization at the authority edge only; the script-body scope guard
-  // in beads-drain.js is preserved unchanged (it guards the sharper risk of a string scope spreading
+  // in a drain workflow is preserved unchanged (it guards the sharper risk of a string scope spreading
   // into a char-indexed unfiltered drain).
   if (typeof rawRuntime === "string" && rawRuntime.trim() !== "") {
     try {

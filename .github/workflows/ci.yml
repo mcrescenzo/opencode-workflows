@@ -25,21 +25,10 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Set up Go for Beads CLI
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.26.x"
-          cache: true
-
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
-
-      - name: Install Beads CLI
-        run: |
-          go install -tags=gms_pure_go github.com/steveyegge/beads/cmd/bd@v1.0.3
-          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -50,7 +39,6 @@ jobs:
           npm --version
           bun --version
           git --version
-          bd --version
 
       - name: Run no-token release gate
         run: npm run release:no-token

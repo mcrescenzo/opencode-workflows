@@ -17,11 +17,8 @@ test("public CI workflow runs the no-token release gate without credentials", ()
   assert.match(ci, /actions\/checkout@v4/);
   assert.match(ci, /actions\/setup-node@v4/);
   assert.match(ci, /node-version: "22"/);
-  assert.match(ci, /actions\/setup-go@v5/);
-  assert.match(ci, /go install -tags=gms_pure_go github\.com\/steveyegge\/beads\/cmd\/bd@v1\.0\.3/);
   assert.match(ci, /oven-sh\/setup-bun@v2/);
   assert.match(ci, /bun install --frozen-lockfile/);
-  assert.match(ci, /bd --version/);
   assert.match(ci, /npm run release:no-token/);
 
   assert.doesNotMatch(ci, /NODE_AUTH_TOKEN|NPM_TOKEN|secrets\./);

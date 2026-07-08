@@ -32,7 +32,6 @@ Restart opencode after changing plugin config.
 - **Plugin `autoApprove` option** (optional, default off) — set to `"readOnly"`, `"worktree"`, or `"all"` to let eligible `workflow_run` calls launch on the first call when their resolved authority tier is within that ceiling. A per-call `autoApprove` argument may narrow the configured ceiling, never widen it; `workflow_apply` keeps its separate hash gate.
 - **Node ≥ 20.11** (see `engines`); the test runner is Node's built-in `node --test`.
 - **`git`** on `PATH` (worktree, apply, and integration tests shell out to `git`).
-- **`bd` (Beads CLI)** is required only for the `beads-drain` adapter/scratch tests and the `beads-drain` workflow; all `repo-*` workflows and the rest of the no-token matrix run without it.
 - **Package manager / lockfile:** `bun.lock` is the canonical tracked lockfile (`bun install` reproduces it). All package scripts are thin `node` wrappers invoked via `npm run <script>` and work regardless of installer; `package-lock.json` is gitignored.
 - **Dependency notes:** `@opencode-ai/plugin` currently pins the transitive `effect` package on its `4.0.0-beta` channel. This repo accepts that upstream coupling instead of overriding `effect` independently; keep `@opencode-ai/plugin` and `@opencode-ai/sdk` in lockstep and verify `bun.lock` with `npm run test:lockfile-sync` during release checks.
 - **Alpine/musl install note:** `@opencode-ai/plugin` currently pulls `effect -> msgpackr -> msgpackr-extract` as an optional native speedup. `msgpackr-extract@3.0.4` has no musl prebuild, so `npm install` on Alpine can fall back to a local native rebuild and fail if `python3`/`make`/a compiler are absent. This plugin does not import `msgpackr`, and the extractor is optional; use `npm install --ignore-scripts` on musl hosts when native install scripts are not acceptable.
@@ -59,28 +58,27 @@ npm run test:workflows
 ```
 
 This wrapper covers the core `workflow_run` / `workflow_apply` paths and the
-`repo-*` review workflows. Beads-drain, extension-seam, and durable
+`repo-*` review workflows. Kernel drain, extension-seam, and durable
 state coverage live in the focused scripts below and in the catch-all `npm test`
 matrix.
 
-Run focused beads-drain and extension coverage from this directory:
+Run focused kernel and extension coverage from this directory:
 
 ```sh
 npm run test:workflow-kernel
-npm run test:beads-drain
 npm run test:workflow-adapters
 npm run test:extension-seam
 ```
 
 Run the full plugin test matrix (all workflow, adapter, runtime,
-durable-state, and beads-drain integration tests) from this directory:
+durable-state, and extension integration tests) from this directory:
 
 ```sh
 npm test
 ```
 
-The public CI workflow in `.github/workflows/ci.yml` provisions Node 22, Bun, and
-the Beads CLI, installs dependencies from `bun.lock`, and runs
+The public CI workflow in `.github/workflows/ci.yml` provisions Node 22 and Bun,
+installs dependencies from `bun.lock`, and runs
 `npm run release:no-token`. It intentionally does not run publishing, token-using
 live probes, the private parent integration check, or the required live child
 system smoke.
@@ -137,8 +135,8 @@ opencode plugin hooks:
 
 At opencode startup the plugin config hook registers the bundled commands —
 `repo-bughunt` and `repo-review` — plus any
-commands contributed by configured extensions (e.g. `beads-drain` from the beads
-extension), and adds this plugin's `skills` directory (and extension skill dirs) to
+commands contributed by configured extensions (for example a drain command from a
+trusted extension), and adds this plugin's `skills` directory (and extension skill dirs) to
 `skills.paths`. Restart opencode after
 changing plugin commands, skills, or config-time registration code; the running
 process keeps the previously loaded config.
@@ -169,65 +167,6 @@ goal state, workflow run records, package metadata, and `node_modules`.
 
 Those `.opencode/` artifacts are ignored rather than deleted so active workflow
 or goal evidence remains available locally while staying out of source review.
-
-## Beads Drain
-
-`beads-drain` is not part of the published core package. It is contributed only
-after a Beads extension is explicitly configured, and is then discoverable
-through `workflow_list` with `scope: "extension"`. See
-[docs/workflow-extensions.md#beads-is-the-reference-extension](https://github.com/mcrescenzo/opencode-workflows/blob/main/docs/workflow-extensions.md#beads-is-the-reference-extension)
-(GitHub only, not packaged) for the source-checkout reference extension shape
-and config pattern. Start it by name rather than by path:
-
-```js
-workflow_run({ name: "beads-drain", args: { mode: "dry-run", scope: { issueTypes: ["task"], limit: 5 } } })
-```
-
-Dry-run is the default safe path. It discovers and classifies scoped Beads work,
-reports planned ready items, skipped/human-gated items, gate status, and final
-dry proof without claiming Beads, spawning child edit lanes, creating worktrees,
-applying patches, or mutating Beads.
-
-Empty or omitted `args` keep that conservative dry-run default. The extension
-`beads-drain` workflow rejects non-null args that are not JSON objects, including
-strings and arrays, before approval preview so a mistyped scope cannot silently dry-run.
-When `mode: "autonomous-local"` is requested and `background` is omitted, the
-beads-drain workflow defaults to a background run so status can be inspected while it
-is active. Pass `background: false` explicitly for a foreground non-dry run.
-Child lane prompts default to a 10 minute timeout. For dogfood runs where lanes
-are making progress but timing out, pass top-level `laneTimeoutMs` (or the alias
-`childPromptTimeoutMs`) up to `3600000` milliseconds; keep `maxAgents` low until
-successful lane closeout is proven.
-
-Non-dry Beads drain requires a one-time launch approval; the kernel verifies
-the server version floor (`GET /global/health`, minimum opencode `1.17.13`)
-and asserts lane rooting and permissions deterministically at launch — there
-is no live-gate preflight step and no separate release-check command. Lanes
-get local Git integration worktree isolation (not the native opencode
-worktree API), and each lane's deny-by-default permission ruleset is sent with
-the session and checked against the create echo. A server below the minimum,
-or a failed rooting/permission assertion, refuses the launch instead of
-degrading silently.
-
-The extension `beads-drain` script is a thin wrapper around the host-owned
-`drain({ adapter: "beads" })` primitive. The trusted kernel and Beads adapter own
-preflight, snapshots, claims, isolated implementation lanes, validation, mutation
-staging/finalization, and final dry proof instead of reimplementing those steps in
-script-body prompt plumbing. The drain runs until the scoped queue is dry, a legal
-stop is reached, or bounded wave/attempt caps are exhausted. In
-`mode: "autonomous-local"` a verified successful diff plan is applied to the local
-primary tree in-run (accepted code changes land; staged Beads closes/followups
-finalized and read back) and the run ends in `completed`/`not_dry`/legal-stop rather
-than `awaiting-diff-approval`. A failed drain surfaces as `failed-with-diff-plan`,
-preserved for review and applied through `workflow_apply`; apply errors enter the
-retryable `apply-failed` state. `remote_sync` is always `local-only`.
-
-If an implementation lane times out or fails after creating a dirty worktree, the
-controller records dirty-timeout salvage metadata in the lane projection and drain
-result (`salvaged`), preserves the worktree, and includes the salvage path and
-changed files in the Beads cleanup note before reopening/unassigning the issue. It
-does not auto-close or auto-apply salvaged dirty work without successful controller
-validation.
 
 ## Repo Review Suite
 
@@ -269,9 +208,9 @@ the whole tree (see "Sizing `maxAgents`" below). Read the merged result via
 `.opencode/workflows/runs/` files as local sensitive artifacts and prefer the redacted
 `workflow_status` readback.
 
-**Nothing mutates automatically.** `review-materialize`, `beads-drain`,
-`workflow_apply`, git writes, and Beads mutation are separate explicit follow-ups and
-are never run by any repo-review workflow or command. The optional
+**Nothing mutates automatically.** `workflow_apply`, git writes, and any
+extension-contributed mutation (materialization or drain) are separate explicit
+follow-ups and are never run by any repo-review workflow or command. The optional
 `inspect-with-shell` carve-outs (the `repo-complexity` churn lens and `repo-deps`
 manifest inspection) are deferred as a product-scope decision, not a runtime
 limitation — every `repo-*` lane stays plain read-only-review today. Note also
@@ -349,10 +288,10 @@ creation time, not from model-reported text.
 integration runs. It requires `approvalIntent: "apply"`, approved source hash,
 base commit, diff-plan hash, domain mutation hash, and clean primary dirty-state
 proof before writing.
-The single intentional in-run apply exception is the extension-trusted non-dry `beads-drain`
-under the `drain-autonomous-local` profile: its one-time launch approval
+The single intentional in-run apply exception is an extension-trusted non-dry drain
+workflow under the `drain-autonomous-local` profile: its one-time launch approval
 authorizes in-run apply of a verified successful diff plan to the local primary
-tree (accepted code changes land; staged Beads closes/followups finalize) instead
+tree (accepted code changes land; staged domain mutations finalize) instead
 of stopping at `awaiting-diff-approval`. Every other edit/integration run keeps
 `workflow_apply` as the explicit, hash-gated write boundary; failed autonomous
 drains keep `failed-with-diff-plan` for review through `workflow_apply`.
@@ -408,7 +347,7 @@ wins; weaker evidence is recovery/diagnostic only and never finalizes work:
    `journal.jsonl`, the durable `result.json`, the domain/integration ledgers,
    and integration worktrees under `.opencode/workflows/runs/`. These are
    captured by the controller (the trusted kernel hub) and are the only evidence
-   that may close Beads, apply diffs, or merge integration lanes.
+   that may finalize domain mutations, apply diffs, or merge integration lanes.
 2. **`workflow_status`** (persisted inspection): the authoritative read-only and
    recovery surface over those artifacts. Use `detail: "result"` for final
    output and `detail: "full"` only for diagnostics/apply internals. Foreground
@@ -462,7 +401,7 @@ those orphaned read-only lanes.
   and skipped.
 - **No auto-apply; never finalizes domain mutations or primary writes.** Salvage
   never calls `integrate()` or `runAutoApply`, never touches `state.json`,
-  worktrees, or integration ledgers, and never closes Beads or applies a diff.
+  worktrees, or integration ledgers, and never finalizes domain mutations or applies a diff.
   It only appends a tagged synthetic journal entry and updates the lane
   projection on a durable interrupted run directory. Salvage is always explicit
   and approved — never automatic on resume.
@@ -655,7 +594,7 @@ workflow. It ships as a saved template named `first-run-slice` (in
 `workflow_template_save({ template: "first-run-slice" })`, or paste its body as
 `source`). It is the smallest safe shape: `profile: "read-only-review"`, one or
 two scoped `parallel()` lanes, pure-JS synthesis, `maxAgents: 2`/`concurrency: 2`,
-and no filesystem or Beads writes. Use it to validate the preview -> approve
+and no filesystem or domain-mutation writes. Use it to validate the preview -> approve
 handshake, the per-lane structured shape, and the
 `workflow_status({ runId, detail: "result" })` readback before you widen the
 fanout or nest workflows. The recipe documents `maxAgents` sizing (one slot per

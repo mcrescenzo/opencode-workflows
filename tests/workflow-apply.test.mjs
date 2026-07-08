@@ -39,44 +39,31 @@ async function initGitRepo(directory) {
   await execFileAsync("git", ["commit", "-m", "initial"], { cwd: directory });
 }
 
-async function bd(cwd, args) {
-  const { stdout } = await execFileAsync("bd", [...args, "--actor", "workflow-test@example.com"], { cwd, encoding: "utf8", maxBuffer: 10 * 1024 * 1024 });
-  return stdout;
-}
-
-function firstIssue(payload) {
-  return Array.isArray(payload) ? payload[0] : payload?.issue ?? payload;
-}
-
-function escapeRegExp(value) {
-  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-async function initBeadsRepo(directory) {
-  await bd(directory, ["init", "--prefix", "apply", "--non-interactive", "--skip-agents", "--skip-hooks", "--quiet"]);
-}
-
-async function createBead(directory, title = "Apply finalization bead") {
-  return firstIssue(JSON.parse(await bd(directory, [
-    "create",
-    "--title",
-    title,
-    "--description",
-    "Verify apply finalization.",
-    "--acceptance",
-    "Validation evidence is recorded.",
-    "--type",
-    "task",
-    "--priority",
-    "1",
-    "--labels",
-    "ready-for-agent",
-    "--json",
-  ])));
-}
-
-async function showBead(directory, id) {
-  return firstIssue(JSON.parse(await bd(directory, ["show", "--id", id, "--long", "--json", "--readonly"])));
+// Fixture domain-mutation store: a neutral in-memory stand-in for a trusted extension's domain
+// finalizer (the reference domain finalizer was deleted with its extension). It keeps the GENERIC workflow_apply
+// staged-mutation finalization mechanism fully covered — staging, hash gating, finalize, idempotency,
+// finalization-failure -> apply-failed — without shelling out to any real domain CLI. Tests inject
+// `handlers` via pluginContext.__workflowDomainMutationHandlers; the finalizer records appended
+// notes / closes into the store so assertions read the effect from `noteText(issueId)`.
+function makeFixtureDomainStore() {
+  const notes = new Map(); // issueId -> [note, ...]
+  const closed = new Set();
+  const known = new Set(); // issues that exist; fixture.close of an unknown id throws (readback fail)
+  const handlers = {
+    "fixture.append-notes": async ({ issueId, note }) => {
+      const list = notes.get(issueId) ?? [];
+      list.push(note);
+      notes.set(issueId, list);
+      return { id: issueId, notes: list.join("\n") };
+    },
+    "fixture.close": async ({ issueId }) => {
+      if (!known.has(issueId)) throw new Error(`fixture close readback failed: ${issueId} not found`);
+      closed.add(issueId);
+      return { id: issueId, status: "closed" };
+    },
+  };
+  const noteText = (issueId) => (notes.get(issueId) ?? []).join("\n");
+  return { handlers, notes, closed, known, noteText };
 }
 
 async function approvalArgs(tools, context, source) {
@@ -150,29 +137,12 @@ async function writeExternalWorkflow() {
   return { outsideDir, externalFile };
 }
 
-function portPrompt(config = {}) {
-  return async (input) => {
-    const text = String(input?.body?.parts?.[0]?.text ?? "");
-    const lanePrompt = text.includes("host-owned Beads drain workflow") || text.includes("Assigned item:");
-    if (config.writeFile && input?.query?.directory && lanePrompt) {
-      await fs.writeFile(path.join(input.query.directory, config.writeFile.name), config.writeFile.body, "utf8");
-    }
-    if (lanePrompt) {
-      const m = text.match(/"id"\s*:\s*"([^"]+)"/);
-      const laneResult = {
-        itemId: m ? m[1] : "item-1", outcome: config.laneOutcome === "blocked" ? "blocked" : "implemented", summary: "implemented",
-        readyForIntegration: config.laneOutcome !== "blocked",
-        filesChanged: config.writeFile ? [config.writeFile.name] : [], commandsRun: ["write"],
-        acceptanceEvidence: config.laneOutcome === "blocked" ? [] : ["written"], residualRisks: [], followups: [],
-      };
-      return { data: { parts: [{ type: "text", text: JSON.stringify(laneResult) }], info: { structured: laneResult, tokens: { input: 1, output: 1, reasoning: 0 }, cost: 0 } } };
-    }
-    return { data: { parts: [], info: {} } };
-  };
-}
 
-test("workflow_apply finalizes staged Beads mutations after patch apply", async () => {
+test("workflow_apply finalizes staged domain mutations after patch apply", async () => {
   const toastCalls = [];
+  const store = makeFixtureDomainStore();
+  const issueId = "fixture-1";
+  store.known.add(issueId);
   const { tools, context, directory } = await makeHarness(async () => ({
     data: {
       parts: [{ type: "text", text: JSON.stringify({ patches: [{ path: "applied.txt", content: "applied\n" }] }) }],
@@ -189,13 +159,10 @@ test("workflow_apply finalizes staged Beads mutations after patch apply", async 
         return { data: true };
       },
     },
+    pluginContext: { __workflowDomainMutationHandlers: store.handlers },
   });
   try {
     await initGitRepo(directory);
-    await initBeadsRepo(directory);
-    const issue = await createBead(directory);
-    await execFileAsync("git", ["add", ".beads"], { cwd: directory });
-    await execFileAsync("git", ["commit", "-m", "beads baseline"], { cwd: directory });
     const source = `export const meta = { name: "apply-domain", authority: { edit: true }, maxAgents: 1 };
 return await agent("edit", { edit: true, schema: { type: "object", properties: { patches: { type: "array" } }, required: ["patches"] } });`;
 
@@ -203,9 +170,9 @@ return await agent("edit", { edit: true, schema: { type: "object", properties: {
     const runId = runIdFrom(output);
     const status = JSON.parse(await tools.workflow_status.execute({ runId, format: "json", detail: "full" }, context));
     await __test.stageDomainMutation({ id: runId, dir: status.dir }, {
-      mutationKey: `bd-note:${issue.id}:apply-finalized`,
-      operation: "beads.append-notes",
-      payload: { cwd: directory, actor: "workflow-test@example.com", issueId: issue.id, note: "finalized after apply" },
+      mutationKey: `note:${issueId}:apply-finalized`,
+      operation: "fixture.append-notes",
+      payload: { issueId, note: "finalized after apply" },
     });
     await refreshDomainManifest(status);
 
@@ -221,7 +188,7 @@ return await agent("edit", { edit: true, schema: { type: "object", properties: {
 
     assert.match(applied, /applied 1 patches and finalized 1 domain mutations/);
     assert.equal(await fs.readFile(path.join(context.directory, "applied.txt"), "utf8"), "applied\n");
-    assert.match((await showBead(directory, issue.id)).notes, /finalized after apply/);
+    assert.match(store.noteText(issueId), /finalized after apply/);
     const finalStatus = JSON.parse(await tools.workflow_status.execute({ runId, format: "json", detail: "full" }, context));
     assert.equal(finalStatus.status, "applied");
     assert.equal(finalStatus.domainFinalization.finalized, 1);
@@ -241,9 +208,9 @@ return await agent("edit", { edit: true, schema: { type: "object", properties: {
     assert.match(reapplied, /already applied/);
 
     await __test.stageDomainMutation({ id: runId, dir: status.dir }, {
-      mutationKey: `bd-note:${issue.id}:invalid-approval-not-finalized`,
-      operation: "beads.append-notes",
-      payload: { cwd: directory, actor: "workflow-test@example.com", issueId: issue.id, note: "invalid approval finalized" },
+      mutationKey: `note:${issueId}:invalid-approval-not-finalized`,
+      operation: "fixture.append-notes",
+      payload: { issueId, note: "invalid approval finalized" },
     });
     await assert.rejects(tools.workflow_apply.execute({
       runId,
@@ -254,7 +221,7 @@ return await agent("edit", { edit: true, schema: { type: "object", properties: {
       approvalIntent: "apply",
       expectedPrimaryDirtyState: "clean",
     }, context), /approvedSourceHash mismatch/);
-    assert.doesNotMatch((await showBead(directory, issue.id)).notes, /invalid approval finalized/);
+    assert.doesNotMatch(store.noteText(issueId), /invalid approval finalized/);
 
     await fs.writeFile(path.join(status.dir, "diff-plan.json"), "{not json", "utf8");
     await assert.rejects(tools.workflow_apply.execute({
@@ -266,13 +233,16 @@ return await agent("edit", { edit: true, schema: { type: "object", properties: {
       approvalIntent: "apply",
       expectedPrimaryDirtyState: "clean",
     }, context), /Unexpected token|Expected property name|JSON/);
-    assert.doesNotMatch((await showBead(directory, issue.id)).notes, /invalid approval finalized/);
+    assert.doesNotMatch(store.noteText(issueId), /invalid approval finalized/);
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }
 });
 
 test("workflow_apply rejects staged domain mutations changed after diff approval", async () => {
+  const store = makeFixtureDomainStore();
+  const issueId = "fixture-1";
+  store.known.add(issueId);
   const { tools, context, directory } = await makeHarness(async () => ({
     data: {
       parts: [{ type: "text", text: JSON.stringify({ patches: [{ path: "domain-hash.txt", content: "safe patch\n" }] }) }],
@@ -282,13 +252,9 @@ test("workflow_apply rejects staged domain mutations changed after diff approval
         cost: 0,
       },
     },
-  }));
+  }), { pluginContext: { __workflowDomainMutationHandlers: store.handlers } });
   try {
     await initGitRepo(directory);
-    await initBeadsRepo(directory);
-    const issue = await createBead(directory, "Domain hash bead");
-    await execFileAsync("git", ["add", ".beads"], { cwd: directory });
-    await execFileAsync("git", ["commit", "-m", "beads baseline"], { cwd: directory });
     const source = `export const meta = { name: "domain-hash", authority: { edit: true }, maxAgents: 1 };
 return await agent("edit", { edit: true, schema: { type: "object", properties: { patches: { type: "array" } }, required: ["patches"] } });`;
 
@@ -296,9 +262,9 @@ return await agent("edit", { edit: true, schema: { type: "object", properties: {
     const runId = runIdFrom(output);
     const status = JSON.parse(await tools.workflow_status.execute({ runId, format: "json", detail: "full" }, context));
     await __test.stageDomainMutation({ id: runId, dir: status.dir }, {
-      mutationKey: `bd-note:${issue.id}:post-approval`,
-      operation: "beads.append-notes",
-      payload: { cwd: directory, actor: "workflow-test@example.com", issueId: issue.id, note: "not approved" },
+      mutationKey: `note:${issueId}:post-approval`,
+      operation: "fixture.append-notes",
+      payload: { issueId, note: "not approved" },
     });
 
     await assert.rejects(tools.workflow_apply.execute({
@@ -311,13 +277,16 @@ return await agent("edit", { edit: true, schema: { type: "object", properties: {
       expectedPrimaryDirtyState: "clean",
     }, context), /staged domain mutations changed/);
     assert.equal(await fileExists(path.join(context.directory, "domain-hash.txt")), false);
-    assert.doesNotMatch((await showBead(directory, issue.id)).notes ?? "", /not approved/);
+    assert.doesNotMatch(store.noteText(issueId), /not approved/);
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }
 });
 
-test("workflow_apply leaves retryable apply-failed state when Beads finalization fails", async () => {
+test("workflow_apply leaves retryable apply-failed state when domain finalization fails", async () => {
+  // The fixture close finalizer throws for an unknown issueId (readback failure), standing in for a
+  // domain mutation that cannot be finalized.
+  const store = makeFixtureDomainStore();
   const { tools, context, directory } = await makeHarness(async () => ({
     data: {
       parts: [{ type: "text", text: JSON.stringify({ patches: [{ path: "finalization-failed.txt", content: "patch applied\n" }] }) }],
@@ -327,13 +296,9 @@ test("workflow_apply leaves retryable apply-failed state when Beads finalization
         cost: 0,
       },
     },
-  }));
+  }), { pluginContext: { __workflowDomainMutationHandlers: store.handlers } });
   try {
     await initGitRepo(directory);
-    await initBeadsRepo(directory);
-    await createBead(directory);
-    await execFileAsync("git", ["add", ".beads"], { cwd: directory });
-    await execFileAsync("git", ["commit", "-m", "beads baseline"], { cwd: directory });
     const source = `export const meta = { name: "apply-domain-fail", authority: { edit: true }, maxAgents: 1 };
 return await agent("edit", { edit: true, schema: { type: "object", properties: { patches: { type: "array" } }, required: ["patches"] } });`;
 
@@ -341,9 +306,9 @@ return await agent("edit", { edit: true, schema: { type: "object", properties: {
     const runId = runIdFrom(output);
     const status = JSON.parse(await tools.workflow_status.execute({ runId, format: "json", detail: "full" }, context));
     await __test.stageDomainMutation({ id: runId, dir: status.dir }, {
-      mutationKey: "bd-close:missing:apply-finalization-fails",
-      operation: "beads.close",
-      payload: { cwd: directory, actor: "workflow-test@example.com", issueId: "missing-issue", reason: "should fail" },
+      mutationKey: "close:missing:apply-finalization-fails",
+      operation: "fixture.close",
+      payload: { issueId: "missing-issue", reason: "should fail" },
     });
     await refreshDomainManifest(status);
 
@@ -377,6 +342,9 @@ return await agent("edit", { edit: true, schema: { type: "object", properties: {
 });
 
 test("workflow_apply recovers a crash between completed-ledger and applied state write", async () => {
+  const store = makeFixtureDomainStore();
+  const issueId = "fixture-1";
+  store.known.add(issueId);
   const { tools, context, directory } = await makeHarness(async () => ({
     data: {
       parts: [{ type: "text", text: JSON.stringify({ patches: [{ path: "crash-recovered.txt", content: "applied\n" }] }) }],
@@ -386,13 +354,9 @@ test("workflow_apply recovers a crash between completed-ledger and applied state
         cost: 0,
       },
     },
-  }));
+  }), { pluginContext: { __workflowDomainMutationHandlers: store.handlers } });
   try {
     await initGitRepo(directory);
-    await initBeadsRepo(directory);
-    const issue = await createBead(directory);
-    await execFileAsync("git", ["add", ".beads"], { cwd: directory });
-    await execFileAsync("git", ["commit", "-m", "beads baseline"], { cwd: directory });
     const source = `export const meta = { name: "apply-crash-recovery", authority: { edit: true }, maxAgents: 1 };
 return await agent("edit", { edit: true, schema: { type: "object", properties: { patches: { type: "array" } }, required: ["patches"] } });`;
 
@@ -400,9 +364,9 @@ return await agent("edit", { edit: true, schema: { type: "object", properties: {
     const runId = runIdFrom(output);
     const status = JSON.parse(await tools.workflow_status.execute({ runId, format: "json", detail: "full" }, context));
     await __test.stageDomainMutation({ id: runId, dir: status.dir }, {
-      mutationKey: `bd-note:${issue.id}:crash-recovery`,
-      operation: "beads.append-notes",
-      payload: { cwd: directory, actor: "workflow-test@example.com", issueId: issue.id, note: "finalized during crash recovery" },
+      mutationKey: `note:${issueId}:crash-recovery`,
+      operation: "fixture.append-notes",
+      payload: { issueId, note: "finalized during crash recovery" },
     });
     await refreshDomainManifest(status);
 
@@ -438,7 +402,7 @@ return await agent("edit", { edit: true, schema: { type: "object", properties: {
     assert.match(recovered, /already applied; finalized 1 domain mutations/);
     const recoveredStatus = JSON.parse(await tools.workflow_status.execute({ runId, format: "json", detail: "full" }, context));
     assert.equal(recoveredStatus.status, "applied");
-    assert.match((await showBead(directory, issue.id)).notes, /finalized during crash recovery/);
+    assert.match(store.noteText(issueId), /finalized during crash recovery/);
 
     // Idempotent: a second apply on the now-applied run does not re-finalize or error.
     const reRecovered = await tools.workflow_apply.execute(applyArgs, context);
@@ -449,6 +413,9 @@ return await agent("edit", { edit: true, schema: { type: "object", properties: {
 });
 
 test("workflow_apply recovery refuses domain finalization when applied patch content drifted", async () => {
+  const store = makeFixtureDomainStore();
+  const issueId = "fixture-1";
+  store.known.add(issueId);
   const { tools, context, directory } = await makeHarness(async () => ({
     data: {
       parts: [{ type: "text", text: JSON.stringify({ patches: [{ path: "drifted-after-apply.txt", content: "approved\n" }] }) }],
@@ -458,13 +425,9 @@ test("workflow_apply recovery refuses domain finalization when applied patch con
         cost: 0,
       },
     },
-  }));
+  }), { pluginContext: { __workflowDomainMutationHandlers: store.handlers } });
   try {
     await initGitRepo(directory);
-    await initBeadsRepo(directory);
-    const issue = await createBead(directory);
-    await execFileAsync("git", ["add", ".beads"], { cwd: directory });
-    await execFileAsync("git", ["commit", "-m", "beads baseline"], { cwd: directory });
     const source = `export const meta = { name: "apply-crash-drift", authority: { edit: true }, maxAgents: 1 };
 return await agent("edit", { edit: true, schema: { type: "object", properties: { patches: { type: "array" } }, required: ["patches"] } });`;
 
@@ -472,9 +435,9 @@ return await agent("edit", { edit: true, schema: { type: "object", properties: {
     const runId = runIdFrom(output);
     const status = JSON.parse(await tools.workflow_status.execute({ runId, format: "json", detail: "full" }, context));
     await __test.stageDomainMutation({ id: runId, dir: status.dir }, {
-      mutationKey: `bd-note:${issue.id}:drift-recovery`,
-      operation: "beads.append-notes",
-      payload: { cwd: directory, actor: "workflow-test@example.com", issueId: issue.id, note: "must not finalize drifted tree" },
+      mutationKey: `note:${issueId}:drift-recovery`,
+      operation: "fixture.append-notes",
+      payload: { issueId, note: "must not finalize drifted tree" },
     });
     await refreshDomainManifest(status);
 
@@ -502,7 +465,7 @@ return await agent("edit", { edit: true, schema: { type: "object", properties: {
     const failedStatus = JSON.parse(await tools.workflow_status.execute({ runId, format: "json", detail: "full" }, context));
     assert.equal(failedStatus.status, "apply-failed");
     assert.match(failedStatus.errorSummary, /Applied patch content no longer matches/);
-    assert.doesNotMatch(String((await showBead(directory, issue.id)).notes ?? ""), /must not finalize drifted tree/);
+    assert.doesNotMatch(store.noteText(issueId), /must not finalize drifted tree/);
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }

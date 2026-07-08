@@ -72,7 +72,6 @@ test("workflow tool reference lists every registered workflow tool and approval 
 
 test("command docs link repeated safety caveats to canonical references", async () => {
   const commandFiles = [
-    "workflow-domains/beads/commands/beads-drain.md",
     "commands/repo-bughunt.md",
     "commands/repo-review.md",
   ];

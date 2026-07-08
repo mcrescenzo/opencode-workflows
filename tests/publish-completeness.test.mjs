@@ -82,7 +82,6 @@ test("files[] does not ship historical/roadmap-only planning docs", () => {
     "docs/workflow-autonomous-harness-plan.md",
     "docs/general-purpose-harness-extraction-plan.md",
     "docs/claude-parity-roadmap.md",
-    "docs/beads-tool-asset-externalization-plan.md",
   ];
   for (const doc of internalDocs) {
     assert.equal(pkg.files.includes(doc), false, `files[] must not include internal planning doc ${doc}`);
@@ -119,42 +118,19 @@ test("the bundled runtime-loaded command markdown files exist on disk", () => {
   }
 });
 
-test("beads assets are NOT in the published core dirs (they live in the unpublished extension)", () => {
-  // beads-drain command/workflow/skill moved to workflow-domains/beads/ (outside files[]).
-  assert.equal(existsSync(new URL("commands/beads-drain.md", root)), false);
-  assert.equal(existsSync(new URL("workflows/beads-drain.js", root)), false);
-  assert.equal(existsSync(new URL("skills/beads-drain", root)), false);
-  // files[] must not whitelist the extension dir.
+test("no domain extension assets exist in the repo (pure-architecture invariant)", () => {
+  assert.equal(existsSync(new URL("workflow-domains/", root)), false);
   assert.equal((pkg.files ?? []).includes("workflow-domains/"), false);
-  // The assets do exist in the extension dir.
-  assert.ok(existsSync(new URL("workflow-domains/beads/commands/beads-drain.md", root)));
-  assert.ok(existsSync(new URL("workflow-domains/beads/workflows/beads-drain.js", root)));
-  assert.ok(existsSync(new URL("workflow-domains/beads/skills/beads-drain/SKILL.md", root)));
 });
 
-test("review_materialize tool + adapter are NOT in the published core (they moved to the extension)", () => {
-  assert.equal(existsSync(new URL("commands/review-materialize.md", root)), false);
-  assert.equal(existsSync(new URL("workflow-kernel/review-materialize-adapter.js", root)), false);
-  // They live in the unpublished beads extension dir.
-  assert.ok(existsSync(new URL("workflow-domains/beads/commands/review-materialize.md", root)));
-  assert.ok(existsSync(new URL("workflow-domains/beads/review-materialize-adapter.js", root)));
-});
-
-test("npm pack --dry-run tarball excludes the beads extension entirely", () => {
+test("npm pack --dry-run tarball excludes any domain extension dir entirely", () => {
   const res = npmPackDryRunJson();
   assert.equal(res.status, 0, `npm pack --dry-run failed: ${res.error?.message ?? res.stderr}`);
   // --json prints a JSON array of pack manifests on stdout (notices go to stderr).
   const manifests = JSON.parse(res.stdout);
   const files = manifests.flatMap((m) => (m.files ?? []).map((f) => f.path));
-  const offenders = files.filter(
-    (p) =>
-      p.startsWith("workflow-domains/") ||
-      p === "commands/beads-drain.md" ||
-      p === "commands/review-materialize.md" ||
-      p === "workflows/beads-drain.js" ||
-      p.startsWith("skills/beads-drain"),
-  );
-  assert.deepEqual(offenders, [], `tarball must not ship beads assets, found: ${offenders.join(", ")}`);
+  const offenders = files.filter((p) => p.startsWith("workflow-domains/"));
+  assert.deepEqual(offenders, [], `tarball must not ship domain extension assets, found: ${offenders.join(", ")}`);
   assert.ok(files.includes("SECURITY.md"), "tarball must ship SECURITY.md");
 });
 
@@ -215,6 +191,4 @@ test("package-visible verification docs mark test scripts as source-checkout-onl
   assert.match(readme, /not for an installed package tarball/);
   assert.match(readme, /does not ship this repository's `tests\/`, `scripts\/`, or reference\s+extension source/s);
   assert.match(readme, /does not ship the "Historical snapshots \/ audits" or\s+"Roadmap \/ planning" docs/s);
-  assert.match(readme, /Beads extension is explicitly configured/);
-  assert.match(readme, /source-checkout reference extension shape/);
 });

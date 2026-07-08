@@ -3,24 +3,11 @@ import os from "node:os";
 import path from "node:path";
 
 import workflowPlugin from "../../workflow-kernel/index.js";
-import { finalizeBeadsDomainMutation } from "../../workflow-domains/beads/beads-drain-adapter.js";
 
-// beads-drain (workflow/command/skill) is contributed by the beads extension's asset dirs. The
-// harness mirrors "a deployment with the beads extension loaded" so beads-drain resolves by name
-// (scope:"extension"). Drain adapter behavior is still overridden per-test via __workflowDrainAdapters
-// (it takes precedence over the registry), so loading the extension never shells out to real `bd`.
-const REPO_ROOT = path.resolve(import.meta.dirname, "..", "..");
-const BEADS_EXT_PATH = path.join(REPO_ROOT, "workflow-domains", "beads", "beads-extension.js");
-
-// Domain-mutation finalization is owned by trusted extensions, resolved by exact operation name.
-// In production the beads extension registers these; the test harness wires them via the seam by
-// default (mirroring a deployment with the beads extension loaded) so existing beads finalization
-// tests keep passing. Tests can override via options.pluginContext.__workflowDomainMutationHandlers.
-const DEFAULT_DOMAIN_MUTATION_HANDLERS = {
-  "beads.close": finalizeBeadsDomainMutation,
-  "beads.append-notes": finalizeBeadsDomainMutation,
-  "beads.create-followup": finalizeBeadsDomainMutation,
-};
+// Domain-mutation finalization is owned by trusted extensions. The kernel harness wires none by
+// default; tests that exercise staged domain mutations pass explicit handlers via
+// options.pluginContext.__workflowDomainMutationHandlers.
+const DEFAULT_DOMAIN_MUTATION_HANDLERS = {};
 
 const DEFAULT_CAPABILITIES = {
   childSession: "available",
@@ -201,7 +188,7 @@ async function makeHarness(promptOrOptions, maybeOptions = {}) {
 
   // The factory loads configured extensions in its body, so the registry is populated on the await
   // below (no separate config-hook step needed). Absolute paths make configDir irrelevant.
-  const extensions = options.extensions ?? [BEADS_EXT_PATH];
+  const extensions = options.extensions ?? [];
   const registered = await workflowPlugin(pluginContext, { ...(options.pluginOptions ?? {}), extensions });
   return {
     directory,

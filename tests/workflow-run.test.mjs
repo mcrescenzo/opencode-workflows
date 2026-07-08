@@ -30,6 +30,13 @@ import { makeExtensionDir, writeFakeExtension } from "./helpers/fake-extension.m
 const execFileAsync = promisify(execFile);
 const { __test } = workflowPlugin;
 
+// Synthetic drain extension: contributes the `fixture-drain` workflow (scope:"extension") so the
+// kernel drain mechanisms (canonical mode/profile normalization, dry-run default, autonomous-local
+// background default, profile/mode conflict rejection, lane-timeout aliases, host-owned lane
+// dispatch, sub-floor refusal, autonomous-local auto-apply) stay covered without any domain
+// extension. Drain adapter behavior is injected per-test via __workflowDrainAdapters.fake.
+const FIXTURE_DRAIN_EXT = path.join(import.meta.dirname, "fixtures", "drain-extension", "extension.js");
+
 // Fixture workflow with a fully-populated meta: the invocation-metadata contract
 // (ux.1) is now asserted against this fixture instead of any bundled workflow.
 const RICH_META_WORKFLOW = `export const meta = {
@@ -84,44 +91,8 @@ async function initGitRepo(directory) {
   await execFileAsync("git", ["commit", "-m", "initial"], { cwd: directory });
 }
 
-async function bd(cwd, args) {
-  const { stdout } = await execFileAsync("bd", [...args, "--actor", "workflow-test@example.com"], { cwd, encoding: "utf8", maxBuffer: 10 * 1024 * 1024 });
-  return stdout;
-}
-
-function firstIssue(payload) {
-  return Array.isArray(payload) ? payload[0] : payload?.issue ?? payload;
-}
-
 function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-async function initBeadsRepo(directory) {
-  await bd(directory, ["init", "--prefix", "apply", "--non-interactive", "--skip-agents", "--skip-hooks", "--quiet"]);
-}
-
-async function createBead(directory, title = "Apply finalization bead") {
-  return firstIssue(JSON.parse(await bd(directory, [
-    "create",
-    "--title",
-    title,
-    "--description",
-    "Verify apply finalization.",
-    "--acceptance",
-    "Validation evidence is recorded.",
-    "--type",
-    "task",
-    "--priority",
-    "1",
-    "--labels",
-    "ready-for-agent",
-    "--json",
-  ])));
-}
-
-async function showBead(directory, id) {
-  return firstIssue(JSON.parse(await bd(directory, ["show", "--id", id, "--long", "--json", "--readonly"])));
 }
 
 async function approvalArgs(tools, context, source) {
@@ -236,7 +207,7 @@ async function writeExternalWorkflow() {
 function portPrompt(config = {}) {
   return async (input) => {
     const text = String(input?.body?.parts?.[0]?.text ?? "");
-    const lanePrompt = text.includes("host-owned Beads drain workflow") || text.includes("Assigned item:");
+    const lanePrompt = text.includes("host-owned drain workflow") || text.includes("Assigned item:");
     if (config.writeFile && input?.query?.directory && lanePrompt) {
       await fs.writeFile(path.join(input.query.directory, config.writeFile.name), config.writeFile.body, "utf8");
     }
@@ -417,19 +388,20 @@ return await agent("would spawn a lane if not gated");`;
 });
 
 test("drain-autonomous-local launch refuses a sub-floor server", async () => {
-  // Companion to the shell test above, exercised through the real beads-drain entry point
-  // (name: "beads-drain") rather than a synthetic inline profile assertion. drain-autonomous-local
+  // Companion to the shell test above, exercised through the drain entry point (name:
+  // "fixture-drain") rather than a synthetic inline profile assertion. drain-autonomous-local
   // is integration:true, so it was already inside the elevated gate before this fix; this proves
   // the production drain launch path is refused pre-lane too, before the drain adapter or any
   // lane is ever touched (the assertion here is the pre-lane rejection, not drain mechanics).
   const tooOldHealth = { data: { healthy: true, version: "1.0.0" } };
   const { tools, context, directory, calls } = await makeHarness(async () => { throw new Error("must not prompt a child lane"); }, {
+    extensions: [FIXTURE_DRAIN_EXT],
     pluginContext: { __workflowServerHealth: tooOldHealth, serverUrl: "http://fingerprint-drain.test" },
   });
   try {
     await initGitRepo(directory);
     await assert.rejects(
-      runApprovedRequest(tools, context, { name: "beads-drain", args: { mode: "autonomous-local" }, background: false }),
+      runApprovedRequest(tools, context, { name: "fixture-drain", args: { mode: "autonomous-local" }, background: false }),
       /requires opencode server >= /,
     );
     assert.equal(calls.create.length, 0, "the fingerprint check must reject before any session.create");
@@ -1683,34 +1655,9 @@ test("workflow_list summary format renders authority= without throwing (regressi
 // ux.1: workflow_list should make bundled + saved workflows self-describing — runnable
 // workflow_run examples, args shape, authority/profile, model-tier hints, maxAgents/concurrency,
 // and workflow_status next steps — sourced only from explicit meta or curated bundled defaults.
-test("ux.1: workflow_list bundled beads-drain carries runnable invocation metadata from curated defaults", async () => {
-  const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }));
-  try {
-    const listed = JSON.parse(await tools.workflow_list.execute({ format: "json" }, context));
-    const bundled = listed.find((entry) => entry.scope === "extension" && entry.name === "beads-drain");
-    assert.ok(bundled, "missing extension beads-drain workflow");
-    const inv = bundled.invocation;
-    assert.ok(inv, "extension workflow must carry invocation metadata");
-    assert.equal(inv.category, "autonomous-backlog-drain");
-    assert.equal(inv.profile, "drain-autonomous-local");
-    assert.equal(inv.maxAgents, 16);
-    assert.equal(inv.concurrency, 4);
-    // Curated runnable examples include a safe dry-run preview.
-    assert.ok(inv.runExamples.some((line) => /^workflow_run name="beads-drain"/.test(line)), "expected a workflow_run example");
-    assert.ok(inv.runExamples.some((line) => /"mode":"dry-run"/.test(line)), "expected a dry-run args example");
-    assert.ok(inv.argsExamples.some((ex) => ex.args && ex.args.mode === "dry-run"), "expected structured dry-run args example");
-    // Model-tier hints always populate (default/fast/deep).
-    assert.equal(typeof inv.modelTier.default, "string");
-    assert.equal(typeof inv.modelTier.fast, "string");
-    assert.equal(typeof inv.modelTier.deep, "string");
-    // workflow_status next steps are surfaced.
-    assert.ok(inv.nextSteps.some((step) => /workflow_status detail=result/.test(step)), "expected a workflow_status result next step");
-    // Integration authority => an approval reminder is included.
-    assert.ok(inv.nextSteps.some((step) => /workflow_apply/.test(step)), "integration workflow must mention workflow_apply approval");
-  } finally {
-    await fs.rm(directory, { recursive: true, force: true });
-  }
-});
+// (The former bundled-drain "carries invocation metadata from curated defaults" test was removed
+// with the domain extension; its generic contract is covered by the fixture-based ux.1 test below,
+// "ux.1: extension workflows expose machine-readable invocation metadata".)
 
 test("ux.1: extension workflows expose machine-readable invocation metadata", async () => {
   const extDir = await makeExtensionDir();
@@ -1930,10 +1877,12 @@ return { ok: true };`;
 });
 
 test("ux.1: workflow_list summary renders runnable run: lines and next steps for bundled workflows", async () => {
-  const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }));
+  const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }), {
+    extensions: [FIXTURE_DRAIN_EXT],
+  });
   try {
     const summary = await tools.workflow_list.execute({}, context);
-    assert.match(summary, /run: workflow_run name="beads-drain"/);
+    assert.match(summary, /run: workflow_run name="fixture-drain"/);
     assert.match(summary, /profile=drain-autonomous-local/);
     assert.match(summary, /next: .*workflow_status detail=result/);
   } finally {
@@ -2117,6 +2066,8 @@ return { ok: true };`;
 test("representative workflow tools execute without model prompts", async () => {
   const { tools, context, directory } = await makeHarness(async () => {
     throw new Error("deterministic workflow tool smoke must not prompt a model");
+  }, {
+    extensions: [FIXTURE_DRAIN_EXT],
   });
   try {
     for (const name of ["workflow_list", "workflow_roles", "workflow_templates", "workflow_run", "workflow_status", "workflow_reconcile", "workflow_cleanup"]) {
@@ -2126,7 +2077,7 @@ test("representative workflow tools execute without model prompts", async () => 
     assert.equal(tools.workflow_live_gates, undefined, "workflow_live_gates must not be registered");
 
     const listed = JSON.parse(await tools.workflow_list.execute({ format: "json" }, context));
-    assert.ok(listed.some((entry) => entry.scope === "extension" && entry.name === "beads-drain"));
+    assert.ok(listed.some((entry) => entry.scope === "extension" && entry.name === "fixture-drain"));
 
     const roles = JSON.parse(await tools.workflow_roles.execute({ format: "json" }, context));
     assert.ok(roles.some((entry) => entry.name === "implementer"));
@@ -2509,8 +2460,9 @@ return true;`;
   }
 });
 
-// Dispatching mock for host-owned beads-drain implementation lanes. Beads discovery,
-// validation, closeout, and dry proof are supplied by fake host adapters in these tests.
+// Dispatching mock for host-owned drain implementation lanes. Discovery, validation, closeout,
+// and dry proof are supplied by fake host adapters (injected via __workflowDrainAdapters.fake) in
+// these tests; the drain workflow itself is the synthetic fixture-drain extension.
 
 test("drain-autonomous-local profile completes with the git-based integration worktree adapter, no native worktree capability required", async () => {
   // Design C: createIntegrationLaneWorktree (child-agent-runner.js) always builds its
@@ -2526,19 +2478,20 @@ test("drain-autonomous-local profile completes with the git-based integration wo
     finalDry: true,
   }), {
     capabilities: { childSession: "available", worktree: "unavailable", toast: "available" },
+    extensions: [FIXTURE_DRAIN_EXT],
     pluginContext: {
-      __workflowDrainAdapters: { beads: async () => fakeDrainAdapter([]) },
+      __workflowDrainAdapters: { fake: async () => fakeDrainAdapter([]) },
     },
   });
   try {
     await initGitRepo(directory);
-    const preview = await tools.workflow_run.execute({ name: "beads-drain", args: { mode: "autonomous-local" }, background: false }, context);
+    const preview = await tools.workflow_run.execute({ name: "fixture-drain", args: { mode: "autonomous-local" }, background: false }, context);
     assert.match(preview, /Authority profile: drain-autonomous-local/);
     assert.match(preview, /Background: false/);
     assert.doesNotMatch(preview, /Required gates:/);
     assert.match(preview, /Isolation: local integration worktrees; primary-tree writes require workflow_apply/);
 
-    const output = await runApprovedRequest(tools, context, { name: "beads-drain", args: { mode: "autonomous-local" }, background: false });
+    const output = await runApprovedRequest(tools, context, { name: "fixture-drain", args: { mode: "autonomous-local" }, background: false });
     const status = JSON.parse(await tools.workflow_status.execute({ runId: runIdFrom(output), format: "json", detail: "full" }, context));
     // Autonomous-local auto-applies the verified diff plan (.5).
     assert.equal(status.status, "completed");
@@ -2593,13 +2546,13 @@ return true;`;
   }
 });
 
-test("workflow drain global reaches the host-owned beads adapter wrapper", async () => {
+test("workflow drain global reaches the host-owned drain adapter wrapper", async () => {
   const calls = [];
   const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }), {
     pluginContext: {
       __workflowDrainAdapters: {
-        beads: async () => ({
-          name: "beads",
+        fake: async () => ({
+          name: "fake",
           async discover() {
             calls.push("discover");
             return [];
@@ -2633,12 +2586,12 @@ test("workflow drain global reaches the host-owned beads adapter wrapper", async
   try {
     await initGitRepo(directory);
     const source = `export const meta = { name: "host-drain", authority: { integration: true }, maxAgents: 1 };
-return await drain({ adapter: "beads", dryRun: true });`;
+return await drain({ adapter: "fake", dryRun: true });`;
 
     const output = await runApproved(tools, context, source);
     const result = await readResult(output);
 
-    assert.equal(result.output.adapter, "beads");
+    assert.equal(result.output.adapter, "fake");
     assert.equal(result.output.status, "dry_run_complete");
     assert.deepEqual(calls, ["discover", "proveDry"]);
   } finally {
@@ -2646,15 +2599,16 @@ return await drain({ adapter: "beads", dryRun: true });`;
   }
 });
 
-test("bundled beads-drain dry-run is allowed with unverified gates and reports them", async () => {
+test("fixture-drain dry-run is allowed with unverified gates and reports them", async () => {
   const calls = [];
   const { tools, context, directory } = await makeHarness(async () => {
     throw new Error("bundled dry-run must not launch child lanes");
   }, {
-    pluginContext: { __workflowDrainAdapters: { beads: async () => emptyDrainAdapter(calls) } },
+    extensions: [FIXTURE_DRAIN_EXT],
+    pluginContext: { __workflowDrainAdapters: { fake: async () => emptyDrainAdapter(calls) } },
   });
   try {
-    const output = await runApprovedRequest(tools, context, { name: "beads-drain", args: { dryRun: true } });
+    const output = await runApprovedRequest(tools, context, { name: "fixture-drain", args: { dryRun: true } });
     const runId = runIdFrom(output);
     const result = await readResult(output);
     const status = JSON.parse(await tools.workflow_status.execute({ runId, format: "json", detail: "full" }, context));
@@ -2670,18 +2624,19 @@ test("bundled beads-drain dry-run is allowed with unverified gates and reports t
   }
 });
 
-test("bundled beads-drain defaults to dry-run mode without Beads mutation", async () => {
+test("fixture-drain defaults to dry-run mode without domain mutation", async () => {
   const calls = [];
   const { tools, context, directory } = await makeHarness(async () => {
     throw new Error("default dry-run must not launch child lanes");
   }, {
-    pluginContext: { __workflowDrainAdapters: { beads: async () => emptyDrainAdapter(calls) } },
+    extensions: [FIXTURE_DRAIN_EXT],
+    pluginContext: { __workflowDrainAdapters: { fake: async () => emptyDrainAdapter(calls) } },
   });
   try {
-    const preview = await tools.workflow_run.execute({ name: "beads-drain" }, context);
+    const preview = await tools.workflow_run.execute({ name: "fixture-drain" }, context);
     assert.match(preview, /Authority profile: drain-dry-run/);
 
-    const output = await runApprovedRequest(tools, context, { name: "beads-drain" });
+    const output = await runApprovedRequest(tools, context, { name: "fixture-drain" });
     const result = await readResult(output);
 
     assert.equal(result.output.status, "dry_run_complete");
@@ -2693,32 +2648,33 @@ test("bundled beads-drain defaults to dry-run mode without Beads mutation", asyn
   }
 });
 
-test("bundled beads-drain autonomous-local defaults to background unless explicitly disabled", async () => {
+test("fixture-drain autonomous-local defaults to background unless explicitly disabled", async () => {
   const calls = [];
   const { tools, context, directory } = await makeHarness(async () => {
     throw new Error("empty non-dry drain must not launch child lanes");
   }, {
+    extensions: [FIXTURE_DRAIN_EXT],
     pluginContext: {
-      __workflowDrainAdapters: { beads: async () => emptyDrainAdapter(calls) },
+      __workflowDrainAdapters: { fake: async () => emptyDrainAdapter(calls) },
     },
   });
   try {
     await initGitRepo(directory);
 
-    const backgroundPreview = await tools.workflow_run.execute({ name: "beads-drain", args: { mode: "autonomous-local" } }, context);
+    const backgroundPreview = await tools.workflow_run.execute({ name: "fixture-drain", args: { mode: "autonomous-local" } }, context);
     assert.match(backgroundPreview, /Background: true/);
     const backgroundHash = backgroundPreview.match(/approvalHash: ([a-f0-9]{64})/)?.[1];
     assert.ok(backgroundHash, `missing approval hash in preview: ${backgroundPreview}`);
-    const started = await tools.workflow_run.execute({ name: "beads-drain", args: { mode: "autonomous-local" }, approve: true, approvalHash: backgroundHash }, context);
+    const started = await tools.workflow_run.execute({ name: "fixture-drain", args: { mode: "autonomous-local" }, approve: true, approvalHash: backgroundHash }, context);
     assert.match(started, /started in background/);
     const backgroundRunId = runIdFrom(started);
     await __test.runs.get(backgroundRunId)?.done;
     const backgroundStatus = JSON.parse(await tools.workflow_status.execute({ runId: backgroundRunId, format: "json", detail: "full" }, context));
     assert.equal(backgroundStatus.background, true);
 
-    const foregroundPreview = await tools.workflow_run.execute({ name: "beads-drain", args: { mode: "autonomous-local" }, background: false }, context);
+    const foregroundPreview = await tools.workflow_run.execute({ name: "fixture-drain", args: { mode: "autonomous-local" }, background: false }, context);
     assert.match(foregroundPreview, /Background: false/);
-    const foreground = await runApprovedRequest(tools, context, { name: "beads-drain", args: { mode: "autonomous-local" }, background: false });
+    const foreground = await runApprovedRequest(tools, context, { name: "fixture-drain", args: { mode: "autonomous-local" }, background: false });
     assert.match(foreground, /completed/);
     assert.doesNotMatch(foreground, /started in background/);
     const foregroundStatus = JSON.parse(await tools.workflow_status.execute({ runId: runIdFrom(foreground), format: "json", detail: "full" }, context));
@@ -2730,8 +2686,9 @@ test("bundled beads-drain autonomous-local defaults to background unless explici
 
 test("drain: top-level profile and args.mode are canonically equivalent (same approval hash)", async () => {
   const harnessOpts = {
+    extensions: [FIXTURE_DRAIN_EXT],
     pluginContext: {
-      __workflowDrainAdapters: { beads: async () => emptyDrainAdapter([]) },
+      __workflowDrainAdapters: { fake: async () => emptyDrainAdapter([]) },
     },
   };
   // One harness/context so capabilities + base state are identical; the ONLY variable is the
@@ -2739,8 +2696,8 @@ test("drain: top-level profile and args.mode are canonically equivalent (same ap
   const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }), harnessOpts);
   try {
     await initGitRepo(directory);
-    const viaProfile = await tools.workflow_run.execute({ name: "beads-drain", profile: "drain-autonomous-local" }, context);
-    const viaMode = await tools.workflow_run.execute({ name: "beads-drain", args: { mode: "autonomous-local" } }, context);
+    const viaProfile = await tools.workflow_run.execute({ name: "fixture-drain", profile: "drain-autonomous-local" }, context);
+    const viaMode = await tools.workflow_run.execute({ name: "fixture-drain", args: { mode: "autonomous-local" } }, context);
     const h1 = viaProfile.match(/approvalHash: ([a-f0-9]{64})/)?.[1];
     const h2 = viaMode.match(/approvalHash: ([a-f0-9]{64})/)?.[1];
     assert.ok(h1 && h2, "both previews must carry an approvalHash");
@@ -2751,10 +2708,12 @@ test("drain: top-level profile and args.mode are canonically equivalent (same ap
 });
 
 test("drain: a conflicting top-level profile and args.mode are rejected", async () => {
-  const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }));
+  const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }), {
+    extensions: [FIXTURE_DRAIN_EXT],
+  });
   try {
     await assert.rejects(
-      tools.workflow_run.execute({ name: "beads-drain", profile: "drain-dry-run", args: { mode: "autonomous-local" } }, context),
+      tools.workflow_run.execute({ name: "fixture-drain", profile: "drain-dry-run", args: { mode: "autonomous-local" } }, context),
       /conflicting drain invocation/,
     );
   } finally {
@@ -2762,11 +2721,13 @@ test("drain: a conflicting top-level profile and args.mode are rejected", async 
   }
 });
 
-test("bundled beads-drain rejects unknown mode", async () => {
-  const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }));
+test("fixture-drain rejects unknown mode", async () => {
+  const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }), {
+    extensions: [FIXTURE_DRAIN_EXT],
+  });
   try {
     await assert.rejects(
-      runApprovedRequest(tools, context, { name: "beads-drain", args: { mode: "unsafe" } }),
+      runApprovedRequest(tools, context, { name: "fixture-drain", args: { mode: "unsafe" } }),
       /drain mode must be "dry-run" or "autonomous-local"/,
     );
   } finally {
@@ -2774,10 +2735,10 @@ test("bundled beads-drain rejects unknown mode", async () => {
   }
 });
 
-test("non-beads workflow with a custom args.mode does not hit beads-drain mode validation", async () => {
+test("non-drain workflow with a custom args.mode does not hit drain mode validation", async () => {
   const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }));
   try {
-    // A custom `args.mode` on a non-beads workflow must NOT be interpreted as a beads-drain
+    // A custom `args.mode` on a non-drain workflow must NOT be interpreted as a drain
     // mode; resolveDrainMode would otherwise throw at startup for any value other than
     // "dry-run"/"autonomous-local". Regression for authorityArgsForWorkflow gating.
     const source = `export const meta = { name: "custom-mode-smoke", profile: "read-only-review" };
@@ -2861,7 +2822,7 @@ test("non-dry drain never lets guest-supplied gateStatus/gates reach the report"
   try {
     await initGitRepo(directory);
     // A guest script tries to inject a fully-verified gate claim directly into the drain report.
-    const source = `export const meta = { name: "beads-drain-spoofed-gates", authority: { integration: true }, maxAgents: 1 };
+    const source = `export const meta = { name: "fixture-drain-spoofed-gates", authority: { integration: true }, maxAgents: 1 };
 const fakeVerified = { permissionEnforcement: { state: "verified", verified: true, evidence: "guest spoof" } };
 return await drain({
   adapter: "fake",
@@ -3384,22 +3345,23 @@ return await agent("long lane", { label: "Long lane" });`;
   }
 });
 
-test("bundled beads-drain runtime lane timeout aliases are validated", async () => {
+test("fixture-drain runtime lane timeout aliases are validated", async () => {
   const { tools, context, directory } = await makeHarness(async () => {
-    throw new Error("dry-run beads-drain must not launch child lanes");
+    throw new Error("dry-run fixture-drain must not launch child lanes");
   }, {
-    pluginContext: { __workflowDrainAdapters: { beads: async () => emptyDrainAdapter([]) } },
+    extensions: [FIXTURE_DRAIN_EXT],
+    pluginContext: { __workflowDrainAdapters: { fake: async () => emptyDrainAdapter([]) } },
   });
   try {
-    const preview = await tools.workflow_run.execute({ name: "beads-drain", args: { mode: "dry-run", laneTimeoutMs: 3_600_000 } }, context);
+    const preview = await tools.workflow_run.execute({ name: "fixture-drain", args: { mode: "dry-run", laneTimeoutMs: 3_600_000 } }, context);
     assert.match(preview, /Lane timeout: 3600000ms/);
 
     await assert.rejects(
-      tools.workflow_run.execute({ name: "beads-drain", args: { mode: "dry-run", laneTimeoutMs: 3_600_000 }, childPromptTimeoutMs: 600_000 }, context),
+      tools.workflow_run.execute({ name: "fixture-drain", args: { mode: "dry-run", laneTimeoutMs: 3_600_000 }, childPromptTimeoutMs: 600_000 }, context),
       /must match/,
     );
     await assert.rejects(
-      tools.workflow_run.execute({ name: "beads-drain", args: { mode: "dry-run", childPromptTimeoutMs: 3_600_001 } }, context),
+      tools.workflow_run.execute({ name: "fixture-drain", args: { mode: "dry-run", childPromptTimeoutMs: 3_600_001 } }, context),
       /childPromptTimeoutMs must be <= 3600000ms/,
     );
   } finally {
