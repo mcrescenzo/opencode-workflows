@@ -9,7 +9,6 @@ function fakeDef(overrides = {}) {
     drainAdapters: {
       beads: {
         createAdapter: () => ({}),
-        requiredGates: ["permissionEnforcement"],
         supportsAutoApply: true,
         mutationOperations: ["beads.close"],
       },

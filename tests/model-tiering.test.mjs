@@ -141,11 +141,15 @@ test("mfv9.5: provider list is cached across workflow_models, preview, and appro
     assert.match(output, /Workflow .* completed/);
     assert.equal(counter.providers, 1, "workflow_run approval should reuse the cached provider list");
 
-    await tools.workflow_live_gates.execute({ format: "json", approvalIntent: "probe", resetProbeCache: true }, context);
-    assert.equal(__test.workflowProviderListCache.size, 0, "resetProbeCache should clear cached provider lists too");
+    // Design C removed workflow_live_gates (and its resetProbeCache flag), the only tool-surface
+    // trigger that used to clear this cache mid-run. The remaining invalidation triggers are the
+    // TTL (covered by the sibling test below) and the module-level __test.invalidateWorkflowProviderListCache
+    // escape hatch used here and in every test's teardown.
+    __test.invalidateWorkflowProviderListCache("all");
+    assert.equal(__test.workflowProviderListCache.size, 0, "invalidateWorkflowProviderListCache('all') should clear cached provider lists");
 
     await tools.workflow_models.execute({ format: "json" }, context);
-    assert.equal(counter.providers, 2, "provider list should be refetched after reset");
+    assert.equal(counter.providers, 2, "provider list should be refetched after invalidation");
   } finally {
     __test.invalidateWorkflowProviderListCache("all");
     await fs.rm(directory, { recursive: true, force: true });

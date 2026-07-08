@@ -38,10 +38,8 @@ test("repo-bughunt plugin command registration resolves under configureWorkflowE
   assert.equal(Object.hasOwn(cfg.command["repo-bughunt"], "prompt"), false);
   assert.equal(Object.hasOwn(cfg.command["repo-bughunt"], "agent"), false);
 
-  // Existing registrations must remain intact (no regression from the sibling block).
   // beads-drain is now an extension-contributed command (see beads-drain-assets), so a bundled-only
   // configureWorkflowEntrypoints call does not register it.
-  assert.ok(cfg.command["workflow-live-gates-release-check"]);
 });
 
 test("repo-bughunt command invokes workflow_run by NAME, never by path", async () => {

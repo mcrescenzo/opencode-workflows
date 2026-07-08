@@ -48,7 +48,6 @@
     "test:workflow-adapters": "node --test tests/beads-drain-adapter.test.mjs tests/test-fix-drain-adapter.test.mjs",
     "test:beads-drain": "node --test tests/beads-drain-workflow.test.mjs tests/beads-drain-adapter.test.mjs tests/beads-drain-scratch.test.mjs tests/beads-drain-assets.test.mjs",
     "test:extension-seam": "node --test tests/extension-registry.test.mjs tests/extension-wiring.test.mjs tests/extension-tool-contribution.test.mjs tests/extension-dir-resolution.test.mjs tests/extension-auto-apply-trust.test.mjs tests/extension-command-skill-registration.test.mjs",
-    "test:live-gates": "node --test tests/live-gate-probes.test.mjs tests/live-gates-integration.test.mjs tests/live-gates-permission.test.mjs tests/live-gates-runtime.test.mjs tests/live-gates-worktree.test.mjs",
     "test:repo-bughunt": "node --test tests/repo-bughunt.test.mjs",
     "test:repo-bughunt-command": "node --test tests/repo-bughunt-command-assets.test.mjs",
     "test:repo-review-contract": "node --test tests/repo-review-leaf-contract.test.mjs",

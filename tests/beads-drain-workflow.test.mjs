@@ -44,11 +44,8 @@ async function makeHarness(prompt, options = {}) {
   const pluginContext = {
     __workflowCapabilities: options.capabilities ?? {
       childSession: "available",
-      permissions: "available",
-      structuredOutput: "available",
       worktree: "available",
-      directoryRooting: "available",
-      worktreeEditIsolation: "available",
+      toast: "available",
     },
     client: {
       tui: { async showToast() { return { data: true }; } },
@@ -139,27 +136,6 @@ function fakeBeadsAdapter(calls, options = {}) {
     async close(discovered) { calls.push(["close", discovered.id]); closed = true; return { id: discovered.id, status: "closed" }; },
     async createFollowup() { throw new Error("followups are not expected in fake workflow tests"); },
     async proveDry() { calls.push(["proveDry", closed]); return { dry: closed }; },
-  };
-}
-
-function verifiedDrainLiveGates() {
-  return Object.fromEntries([
-    "permissionEnforcement",
-    "commandScopedBash",
-    "secretReadDeny",
-    "structuredOutput",
-    "directoryRooting",
-    "integrationWorktreeIsolation",
-    "cancellation",
-  ].map((name) => [name, { state: "verified", verified: true, evidence: `${name} forced verified in test` }]));
-}
-
-function verifiedDrainLiveGatesExceptPermissions() {
-  return {
-    ...verifiedDrainLiveGates(),
-    permissionEnforcement: { state: "failed-with-evidence", verified: false, evidence: "permission risk accepted in test" },
-    commandScopedBash: { state: "failed-with-evidence", verified: false, evidence: "command-scoped risk accepted in test" },
-    secretReadDeny: { state: "blocked", verified: false, evidence: "secret-read risk accepted in test" },
   };
 }
 
@@ -291,39 +267,27 @@ test("beads-drain rejects a string/array scope instead of degrading to an unfilt
   }
 });
 
-test("beads-drain non-dry by name fails closed before mutation under unverified gates", async () => {
+// Design C deleted the drain-autonomous-local live-gate preflight entirely: there is no
+// permissionEnforcement/commandScopedBash/secretReadDeny gate left to be unverified or blocked,
+// and `unsafeAcceptUnverifiedPermissions` is no longer read anywhere (it is silently ignored as an
+// unrecognized args property). The two tests that used to live here proved the drain failed
+// closed — one with zero gates forced (default "unverified"), one with an explicit-but-futile
+// override — before ever reaching the adapter. The surviving, and now the ONLY, contract is: a
+// non-dry drain always reaches the adapter with zero gate preflight of any kind (also proven at
+// the sandbox-executor.js level in tests/sandbox-executor.test.mjs). This proves it end-to-end
+// through the real beads-drain workflow, with the same "unsafe" flag still harmlessly present in
+// args to show it is now inert rather than load-bearing.
+test("beads-drain non-dry by name proceeds with zero forced/verified gate state (no gate preflight left to fail closed)", async () => {
   const calls = [];
-  const { tools, context, directory } = await makeHarness(portPrompt({}), {
+  const { tools, context, directory } = await makeHarness(portPrompt({ writeFile: { name: "beads-work.txt", body: "no gates needed\n" } }), {
     capabilities: undefined,
     pluginContext: { __workflowDrainAdapters: { beads: async () => fakeBeadsAdapter(calls) } },
   });
   try {
     await initGitRepo(directory);
-    await assert.rejects(
-      runApproved(tools, context, { name: "beads-drain", args: { mode: "autonomous-local" } }),
-      /Workflow authority profile drain-autonomous-local requires verified live gates.*permissionEnforcement=blocked/,
-    );
-    assert.deepEqual(calls, []);
-  } finally {
-    await fs.rm(directory, { recursive: true, force: true });
-  }
-});
-
-test("beads-drain non-dry by name refuses explicit unverified permission risk", async () => {
-  const calls = [];
-  const { tools, context, directory } = await makeHarness(portPrompt({}), {
-    pluginContext: {
-      __workflowLiveGates: verifiedDrainLiveGatesExceptPermissions(),
-      __workflowDrainAdapters: { beads: async () => fakeBeadsAdapter(calls) },
-    },
-  });
-  try {
-    await initGitRepo(directory);
-    await assert.rejects(
-      runApproved(tools, context, { name: "beads-drain", args: { mode: "autonomous-local", unsafeAcceptUnverifiedPermissions: true } }),
-      /(?=.*permissionEnforcement=failed-with-evidence)(?=.*commandScopedBash=failed-with-evidence)(?=.*secretReadDeny=blocked)/s,
-    );
-    assert.deepEqual(calls, []);
+    const output = await runApproved(tools, context, { name: "beads-drain", args: { mode: "autonomous-local", unsafeAcceptUnverifiedPermissions: true }, background: false });
+    assert.match(output, /completed/);
+    assert.ok(calls.includes("discover"), "the drain reached the adapter with zero gate preflight");
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }
@@ -342,7 +306,6 @@ test("beads-drain non-dry by name auto-applies accepted lanes in autonomous-loca
   }), {
     capabilities: undefined,
     pluginContext: {
-      __workflowLiveGates: verifiedDrainLiveGates(),
       __workflowDrainAdapters: { beads: async () => fakeBeadsAdapter([]) },
     },
   });
@@ -388,7 +351,6 @@ test("beads-drain launched from proxy keeps implementation child lanes on build"
   }, {
     capabilities: undefined,
     pluginContext: {
-      __workflowLiveGates: verifiedDrainLiveGates(),
       __workflowDrainAdapters: { beads: async () => fakeBeadsAdapter([]) },
     },
   });
@@ -411,7 +373,6 @@ test("beads-drain non-dry by name records a failed lane without closing it", asy
   }), {
     capabilities: undefined,
     pluginContext: {
-      __workflowLiveGates: verifiedDrainLiveGates(),
       __workflowDrainAdapters: { beads: async () => fakeBeadsAdapter([]) },
     },
   });
@@ -436,7 +397,6 @@ test("beads-drain host-owned path reports no-progress lanes without null verifie
   }), {
     capabilities: undefined,
     pluginContext: {
-      __workflowLiveGates: verifiedDrainLiveGates(),
       __workflowDrainAdapters: { beads: async () => fakeBeadsAdapter([]) },
     },
   });
@@ -463,7 +423,6 @@ test("beads-drain implementation prompt is limited to implementation lane work",
   }, {
     capabilities: undefined,
     pluginContext: {
-      __workflowLiveGates: verifiedDrainLiveGates(),
       __workflowDrainAdapters: { beads: async () => fakeBeadsAdapter([]) },
     },
   });
@@ -518,7 +477,6 @@ test("R11-followup-2: validate() receives the controller's git-derived changed p
   }, {
     capabilities: undefined,
     pluginContext: {
-      __workflowLiveGates: verifiedDrainLiveGates(),
       __workflowDrainAdapters: { beads: async () => wireCapture([]) },
     },
   });

@@ -17,7 +17,7 @@ test("WorkflowPlugin loads a configured extension and exposes it via pluginConte
       "export default {",
       '  id: "fake",',
       "  drainAdapters: {",
-      "    fake: { createAdapter: () => ({}), requiredGates: [], supportsAutoApply: true, mutationOperations: [\"fake.close\"] },",
+      "    fake: { createAdapter: () => ({}), supportsAutoApply: true, mutationOperations: [\"fake.close\"] },",
       "  },",
       '  mutationHandlers: { "fake.close": () => ({ ok: true }) },',
       "};",

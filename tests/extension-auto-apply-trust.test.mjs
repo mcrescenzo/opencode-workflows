@@ -18,7 +18,7 @@ function ctxWithBeadsExtension() {
     {
       id: "beads",
       drainAdapters: {
-        beads: { createAdapter: () => ({}), requiredGates: [], supportsAutoApply: true, mutationOperations: ["beads.close"] },
+        beads: { createAdapter: () => ({}), supportsAutoApply: true, mutationOperations: ["beads.close"] },
       },
       assetDirs: { workflows: "./workflows" },
     },

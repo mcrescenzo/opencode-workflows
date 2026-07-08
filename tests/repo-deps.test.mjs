@@ -300,17 +300,17 @@ test("repo-deps size-fits a large finding set under the 256KB cap", async () => 
   }
 });
 
-// ---- structured-text fallback (native structured output UNAVAILABLE) ----
+// ---- structured-text (the only schema-lane path, Design C) ----
 //
-// Production reality (Stage-0 gate rrev.1: FALLBACK-ACCEPTED): native structured output
-// is unavailable under the deny-by-default permission ruleset, so the kernel injects a
-// structured-text instruction and parses the model's JSON text back. This test forces
-// that path and asserts the same envelope is produced.
+// child-agent-runner.js never sends `format:` to session.prompt: every schema-bearing lane
+// gets a structuredTextInstruction and its final text is parsed back via
+// parseStructuredTextResult. This test drives that path with the textStructured shaper and
+// asserts the same ranked envelope as the other repo-deps tests in this file.
 
-test("repo-deps works under the structured-text fallback when native structured output is unavailable", async () => {
+test("repo-deps works under the structured-text response shape", async () => {
   const { router } = makeDepsRouter({ shape: textStructured });
   const { tools, context, directory } = await makeHarness(router, {
-    capabilities: { childSession: "available", permissions: "available", structuredOutput: "unavailable", worktree: "available", directoryRooting: "available", worktreeEditIsolation: "available" },
+    capabilities: { childSession: "available", worktree: "available", toast: "available" },
   });
   try {
     const env = await runLeafEnvelope(tools, context, { name: "repo-deps", args: { depth: "normal" } });

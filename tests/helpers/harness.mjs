@@ -24,11 +24,8 @@ const DEFAULT_DOMAIN_MUTATION_HANDLERS = {
 
 const DEFAULT_CAPABILITIES = {
   childSession: "available",
-  permissions: "available",
-  structuredOutput: "available",
   worktree: "available",
-  directoryRooting: "available",
-  worktreeEditIsolation: "available",
+  toast: "available",
 };
 
 async function makeTempDir(prefix = "workflow-harness-") {

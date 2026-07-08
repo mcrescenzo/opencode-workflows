@@ -120,11 +120,10 @@ function assertReadOnlyAuthority(authority, label) {
   for (const dim of ["edit", "worktreeEdit", "integration", "shell", "network", "mcp"]) {
     assert.equal(authority[dim], false, `${label}: authority.${dim} must be false`);
   }
-  assert.deepEqual(
-    authority.requiredGates,
-    [],
-    `${label}: read-only-review must require NO live gates (nothing to enforce)`,
-  );
+  // Design C: authority carries no gate vocabulary at all (requiredGates was deleted with the
+  // live-gate-probe subsystem); read-only-review's "nothing to enforce" property is now the
+  // absence of the key entirely, not an empty array.
+  assert.equal(Object.hasOwn(authority, "requiredGates"), false, `${label}: authority must not carry requiredGates`);
 }
 
 function assertRulesDenyMutation(rules, label) {
@@ -414,12 +413,14 @@ describe("repo-* no-mutation: separation from beads-drain", { concurrency: false
     // beads-drain declares the mutating profile: integration authority (the flag that
     // opens edit/apply_patch in permissionRulesForAuthority) and integrationMode. Note
     // resolveRunAuthority keeps the defense flag readOnly=true alongside integration;
-    // the truthful mutating indicator is integration/mode, not readOnly. beads-drain
-    // also requires the live gates — the opposite of the read-only repo-* leaves.
+    // the truthful mutating indicator is integration/mode, not readOnly. Design C carries
+    // no gate vocabulary on EITHER side any more (requiredGates was deleted with the
+    // live-gate-probe subsystem) — the mutating/read-only split is expressed entirely by
+    // integration/mode and the permission ruleset asserted below, not by a gate ceiling.
     assert.equal(beadsAuth.profile, "drain-autonomous-local");
     assert.equal(beadsAuth.integration, true);
     assert.equal(beadsAuth.mode, "integrationMode");
-    assert.ok(beadsAuth.requiredGates.length > 0, "beads-drain must require live gates");
+    assert.equal(Object.hasOwn(beadsAuth, "requiredGates"), false, "beads-drain authority must not carry requiredGates either");
     // The integration authority is exactly what opens the edit/apply_patch allow path:
     const beadsRules = permissionRulesForAuthority(beadsAuth);
     assert.equal(findRule(beadsRules, "edit").action, "allow", "beads-drain integration -> edit allowed");

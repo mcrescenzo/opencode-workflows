@@ -21,6 +21,8 @@ import {
   normalizeHardConcurrencyLimit,
   resolveHardConcurrencyLimit,
 } from "../workflow-kernel/constants.js";
+import { permissionRulesForAuthority } from "../workflow-kernel/authority-policy.js";
+import { __resetFingerprintCacheForTests } from "../workflow-kernel/server-fingerprint.js";
 import { makeHarness, makeTempDir, HARNESS_DEFAULT_MODEL } from "./helpers/harness.mjs";
 import { createWorktreeAdapter } from "../workflow-kernel/worktree-adapter.js";
 import { fakeDrainAdapter, emptyDrainAdapter } from "./helpers/fake-drain-adapter.mjs";
@@ -194,27 +196,6 @@ async function refreshDomainManifest(status) {
   return status;
 }
 
-function verifiedDrainLiveGates() {
-  return Object.fromEntries([
-    "permissionEnforcement",
-    "commandScopedBash",
-    "secretReadDeny",
-    "structuredOutput",
-    "directoryRooting",
-    "integrationWorktreeIsolation",
-    "cancellation",
-  ].map((name) => [name, { state: "verified", verified: true, evidence: `${name} forced verified in test` }]));
-}
-
-function verifiedDrainLiveGatesExceptPermissions() {
-  return {
-    ...verifiedDrainLiveGates(),
-    permissionEnforcement: { state: "failed-with-evidence", verified: false, evidence: "permission risk accepted in test" },
-    commandScopedBash: { state: "failed-with-evidence", verified: false, evidence: "command-scoped risk accepted in test" },
-    secretReadDeny: { state: "blocked", verified: false, evidence: "secret-read risk accepted in test" },
-  };
-}
-
 const EXTERNAL_WORKFLOW_SOURCE = `export const meta = { name: "external-source", profile: "read-only-review" };
 return true;`;
 
@@ -246,50 +227,144 @@ function portPrompt(config = {}) {
   };
 }
 
-test("authority profiles expand to authority and required gates", () => {
+test("authority profiles carry no gate vocabulary; elevated launch consults the server fingerprint", () => {
+  // Design C deleted the live-gate-probe subsystem: WORKFLOW_AUTHORITY_PROFILES no longer declares
+  // requiredGates, and resolveRunAuthority's output carries none either. What replaces the old
+  // profile-declared gate ceiling is a deterministic, launch-time check — the server-fingerprint
+  // version floor (workflow-plugin.js's assertServerSupportsElevatedAuthority for
+  // edit/worktreeEdit/integration authority) plus per-lane permission-echo/directory-echo
+  // assertions in child-agent-runner.js — proven end-to-end by the fingerprint tests below.
   const readOnly = __test.resolveRunAuthority({ profile: "read-only-review" }, {});
   assert.equal(readOnly.profile, "read-only-review");
   assert.equal(readOnly.readOnly, true);
   assert.equal(readOnly.shell, false);
-  assert.deepEqual(readOnly.requiredGates, []);
+  assert.equal(Object.hasOwn(readOnly, "requiredGates"), false);
 
   const shell = __test.resolveRunAuthority({ profile: "inspect-with-shell" }, {});
   assert.equal(shell.profile, "inspect-with-shell");
   assert.equal(shell.shell, true);
-  // inspect-with-shell now enforces the audited command-scoped allowlist + denylist
-  // (opencode-workflows-public-inspect-shell-scope), not an unrestricted bash "*" allow.
+  // inspect-with-shell still enforces the audited command-scoped allowlist + denylist
+  // (opencode-workflows-public-inspect-shell-scope), not an unrestricted bash "*" allow — that
+  // policy lives in the permission ruleset now, not in a requiredGates ceiling.
   assert.ok(shell.shellPolicy.allow.length > 0, "audited shell allow patterns must be non-empty");
   assert.ok(!shell.shellPolicy.allow.includes("*"), "inspect-with-shell must NOT grant unrestricted bash");
   assert.ok(shell.shellPolicy.deny.length > 0, "audited shell deny patterns must be present");
   assert.ok(shell.shellPolicy.allow.includes("git ls-files"), "git ls-files must be allowlisted");
-  assert.deepEqual(shell.requiredGates, ["commandScopedBash", "permissionEnforcement"]);
+  assert.equal(Object.hasOwn(shell, "requiredGates"), false);
 
   const editPlan = __test.resolveRunAuthority({ profile: "edit-plan-only" }, {});
   assert.equal(editPlan.profile, "edit-plan-only");
   assert.equal(editPlan.worktreeEdit, true);
   assert.equal(editPlan.edit, false);
   assert.equal(editPlan.editGate, "requires workflow_apply approval before primary writes");
-  assert.ok(editPlan.requiredGates.includes("worktreeEditIsolation"));
+  assert.equal(Object.hasOwn(editPlan, "requiredGates"), false);
 
   const applyApproved = __test.resolveRunAuthority({ profile: "apply-approved-plan" }, {});
   assert.equal(applyApproved.profile, "apply-approved-plan");
   assert.equal(applyApproved.edit, true);
   assert.equal(applyApproved.editGate, "requires workflow_apply approval before primary writes");
-  for (const gate of ["worktreeApi", "directoryRooting", "worktreeEditIsolation"]) {
-    assert.ok(applyApproved.requiredGates.includes(gate), `apply-approved-plan must require ${gate}`);
-  }
+  assert.equal(Object.hasOwn(applyApproved, "requiredGates"), false);
 
   const drainLocal = __test.resolveRunAuthority({ profile: "drain-autonomous-local" }, {});
   assert.equal(drainLocal.profile, "drain-autonomous-local");
   assert.equal(drainLocal.integration, true);
   assert.equal(drainLocal.network, false);
   assert.equal(drainLocal.mcp, false);
-  assert.ok(drainLocal.requiredGates.includes("integrationWorktreeIsolation"));
+  assert.equal(Object.hasOwn(drainLocal, "requiredGates"), false);
 
   const drainDry = __test.resolveRunAuthority({ profile: "drain-dry-run" }, {});
   assert.equal(drainDry.profile, "drain-dry-run");
   assert.equal(drainDry.readOnly, true);
-  assert.deepEqual(drainDry.requiredGates, []);
+  assert.equal(Object.hasOwn(drainDry, "requiredGates"), false);
+});
+
+test("elevated authority version floor: rejects a too-old server before any lane spawns; read-only ignores it", async () => {
+  const tooOldHealth = { data: { healthy: true, version: "1.0.0" } };
+
+  // Elevated (apply-approved-plan: edit:true) must consult the server fingerprint and refuse
+  // BEFORE any lane spawns — the source below would spawn a lane if the gate were missing/dead
+  // (the exact bug this test guards: workflow-plugin.js used to check `authority.readOnly !== true`,
+  // which is structurally always true for every built-in profile, so the fingerprint was never
+  // consulted for any of them).
+  {
+    const { tools, context, directory, calls } = await makeHarness(async () => { throw new Error("must not prompt a child lane"); }, {
+      pluginContext: { __workflowServerHealth: tooOldHealth, serverUrl: "http://fingerprint-elevated.test" },
+    });
+    try {
+      await initGitRepo(directory);
+      const source = `export const meta = { name: "elevated-version-floor", profile: "apply-approved-plan" };
+return await agent("would spawn a lane if not gated");`;
+      await assert.rejects(runApproved(tools, context, source), /requires opencode server >= /);
+      assert.equal(calls.create.length, 0, "the fingerprint check must reject before any session.create");
+    } finally {
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+  }
+
+  // read-only-review is never elevated, so the SAME forced too-old health does not block launch —
+  // the fingerprint is never consulted for it.
+  {
+    const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }), {
+      pluginContext: { __workflowServerHealth: tooOldHealth, serverUrl: "http://fingerprint-readonly.test" },
+    });
+    try {
+      const source = `export const meta = { name: "readonly-ignores-fingerprint", profile: "read-only-review" };
+return true;`;
+      const output = await runApproved(tools, context, source);
+      assert.match(output, /completed/);
+    } finally {
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+  }
+});
+
+test("server fingerprint is memoized per serverUrl until __resetFingerprintCacheForTests clears it", async () => {
+  const serverUrl = "http://fingerprint-memo.test";
+  const tooOldHealth = { data: { healthy: true, version: "1.0.0" } };
+  const okHealth = { data: { healthy: true, version: "1.17.13" } };
+
+  async function launchApplyApprovedPlan(directory, tools, context, name) {
+    const source = `export const meta = { name: "${name}", profile: "apply-approved-plan" };
+return true;`;
+    return await runApproved(tools, context, source);
+  }
+
+  // First launch against serverUrl: forced too-old -> the fingerprint is fetched and cached
+  // as "too-old" for this serverUrl.
+  const first = await makeHarness(async () => ({ data: { parts: [], info: {} } }), {
+    pluginContext: { __workflowServerHealth: tooOldHealth, serverUrl },
+  });
+  try {
+    await initGitRepo(first.directory);
+    await assert.rejects(
+      launchApplyApprovedPlan(first.directory, first.tools, first.context, "memo-1"),
+      /requires opencode server >= /,
+    );
+  } finally {
+    await fs.rm(first.directory, { recursive: true, force: true });
+  }
+
+  // Second launch, SAME serverUrl, but now forcing a GOOD version. If the fingerprint were not
+  // memoized, this would succeed (fresh probe reads okHealth). It still rejects: the cached
+  // "too-old" fingerprint from the first launch is reused, proving memoization.
+  const second = await makeHarness(async () => ({ data: { parts: [], info: {} } }), {
+    pluginContext: { __workflowServerHealth: okHealth, serverUrl },
+  });
+  try {
+    await initGitRepo(second.directory);
+    await assert.rejects(
+      launchApplyApprovedPlan(second.directory, second.tools, second.context, "memo-2"),
+      /requires opencode server >= /,
+    );
+
+    // Clearing the cache forces a fresh health read on the next launch against the same
+    // serverUrl, which now resolves to the (still-forced) good version and succeeds.
+    __resetFingerprintCacheForTests();
+    const output = await launchApplyApprovedPlan(second.directory, second.tools, second.context, "memo-3");
+    assert.match(output, /completed/);
+  } finally {
+    await fs.rm(second.directory, { recursive: true, force: true });
+  }
 });
 
 test("ad hoc authority remains supported and intentionally mapped", () => {
@@ -761,20 +836,21 @@ return { ok: true };`;
   }
 });
 
-test("drain-autonomous-local (network:false, mcp:false) passes the network/mcp verifier hook", async () => {
-  // Unit-level: the hook remains a no-op so drain-autonomous-local passes without probing.
+test("drain-autonomous-local resolves network:false, mcp:false with no gate to verify before launch", () => {
+  // Design C deleted the network/mcp live-gate verifier hook. drain-autonomous-local's
+  // network:false/mcp:false is enforced entirely by the permission ruleset (no webfetch/websearch/
+  // mcp allow rules), so there is nothing left to probe before launch — the authority shape itself
+  // is the whole contract now.
   const drain = __test.resolveRunAuthority({ profile: "drain-autonomous-local" }, {});
   assert.equal(drain.network, false);
   assert.equal(drain.mcp, false);
-  const result = await __test.verifyNetworkMcpAuthorityGates({}, {}, drain);
-  assert.deepEqual(result, {});
 });
 
-test("forced verified networkAccess diagnostic still allows network authority", async () => {
-  // networkAccess is informational for launch; forced diagnostics should not change that contract.
-  const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }), {
-    pluginContext: { __workflowLiveGates: { networkAccess: { state: "verified", verified: true, evidence: "forced verified in test" } } },
-  });
+test("network authority launches without any gate verification", async () => {
+  // Design C: there is no networkAccess live gate left to verify; network:true authority is
+  // enforced solely by the permission ruleset (webfetch/websearch allow rules), so a network-
+  // authorized run launches with nothing forced/verified.
+  const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }));
   try {
     const source = `export const meta = { name: "forced-network", authority: { network: true }, maxAgents: 1 };
 return { ok: true };`;
@@ -924,7 +1000,8 @@ return true;`;
     assert.equal(preview.modelPlan.deep, HARNESS_DEFAULT_MODEL);
     assert.deepEqual(preview.budgetCeilings, { maxCost: null, maxTokens: null });
     assert.equal(preview.authority.profile, "inspect-with-shell");
-    assert.deepEqual(preview.authority.requiredGates, ["commandScopedBash", "permissionEnforcement"]);
+    // Design C: the preview's authority object carries no gate vocabulary at all.
+    assert.equal(Object.hasOwn(preview.authority, "requiredGates"), false);
     assert.equal(preview.authority.isolation, "no workflow-managed write isolation requested");
     assert.equal(preview.mutationDomains.summary, "none declared");
     assert.deepEqual(preview.nestedSnapshots, []);
@@ -1704,23 +1781,9 @@ test("jbs3.10: normalizeAgentOptions rejects a misspelled agent() opt and preser
 test("jbs3.10: a misspelled agent() opt fails the run at run time instead of being silently ignored", async () => {
   const { tools, context, directory } = await makeHarness(async () => ({
     data: { parts: [{ type: "text", text: "child ok" }], info: {} },
-  }), {
-    capabilities: {
-      childSession: "available",
-      permissions: "available-unverified",
-      structuredOutput: "available",
-      worktree: "unavailable",
-      directoryRooting: "available-unverified",
-      worktreeEditIsolation: "unavailable",
-    },
-    pluginContext: {
-      __workflowLiveGates: {
-        permissionEnforcement: { state: "verified", verified: true, evidence: "forced verified in test" },
-      },
-    },
-  });
+  }));
   try {
-    const source = `export const meta = { name: "typo-opt", readOnly: true, authority: { requiredGates: ["permissionEnforcement"] } };
+    const source = `export const meta = { name: "typo-opt", readOnly: true };
 return await agent("inspect safely", { readOnly: true, onFailur: "returnNull" });`;
     await assert.rejects(runApproved(tools, context, source), /Unknown agent\(\) option: onFailur/);
   } finally {
@@ -1985,9 +2048,11 @@ test("representative workflow tools execute without model prompts", async () => 
     throw new Error("deterministic workflow tool smoke must not prompt a model");
   });
   try {
-    for (const name of ["workflow_list", "workflow_roles", "workflow_templates", "workflow_live_gates", "workflow_run", "workflow_status", "workflow_reconcile", "workflow_cleanup"]) {
+    for (const name of ["workflow_list", "workflow_roles", "workflow_templates", "workflow_run", "workflow_status", "workflow_reconcile", "workflow_cleanup"]) {
       assert.equal(typeof tools[name]?.execute, "function", `missing executable tool ${name}`);
     }
+    // Design C deleted workflow_live_gates entirely (no probe report/reset tool surface left).
+    assert.equal(tools.workflow_live_gates, undefined, "workflow_live_gates must not be registered");
 
     const listed = JSON.parse(await tools.workflow_list.execute({ format: "json" }, context));
     assert.ok(listed.some((entry) => entry.scope === "extension" && entry.name === "beads-drain"));
@@ -1997,11 +2062,6 @@ test("representative workflow tools execute without model prompts", async () => 
 
     const templates = JSON.parse(await tools.workflow_templates.execute({ format: "json" }, context));
     assert.ok(templates.some((entry) => entry.name === "scoped-parallel"));
-
-    const gates = JSON.parse(await tools.workflow_live_gates.execute({ format: "json" }, context));
-    assert.equal(typeof gates.configured, "boolean");
-    assert.equal(gates.verified, false);
-    assert.notEqual(gates.gates.permissionEnforcement.state, "verified");
 
     const source = `export const meta = { name: "deterministic-tool-smoke", profile: "read-only-review" };
 return { ok: true };`;
@@ -2250,7 +2310,7 @@ return true;`, "utf8");
   }
 });
 
-test("approval preview shows authority profile and expanded gates", async () => {
+test("approval preview shows authority profile with no gate vocabulary", async () => {
   const { tools, context, directory } = await makeHarness(async () => {
     throw new Error("approval preview must not run live probes or child prompts");
   });
@@ -2260,7 +2320,8 @@ return true;`;
     const preview = await tools.workflow_run.execute({ source }, context);
 
     assert.match(preview, /Authority profile: inspect-with-shell/);
-    assert.match(preview, /Required gates: commandScopedBash, permissionEnforcement/);
+    // Design C: the preview never surfaces a "Required gates:" line at all.
+    assert.doesNotMatch(preview, /Required gates:/);
     assert.match(preview, /Isolation: no workflow-managed write isolation requested/);
     assert.match(preview, /Authority: .*profile=inspect-with-shell/);
     assert.match(preview, /Authority: .*shell=true/);
@@ -2322,164 +2383,48 @@ return await agent("inspect safely", { readOnly: true });`;
   }
 });
 
-test("read-only child lanes run with verified required permission gate", async () => {
-  const { tools, context, directory, calls } = await makeHarness(async () => ({
-    data: { parts: [{ type: "text", text: "child ok" }], info: {} },
-  }), {
-    capabilities: {
-      childSession: "available",
-      permissions: "available-unverified",
-      structuredOutput: "available",
-      worktree: "unavailable",
-      directoryRooting: "available-unverified",
-      worktreeEditIsolation: "unavailable",
-    },
-    pluginContext: {
-      __workflowLiveGates: {
-        permissionEnforcement: { state: "verified", verified: true, evidence: "forced verified in test" },
-      },
-    },
-  });
-  try {
-    const source = `export const meta = { name: "read-only-child-verified-permission", readOnly: true, authority: { requiredGates: ["permissionEnforcement"] } };
-return await agent("inspect safely", { readOnly: true });`;
+// Design C removed the permissionEnforcement live gate and the ad-hoc-profile preflight that used
+// to require it verified before any read-only child-capable run could spawn a lane (the four tests
+// that used to live here forced __workflowLiveGates.permissionEnforcement into verified/failed
+// states and asserted status.capabilities.permissions, a field the shape-only capability adapter no
+// longer has). The surviving safety property — a read-only run's child lane is contained by its
+// deny-by-default permission ruleset regardless of any gate state, and a *delivery* mismatch fails
+// closed — is proven without any gate seam by the test right above ("read-only child lanes launch
+// without verified per-session permissions, ruleset still attached") and end-to-end in
+// tests/workflow-permissions.test.mjs ("real child lane fails closed on explicit permission echo
+// mismatch before prompt", "...surfaces no-echo permission runtime without blocking compatible
+// clients", "sessionPermissionEchoStatus treats extra broad grants as a mismatch").
 
-    const output = await runApproved(tools, context, source);
-    assert.match(output, /completed/);
-    assert.equal(calls.prompt.length, 1);
-    const createPermissions = calls.create.map((input) => input.permission ?? input.body?.permission).find((permission) => Array.isArray(permission));
-    assert.ok(createPermissions, "child session should receive permission rules");
-    assert.ok(
-      createPermissions.some((rule) => rule.permission === "bash" && rule.pattern === "*" && rule.action === "deny"),
-      "read-only child permission rules should deny bash",
-    );
-    const status = JSON.parse(await tools.workflow_status.execute({ runId: runIdFrom(output), format: "json", detail: "full" }, context));
-    assert.equal(status.capabilities.permissions, "available");
-  } finally {
-    await fs.rm(directory, { recursive: true, force: true });
-  }
-});
-
-// Regression for the root cause that blocked /init-project: a read-only run that
-// spawns child lanes (readOnly + maxAgents>0, no elevated authority) must still
-// verify per-session permission enforcement, because read-only child lanes are
-// contained by a deny-by-default permission ruleset. Before the fix,
-// promoteCapabilities only probed permissionEnforcement for elevated authority, so
-// permissions stayed "available-unverified" and resolveLanePolicy threw at lane
-// spawn — read-only child-capable runs could never start a lane.
-test("read-only child-capable run auto-promotes permissions via permissionEnforcement gate", async () => {
-  const { tools, context, directory, calls } = await makeHarness(async () => ({
-    data: { parts: [{ type: "text", text: "child ok" }], info: {} },
-  }), {
-    // Deliberately do NOT force `permissions` so it is shape-detected as
-    // "available-unverified"; the run must promote it from the gate.
-    capabilities: {
-      childSession: "available",
-      structuredOutput: "available",
-      worktree: "unavailable",
-      directoryRooting: "available-unverified",
-      worktreeEditIsolation: "unavailable",
-    },
-    pluginContext: {
-      __workflowLiveGates: {
-        permissionEnforcement: { state: "verified", verified: true, evidence: "forced verified in test" },
-      },
-    },
-  });
-  try {
-    // Mirrors init-project-audit: ad-hoc profile, readOnly, maxAgents>0, calls agent().
-    const source = `export const meta = { name: "read-only-child-autopromote", readOnly: true, maxAgents: 2 };
-return await agent("inspect safely", { readOnly: true });`;
-
-    const output = await runApproved(tools, context, source);
-    assert.match(output, /completed/);
-    assert.equal(calls.prompt.length, 1, "the read-only child lane should have prompted once");
-    const status = JSON.parse(await tools.workflow_status.execute({ runId: runIdFrom(output), format: "json", detail: "full" }, context));
-    assert.equal(status.capabilities.permissions, "available", "permissions should have been promoted from the gate");
-  } finally {
-    await fs.rm(directory, { recursive: true, force: true });
-  }
-});
-
-test("read-only child-capable run fails closed when permissionEnforcement is unverified", async () => {
-  const { tools, context, directory, calls } = await makeHarness(async () => {
-    throw new Error("unverified permission gate should reject before the lane prompts");
-  }, {
-    capabilities: {
-      childSession: "available",
-      structuredOutput: "available",
-      worktree: "unavailable",
-      directoryRooting: "available-unverified",
-      worktreeEditIsolation: "unavailable",
-    },
-    pluginContext: {
-      __workflowLiveGates: {
-        permissionEnforcement: { state: "failed-with-evidence", verified: false, evidence: "forced permission failure in test" },
-      },
-    },
-  });
-  try {
-    const source = `export const meta = { name: "read-only-child-permission-failed", readOnly: true, maxAgents: 2 };
-return await agent("inspect safely", { readOnly: true });`;
-
-    // Design C: resolveLanePolicy no longer throws on an unverified permissions capability
-    // (it always attaches the ruleset and trusts the platform); this run still fails closed
-    // via the separate ad-hoc-profile preflight gate in workflow-plugin.js, which requires a
-    // verified permissionEnforcement live gate before any child lane may spawn.
-    await assert.rejects(
-      runApproved(tools, context, source),
-      /Child-lane or elevated workflow authority requires verified permission enforcement/,
-    );
-    assert.equal(calls.prompt.length, 0, "no child lane should prompt when permissions are unverified");
-  } finally {
-    await fs.rm(directory, { recursive: true, force: true });
-  }
-});
-
-test("verified required permission gate rejects failed permissionEnforcement before prompting", async () => {
-  const { tools, context, directory, calls } = await makeHarness(async () => {
-    throw new Error("failed required gate should reject before prompting");
-  }, {
-    capabilities: {
-      childSession: "available",
-      permissions: "available-unverified",
-      structuredOutput: "available",
-      worktree: "unavailable",
-      directoryRooting: "available-unverified",
-      worktreeEditIsolation: "unavailable",
-    },
-    pluginContext: {
-      __workflowLiveGates: {
-        permissionEnforcement: { state: "failed-with-evidence", verified: false, evidence: "forced permission failure in test" },
-      },
-    },
-  });
-  try {
-    const source = `export const meta = { name: "read-only-child-failed-permission", readOnly: true, authority: { requiredGates: ["permissionEnforcement"] } };
-return await agent("inspect safely", { readOnly: true });`;
-
-    await assert.rejects(runApproved(tools, context, source), /permissionEnforcement=failed-with-evidence/);
-    assert.equal(calls.create.length, 0);
-    assert.equal(calls.prompt.length, 0);
-  } finally {
-    await fs.rm(directory, { recursive: true, force: true });
-  }
-});
-
-test("inspect-with-shell profile requires command-scoped bash live gate", async () => {
-  const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }), {
-    pluginContext: {
-      __workflowLiveGates: {
-        permissionEnforcement: { state: "verified", verified: true, evidence: "forced verified in test" },
-        commandScopedBash: { state: "failed-with-evidence", verified: false, evidence: "forced command scope failure" },
-      },
-    },
-  });
+test("inspect-with-shell profile's command scoping is enforced by the permission ruleset, not a live gate", async () => {
+  // Design C deleted the commandScopedBash live gate entirely: inspect-with-shell is readOnly (the
+  // server-fingerprint elevated check never consults it either), so nothing blocks launch. The
+  // command-scoping safety property is now enforced solely by the audited allow/deny permission
+  // ruleset attached to the child session (authority-policy.js's shellPolicy for this profile),
+  // verified per-lane by sessionPermissionEchoStatus — covered end-to-end in
+  // workflow-permissions.test.mjs. This proves the ruleset itself: broad bash denied, only the
+  // audited read-only prefixes allowed.
+  const { tools, context, directory, calls } = await makeHarness(async () => ({ data: { parts: [], info: {} } }));
   try {
     const source = `export const meta = { name: "shell-profile", profile: "inspect-with-shell" };
 return true;`;
 
-    await assert.rejects(runApproved(tools, context, source), /commandScopedBash=failed-with-evidence/);
+    const output = await runApproved(tools, context, source);
+    assert.match(output, /completed/);
+
+    const authority = __test.resolveRunAuthority({ profile: "inspect-with-shell" }, {});
+    const rules = permissionRulesForAuthority(authority);
+    assert.ok(
+      rules.some((rule) => rule.permission === "*" && rule.pattern === "*" && rule.action === "deny"),
+      "the catch-all deny-by-default rule must be present (covers unscoped bash)",
+    );
+    assert.ok(
+      !rules.some((rule) => rule.permission === "bash" && rule.pattern === "*" && rule.action === "allow"),
+      "inspect-with-shell must never grant unscoped bash",
+    );
+    assert.ok(
+      rules.some((rule) => rule.permission === "bash" && rule.pattern === "git ls-files" && rule.action === "allow"),
+      "the audited git ls-files prefix must be explicitly allowed",
+    );
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }
@@ -2488,27 +2433,21 @@ return true;`;
 // Dispatching mock for host-owned beads-drain implementation lanes. Beads discovery,
 // validation, closeout, and dry proof are supplied by fake host adapters in these tests.
 
-test("drain-autonomous-local profile uses integration isolation without native worktree gates", async () => {
+test("drain-autonomous-local profile completes with the git-based integration worktree adapter, no native worktree capability required", async () => {
+  // Design C: createIntegrationLaneWorktree (child-agent-runner.js) always builds its
+  // worktreeAdapter from the git-based fallback (worktree-adapter.js), never the native
+  // client — unlike authority.edit/worktreeEdit, which DO require adapter.capabilities.worktree
+  // === "available" (see the edit-plan-only/apply-approved-plan tests below). Forcing
+  // capabilities.worktree "unavailable" here, with zero live-gate seam of any kind, proves
+  // integration mode never needed that native capability in the first place.
   const { tools, context, directory } = await makeHarness(portPrompt({
     readyByRound: [[{ id: "item-1", title: "profile item", priority: 2, issue_type: "task" }], []],
     writeFile: { name: "profile-integration.txt", body: "integration profile lane\n" },
     verifyAction: "closed",
     finalDry: true,
   }), {
-    capabilities: {
-      childSession: "available",
-      permissions: "available",
-      structuredOutput: "available",
-      worktree: "unavailable",
-      directoryRooting: "available",
-      worktreeEditIsolation: "unavailable",
-    },
+    capabilities: { childSession: "available", worktree: "unavailable", toast: "available" },
     pluginContext: {
-      __workflowLiveGates: {
-        ...verifiedDrainLiveGates(),
-        worktreeApi: { state: "blocked", verified: false, evidence: "native worktree API unavailable in test" },
-        worktreeEditIsolation: { state: "blocked", verified: false, evidence: "native worktree edit unavailable in test" },
-      },
       __workflowDrainAdapters: { beads: async () => fakeDrainAdapter([]) },
     },
   });
@@ -2517,8 +2456,7 @@ test("drain-autonomous-local profile uses integration isolation without native w
     const preview = await tools.workflow_run.execute({ name: "beads-drain", args: { mode: "autonomous-local" }, background: false }, context);
     assert.match(preview, /Authority profile: drain-autonomous-local/);
     assert.match(preview, /Background: false/);
-    assert.match(preview, /Required gates: .*integrationWorktreeIsolation/);
-    assert.doesNotMatch(preview, /Required gates: .*worktreeApi/);
+    assert.doesNotMatch(preview, /Required gates:/);
     assert.match(preview, /Isolation: local integration worktrees; primary-tree writes require workflow_apply/);
 
     const output = await runApprovedRequest(tools, context, { name: "beads-drain", args: { mode: "autonomous-local" }, background: false });
@@ -2528,25 +2466,19 @@ test("drain-autonomous-local profile uses integration isolation without native w
     assert.equal(status.declaredProfile, "drain-autonomous-local");
     assert.equal(status.effectiveAuthorityProfile, "drain-autonomous-local");
     assert.equal(status.authority.profile, "drain-autonomous-local");
-    assert.equal(status.diagnostics.liveGates.integrationWorktreeIsolation.verified, true);
-    assert.equal(status.diagnostics.liveGates.worktreeApi, undefined);
     assert.equal(status.integrationPlan.lanes.length, 1);
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }
 });
 
-test("edit-plan-only profile still requires native worktree gates", async () => {
+test("edit-plan-only profile is rejected when the native worktree client capability is unavailable", async () => {
+  // Design C: the requiredGates worktreeApi/worktreeEditIsolation live gates are gone. What
+  // survives is the shape check in workflow-plugin.js's startWorkflow: an edit/worktreeEdit
+  // authority profile requires adapter.capabilities.worktree === "available", or it refuses
+  // before any lane spawns.
   const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }), {
-    pluginContext: {
-      __workflowLiveGates: {
-        permissionEnforcement: { state: "verified", verified: true, evidence: "forced permission verified in test" },
-        directoryRooting: { state: "verified", verified: true, evidence: "forced rooting verified in test" },
-        integrationWorktreeIsolation: { state: "verified", verified: true, evidence: "forced integration verified in test" },
-        worktreeApi: { state: "blocked", verified: false, evidence: "native worktree API unavailable in test" },
-        worktreeEditIsolation: { state: "blocked", verified: false, evidence: "native edit isolation unavailable in test" },
-      },
-    },
+    capabilities: { childSession: "available", worktree: "unavailable", toast: "available" },
   });
   try {
     await initGitRepo(directory);
@@ -2554,22 +2486,18 @@ test("edit-plan-only profile still requires native worktree gates", async () => 
 return true;`;
     const preview = await tools.workflow_run.execute({ source }, context);
     assert.match(preview, /Isolation: native edit worktrees; primary-tree writes require workflow_apply/);
-    await assert.rejects(runApproved(tools, context, source), /worktreeApi=blocked.*worktreeEditIsolation=blocked/s);
+    await assert.rejects(
+      runApproved(tools, context, source),
+      /Edit-mode workflows require the native worktree client, which this opencode server\/SDK does not expose/,
+    );
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }
 });
 
-test("apply-approved-plan profile is rejected when worktree edit isolation is blocked", async () => {
+test("apply-approved-plan profile is rejected when the native worktree client capability is unavailable", async () => {
   const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }), {
-    pluginContext: {
-      __workflowLiveGates: {
-        permissionEnforcement: { state: "verified", verified: true, evidence: "forced permission verified in test" },
-        worktreeApi: { state: "verified", verified: true, evidence: "forced worktree API verified in test" },
-        directoryRooting: { state: "verified", verified: true, evidence: "forced rooting verified in test" },
-        worktreeEditIsolation: { state: "blocked", verified: false, evidence: "edit isolation unavailable in test" },
-      },
-    },
+    capabilities: { childSession: "available", worktree: "unavailable", toast: "available" },
   });
   try {
     await initGitRepo(directory);
@@ -2577,7 +2505,10 @@ test("apply-approved-plan profile is rejected when worktree edit isolation is bl
 return true;`;
     const preview = await tools.workflow_run.execute({ source }, context);
     assert.match(preview, /Isolation: primary-tree write authority gated by workflow_apply/);
-    await assert.rejects(runApproved(tools, context, source), /requires verified live gates.*worktreeEditIsolation=blocked/s);
+    await assert.rejects(
+      runApproved(tools, context, source),
+      /Edit-mode workflows require the native worktree client, which this opencode server\/SDK does not expose/,
+    );
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }
@@ -2689,7 +2620,6 @@ test("bundled beads-drain autonomous-local defaults to background unless explici
     throw new Error("empty non-dry drain must not launch child lanes");
   }, {
     pluginContext: {
-      __workflowLiveGates: verifiedDrainLiveGates(),
       __workflowDrainAdapters: { beads: async () => emptyDrainAdapter(calls) },
     },
   });
@@ -2722,7 +2652,6 @@ test("bundled beads-drain autonomous-local defaults to background unless explici
 test("drain: top-level profile and args.mode are canonically equivalent (same approval hash)", async () => {
   const harnessOpts = {
     pluginContext: {
-      __workflowLiveGates: verifiedDrainLiveGates(),
       __workflowDrainAdapters: { beads: async () => emptyDrainAdapter([]) },
     },
   };
@@ -2809,46 +2738,54 @@ return { status: "failed", failed: [{ itemId: "x" }] };`;
   }
 });
 
-test("non-dry beads-drain fails closed before Beads mutation when gates are unverified", async () => {
+// Design C deleted the drain gate funnel entirely: NON_DRY_DRAIN_REQUIRED_GATES,
+// adapter.requiredGates enforcement, unsafeAcceptUnverifiedPermissions, and the "Non-dry drain
+// requires verified live gates" preflight in runHostDrain are all gone. The five tests that used
+// to live here proved that preflight's mechanics (fails closed on unverified gates, ignores
+// guest-spoofed gate claims, refuses an unsafe override, proceeds once forced-verified). The
+// surviving concept — a non-dry drain reaches the adapter and mutates via the integration diff
+// plan with ZERO gate preflight of any kind — is proven in tests/sandbox-executor.test.mjs
+// ("non-dry drain launches with zero gate preflight and reaches the adapter (no drain.live_gates
+// event)") and by "workflow drain non-dry accepted lanes flow through integration diff plan" right
+// below, neither of which forces any gate state. What replaces "ignores guest-spoofed gates" is
+// proven directly below: a guest script can no longer even get a spoofed gate claim INTO the
+// drain report, because sandbox-executor.js's runHostDrain destructures gateStatus/gates out of
+// the guest payload and never forwards them.
+
+test("non-dry drain never lets guest-supplied gateStatus/gates reach the report", async () => {
   const calls = [];
-  const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }), {
-    pluginContext: { __workflowDrainAdapters: { beads: async () => fakeDrainAdapter(calls, { requiredGates: __test.NON_DRY_DRAIN_REQUIRED_GATES }) } },
+  const { tools, context, directory } = await makeHarness(async (input) => {
+    await fs.writeFile(path.join(input.query.directory, "drain.txt"), "accepted lane\n", "utf8");
+    const laneResult = {
+      itemId: "item-1",
+      outcome: "implemented",
+      summary: "implemented",
+      readyForIntegration: true,
+      filesChanged: ["drain.txt"],
+      commandsRun: ["write drain.txt"],
+      acceptanceEvidence: ["drain.txt written"],
+      residualRisks: [],
+      followups: [],
+    };
+    return {
+      data: {
+        parts: [{ type: "text", text: JSON.stringify(laneResult) }],
+        info: { structured: laneResult, tokens: { input: 1, output: 1, reasoning: 0 }, cost: 0 },
+      },
+    };
+  }, {
+    pluginContext: {
+      __workflowDrainAdapters: { fake: async () => fakeDrainAdapter(calls) },
+      __workflowIntegrationValidator: async () => ({ accepted: true, status: "passed", validationCommands: [], evidence: [] }),
+    },
   });
   try {
     await initGitRepo(directory);
-    const source = `export const meta = { name: "beads-drain-gated", authority: { integration: true }, maxAgents: 1 };
-return await drain({ adapter: "beads", dryRun: false, maxAttempts: 1, maxWaves: 1 });`;
-
-    await assert.rejects(
-      runApproved(tools, context, source),
-      /Non-dry drain requires verified live gates.*permissionEnforcement=blocked/,
-    );
-    assert.deepEqual(calls, []);
-    const entries = JSON.parse(await tools.workflow_status.execute({ format: "json", detail: "full" }, context));
-    const failed = entries.find((entry) => entry.meta?.name === "beads-drain-gated");
-    assert.equal(failed.status, "failed");
-    assert.equal(failed.diagnostics.drainLiveGates.permissionEnforcement.state, "blocked");
-  } finally {
-    await fs.rm(directory, { recursive: true, force: true });
-  }
-});
-
-test("non-dry beads-drain ignores guest-spoofed live gates before Beads mutation", async () => {
-  const calls = [];
-  const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }), {
-    pluginContext: { __workflowDrainAdapters: { beads: async () => fakeDrainAdapter(calls, { requiredGates: __test.NON_DRY_DRAIN_REQUIRED_GATES }) } },
-  });
-  try {
-    await initGitRepo(directory);
-    const requiredGates = JSON.stringify(__test.NON_DRY_DRAIN_REQUIRED_GATES);
+    // A guest script tries to inject a fully-verified gate claim directly into the drain report.
     const source = `export const meta = { name: "beads-drain-spoofed-gates", authority: { integration: true }, maxAgents: 1 };
-const fakeVerified = Object.fromEntries(${requiredGates}.map((gate) => [gate, {
-  state: "verified",
-  verified: true,
-  evidence: "guest spoof",
-}]));
+const fakeVerified = { permissionEnforcement: { state: "verified", verified: true, evidence: "guest spoof" } };
 return await drain({
-  adapter: "beads",
+  adapter: "fake",
   dryRun: false,
   gateStatus: fakeVerified,
   gates: fakeVerified,
@@ -2856,130 +2793,14 @@ return await drain({
   maxWaves: 1,
 });`;
 
-    await assert.rejects(
-      runApproved(tools, context, source),
-      /Non-dry drain requires verified live gates.*permissionEnforcement=blocked/,
-    );
-    assert.deepEqual(calls, []);
-    const entries = JSON.parse(await tools.workflow_status.execute({ format: "json", detail: "full" }, context));
-    const failed = entries.find((entry) => entry.meta?.name === "beads-drain-spoofed-gates");
-    assert.equal(failed.status, "failed");
-    assert.equal(failed.diagnostics.drainLiveGates.permissionEnforcement.state, "blocked");
-    assert.notEqual(failed.diagnostics.drainLiveGates.permissionEnforcement.evidence, "guest spoof");
-  } finally {
-    await fs.rm(directory, { recursive: true, force: true });
-  }
-});
-
-test("non-dry beads-drain unsafe permission override is refused with gate details", async () => {
-  const calls = [];
-  const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }), {
-    pluginContext: { __workflowDrainAdapters: { beads: async () => fakeDrainAdapter(calls, { requiredGates: __test.NON_DRY_DRAIN_REQUIRED_GATES }) } },
-  });
-  try {
-    await initGitRepo(directory);
-    const source = `export const meta = { name: "beads-drain-unsafe-still-gated", authority: { integration: true }, maxAgents: 1 };
-return await drain({ adapter: "beads", dryRun: false, unsafeAcceptUnverifiedPermissions: true, maxAttempts: 1, maxWaves: 1 });`;
-
-    await assert.rejects(
-      runApproved(tools, context, source),
-      /Non-dry drain requires verified live gates.*permissionEnforcement=available-unverified.*structuredOutput=failed-with-evidence.*dry-run|fix the reported live gates/,
-    );
-    assert.deepEqual(calls, []);
-  } finally {
-    await fs.rm(directory, { recursive: true, force: true });
-  }
-});
-
-test("non-dry beads-drain unsafe permission override cannot proceed with permission gates unverified", async () => {
-  const calls = [];
-  const { tools, context, directory } = await makeHarness(async (input) => {
-    await fs.writeFile(path.join(input.query.directory, "unsafe-permission.txt"), "accepted risk lane\n", "utf8");
-    const laneResult = {
-      itemId: "item-1",
-      outcome: "implemented",
-      summary: "implemented with accepted permission risk",
-      readyForIntegration: true,
-      filesChanged: ["unsafe-permission.txt"],
-      commandsRun: ["write unsafe-permission.txt"],
-      acceptanceEvidence: ["unsafe-permission.txt written"],
-      residualRisks: ["permission gates were accepted as unverified"],
-      followups: [],
-    };
-    return {
-      data: {
-        parts: [{ type: "text", text: JSON.stringify(laneResult) }],
-        info: {
-          structured: laneResult,
-          tokens: { input: 1, output: 1, reasoning: 0 },
-          cost: 0,
-        },
-      },
-    };
-  }, {
-    pluginContext: {
-      __workflowLiveGates: verifiedDrainLiveGatesExceptPermissions(),
-      __workflowDrainAdapters: { beads: async () => fakeDrainAdapter(calls, { requiredGates: __test.NON_DRY_DRAIN_REQUIRED_GATES }) },
-    },
-  });
-  try {
-    await initGitRepo(directory);
-    const source = `export const meta = { name: "beads-drain-unsafe-permissions", authority: { integration: true }, maxAgents: 1 };
-return await drain({ adapter: "beads", dryRun: false, unsafeAcceptUnverifiedPermissions: true, maxAttempts: 1, maxWaves: 2 });`;
-
-    await assert.rejects(runApproved(tools, context, source), /permissionEnforcement=failed-with-evidence.*commandScopedBash=failed-with-evidence.*secretReadDeny=blocked/s);
-    assert.deepEqual(calls, []);
-  } finally {
-    await fs.rm(directory, { recursive: true, force: true });
-  }
-});
-
-test("non-dry beads-drain proceeds when required live gates are forced verified", async () => {
-  const calls = [];
-  const { tools, context, directory } = await makeHarness(async (input) => {
-    await fs.writeFile(path.join(input.query.directory, "beads-drain.txt"), "verified gates lane\n", "utf8");
-    const laneResult = {
-      itemId: "item-1",
-      outcome: "implemented",
-      summary: "implemented gated beads drain item",
-      readyForIntegration: true,
-      filesChanged: ["beads-drain.txt"],
-      commandsRun: ["write beads-drain.txt"],
-      acceptanceEvidence: ["beads-drain.txt written"],
-      residualRisks: [],
-      followups: [],
-    };
-    return {
-      data: {
-        parts: [{ type: "text", text: JSON.stringify(laneResult) }],
-        info: {
-          structured: laneResult,
-          tokens: { input: 1, output: 1, reasoning: 0 },
-          cost: 0,
-        },
-      },
-    };
-  }, {
-    pluginContext: {
-      __workflowLiveGates: verifiedDrainLiveGates(),
-      __workflowDrainAdapters: { beads: async () => fakeDrainAdapter(calls, { requiredGates: __test.NON_DRY_DRAIN_REQUIRED_GATES }) },
-    },
-  });
-  try {
-    await initGitRepo(directory);
-    const source = `export const meta = { name: "beads-drain-verified", authority: { integration: true }, maxAgents: 1 };
-return await drain({ adapter: "beads", dryRun: false, maxAttempts: 1, maxWaves: 2 });`;
-
     const output = await runApproved(tools, context, source);
-    const runId = runIdFrom(output);
     const result = await readResult(output);
-    const status = JSON.parse(await tools.workflow_status.execute({ runId, format: "json", detail: "full" }, context));
 
+    // The drain proceeded (reached the adapter, no gate preflight) AND the guest-supplied
+    // gateStatus/gates never made it into the report — runHostDrain strips them unconditionally.
     assert.equal(result.output.status, "complete");
-    assert.equal(status.status, "awaiting-diff-approval");
-    assert.equal(status.diagnostics.drainLiveGates.permissionEnforcement.verified, true);
-    assert.deepEqual(calls.map((call) => Array.isArray(call) ? call[0] : call), ["discover", "classify", "claim", "buildLanePacket", "validate", "close", "discover", "proveDry"]);
-    assert.equal(await fileExists(path.join(context.directory, "beads-drain.txt")), false);
+    assert.equal(result.output.gateStatus, undefined);
+    assert.equal(calls.includes("discover"), true);
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }
@@ -3569,82 +3390,36 @@ await pipeline(["one", "two", "three"], async (item, { agent }) => await agent("
   }
 });
 
-test("elevated authority rejects shape-only permission acceptance", async () => {
-  const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [{ type: "text", text: "allowed" }], info: { tokens: { input: 0, output: 0, reasoning: 0 }, cost: 0 } } }), {
-    capabilities: false,
-  });
+// Design C deleted the launch-time capability-shape gates these three tests exercised
+// (permissions/directoryRooting/worktreeEditIsolation are not fields the shape-only capability
+// adapter reports at all anymore — see tests/helpers/harness.mjs's DEFAULT_CAPABILITIES). The
+// kernel now trusts the platform's session.create permission/directory contract instead of
+// refusing to launch until a probe promotes those capabilities to "available": shell/edit/
+// integration authority no longer rejects on a shape-only "unavailable"/"available-unverified"
+// signal. What replaces each deleted rejection:
+//   - permission delivery:  sessionPermissionEchoStatus (mismatch => throw), covered end-to-end
+//                           in tests/workflow-permissions.test.mjs.
+//   - directory rooting:    sessionDirectoryEchoStatus (mismatch => throw), covered in
+//                           tests/child-agent-runner.test.mjs.
+//   - edit/worktreeEdit:    adapter.capabilities.worktree === "available" shape check (still
+//                           live), covered above by the edit-plan-only/apply-approved-plan tests.
+//   - elevated version floor: the server-fingerprint tests further down this file.
+// Empirically, each of the three ad-hoc/drain runs these tests forced to reject now completes
+// successfully instead — the intended, not regressed, outcome of trusting the platform.
+
+test("shell authority and integration authority launch without any capability-shape gate to satisfy", async () => {
+  const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [{ type: "text", text: "allowed" }], info: { tokens: { input: 0, output: 0, reasoning: 0 }, cost: 0 } } }));
   try {
-    const source = `export const meta = { name: "shape-only-shell", authority: { shell: true } };
+    await initGitRepo(directory);
+    const shellSource = `export const meta = { name: "shape-only-shell", authority: { shell: true } };
 return await agent("run shell", { shell: true });`;
+    const shellOutput = await runApproved(tools, context, shellSource);
+    assert.match(shellOutput, /completed/);
 
-    await assert.rejects(runApproved(tools, context, source), /permissions=unavailable/);
-  } finally {
-    await fs.rm(directory, { recursive: true, force: true });
-  }
-});
-
-test("beads-drain unsafe permission override no longer bypasses elevated permission guard", async () => {
-  const calls = [];
-  const { tools, context, directory } = await makeHarness(async (input) => {
-    await fs.writeFile(path.join(input.query.directory, "delegated-gates.txt"), "delegated gates lane\n", "utf8");
-    const laneResult = {
-      itemId: "item-1",
-      outcome: "implemented",
-      summary: "implemented via delegated gates",
-      readyForIntegration: true,
-      filesChanged: ["delegated-gates.txt"],
-      commandsRun: ["write delegated-gates.txt"],
-      acceptanceEvidence: ["delegated-gates.txt written"],
-      residualRisks: ["permission gates were accepted as unverified"],
-      followups: [],
-    };
-    return {
-      data: { parts: [{ type: "text", text: JSON.stringify(laneResult) }], info: { structured: laneResult, tokens: { input: 1, output: 1, reasoning: 0 }, cost: 0 } },
-    };
-  }, {
-    capabilities: {
-      childSession: "available",
-      permissions: "available-unverified",
-      structuredOutput: "available",
-      worktree: "unavailable",
-      directoryRooting: "available-unverified",
-      worktreeEditIsolation: "unavailable",
-    },
-    pluginContext: {
-      __workflowLiveGates: verifiedDrainLiveGatesExceptPermissions(),
-      __workflowDrainAdapters: { beads: async () => fakeDrainAdapter(calls, { requiredGates: __test.NON_DRY_DRAIN_REQUIRED_GATES }) },
-    },
-  });
-  try {
-    await initGitRepo(directory);
-
-    await assert.rejects(
-      runApprovedRequest(tools, context, { name: "beads-drain", args: { dryRun: false, unsafeAcceptUnverifiedPermissions: true, maxAttempts: 1, maxWaves: 2 } }),
-      /permissions=available-unverified|permissionEnforcement=failed-with-evidence/,
-    );
-    assert.deepEqual(calls, []);
-  } finally {
-    await fs.rm(directory, { recursive: true, force: true });
-  }
-});
-
-test("integration authority rejects unverified worktree isolation gates", async () => {
-  const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }), {
-    capabilities: {
-      childSession: "available",
-      permissions: "available",
-      structuredOutput: "available",
-      worktree: "available",
-      directoryRooting: "available-unverified",
-      worktreeEditIsolation: "unavailable",
-    },
-  });
-  try {
-    await initGitRepo(directory);
-    const source = `export const meta = { name: "missing-isolation", authority: { integration: true }, maxAgents: 1 };
+    const integrationSource = `export const meta = { name: "missing-isolation", authority: { integration: true }, maxAgents: 1 };
 return true;`;
-
-    await assert.rejects(runApproved(tools, context, source), /directoryRooting=available-unverified/);
+    const integrationOutput = await runApproved(tools, context, integrationSource);
+    assert.match(integrationOutput, /completed/);
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }

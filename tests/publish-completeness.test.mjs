@@ -43,8 +43,8 @@ test("files[] ships only the docs a shipped command/skill/workflow instructs an 
   // runtime asset via an AGENT-FACING instruction string (prompt text a running agent will
   // follow), not merely cited from a code comment or README prose. docs/workflow-plugin.md
   // is the only doc in this repo that clears that bar: commands/repo-bughunt.md,
-  // commands/repo-review.md, and commands/workflow-live-gates-release-check.md each point a
-  // running agent at `docs/workflow-plugin.md#workflow-tool-reference` in their own
+  // commands/repo-review.md each point a running agent at
+  // `docs/workflow-plugin.md#workflow-tool-reference` in their own
   // "Canonical references" instruction line.
   assert.ok(pkg.files.includes("docs/workflow-plugin.md"), "files[] must include docs/workflow-plugin.md");
   assert.equal(pkg.files.includes("docs/"), false, "files[] must not blanket-include docs/ (ships internal planning docs)");
@@ -114,7 +114,7 @@ test("package metadata and community-health files are present for public release
 });
 
 test("the bundled runtime-loaded command markdown files exist on disk", () => {
-  for (const f of ["repo-bughunt.md", "repo-review.md", "workflow-live-gates-release-check.md"]) {
+  for (const f of ["repo-bughunt.md", "repo-review.md"]) {
     assert.ok(existsSync(new URL(`commands/${f}`, root)), `commands/${f} must exist`);
   }
 });
@@ -163,7 +163,7 @@ test("packed README and command docs have no missing package-local references", 
   assert.equal(res.status, 0, `npm pack --dry-run failed: ${res.error?.message ?? res.stderr}`);
   const manifests = JSON.parse(res.stdout);
   const files = new Set(manifests.flatMap((m) => (m.files ?? []).map((f) => f.path)));
-  const docs = ["README.md", "commands/repo-bughunt.md", "commands/repo-review.md", "commands/workflow-live-gates-release-check.md"];
+  const docs = ["README.md", "commands/repo-bughunt.md", "commands/repo-review.md"];
   const missing = [];
 
   function normalizeRef(ref) {

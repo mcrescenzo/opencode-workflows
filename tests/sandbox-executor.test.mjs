@@ -1,11 +1,25 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { promisify } from "node:util";
 
 import WorkflowPlugin from "../workflow-kernel/index.js";
+import { makeHarness } from "./helpers/harness.mjs";
+import { emptyDrainAdapter } from "./helpers/fake-drain-adapter.mjs";
+
+const execFileAsync = promisify(execFile);
+async function initGitRepo(directory) {
+  await execFileAsync("git", ["init"], { cwd: directory });
+  await execFileAsync("git", ["config", "user.email", "workflow-test@example.com"], { cwd: directory });
+  await execFileAsync("git", ["config", "user.name", "Workflow Test"], { cwd: directory });
+  await fs.writeFile(path.join(directory, "README.md"), "initial\n", "utf8");
+  await execFileAsync("git", ["add", "README.md"], { cwd: directory });
+  await execFileAsync("git", ["commit", "-m", "initial"], { cwd: directory });
+}
 
 // Direct unit coverage for workflow-kernel/sandbox-executor.js. The module exports only
 // executeSandbox (the QuickJS sandbox lifecycle + host bridge) and runNestedWorkflow (the
@@ -15,7 +29,6 @@ import WorkflowPlugin from "../workflow-kernel/index.js";
 // network or child sessions — plus runNestedWorkflow's pure guard paths.
 const {
   executeSandbox,
-  drainGateStatus,
   newSandboxContext,
   persistRunArtifacts,
   quickJSAsyncModule,
@@ -207,27 +220,38 @@ test("inventoryFiles applies precompiled literal and glob excludes", async () =>
   }
 });
 
-test("drainGateStatus maps workflowCompletionNotification to the canonical probe flag", async () => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "workflow-gate-map-"));
-  const promptAsyncCalls = [];
+test("non-dry drain launches with zero gate preflight and reaches the adapter (no drain.live_gates event)", async () => {
+  // Design C deleted the live-gate-probe preflight that used to run before a non-dry drain could
+  // mutate: drainGateStatus (and the "drain.live_gates" event it recorded) no longer exist. A
+  // non-dry (dryRun: false) drain now goes straight from approval to runHostDrain, which calls the
+  // adapter's discover() unconditionally. This proves that with zero forced gate state, the drain
+  // still reaches the adapter, and the run's event journal never records a drain.live_gates entry.
+  const calls = [];
+  const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }), {
+    pluginContext: { __workflowDrainAdapters: { "fake-empty": async () => emptyDrainAdapter(calls) } },
+  });
   try {
-    const status = await drainGateStatus(
-      {
-        client: {
-          session: {
-            async promptAsync(input) {
-              promptAsyncCalls.push(input);
-              return { data: { ok: true } };
-            },
-          },
-        },
-      },
-      { sessionID: "parent-session", directory, worktree: directory, agent: "build" },
-      { probeRequired: true, requiredGates: ["workflowCompletionNotification"] },
-    );
+    await initGitRepo(directory);
+    const source = `export const meta = { name: "sandbox-executor-drain-probe", profile: "drain-autonomous-local" };
+const report = await drain({ adapter: "fake-empty", dryRun: false });
+return { status: report.status, dry: report.dryProof?.dry };`;
 
-    assert.equal(promptAsyncCalls.length, 1);
-    assert.equal(status.workflowCompletionNotification.verified, true);
+    const preview = await tools.workflow_run.execute({ source }, context);
+    const match = preview.match(/approvalHash: ([a-f0-9]{64})/);
+    assert.ok(match, `missing approvalHash in preview: ${preview}`);
+    const output = await tools.workflow_run.execute({ source, approve: true, approvalHash: match[1] }, context);
+    const runIdMatch = output.match(/Workflow ([0-9a-f-]{36}) completed/);
+    assert.ok(runIdMatch, `expected the drain run to complete: ${output}`);
+
+    // The adapter was reached with zero forced/verified gate state (no __workflowLiveGates seam
+    // used at all in this test) — proving there is no gate preflight blocking a non-dry drain.
+    assert.deepEqual(calls, ["discover", "proveDry"]);
+
+    const status = JSON.parse(await tools.workflow_status.execute({ runId: runIdMatch[1], format: "json", detail: "full" }, context));
+    const events = await fs.readFile(path.join(status.dir, "events.jsonl"), "utf8");
+    assert.match(events, /"type":"drain\.started"/);
+    assert.match(events, /"type":"drain\.completed"/);
+    assert.doesNotMatch(events, /"type":"drain\.live_gates"/);
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }

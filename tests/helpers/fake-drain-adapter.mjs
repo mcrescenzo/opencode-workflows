@@ -16,9 +16,6 @@ export function fakeDrainAdapter(calls, options = {}) {
   let closed = false;
   return {
     name: "fake",
-    // Declaring requiredGates makes the host enforce live gates for this drain (gate-union floor).
-    // Pure integration-flow fakes omit it (no gate enforcement); gate-enforcement tests pass it.
-    ...(Array.isArray(options.requiredGates) ? { requiredGates: options.requiredGates } : {}),
     async discover() {
       calls.push("discover");
       return closed ? [] : [item];

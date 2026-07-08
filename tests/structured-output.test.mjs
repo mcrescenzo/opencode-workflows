@@ -5,17 +5,48 @@ import { MAX_RESULT_BYTES } from "../workflow-kernel/constants.js";
 import {
   assertResultSize,
   compileSchemaWithIdentity,
-  structuredFormat,
+  parseStructuredTextResult,
+  structuredCorrectiveInstruction,
+  structuredTextInstruction,
   validateStructuredResult,
 } from "../workflow-kernel/structured-output.js";
 
-test("structuredFormat builds the json_schema prompt format without retryCount", () => {
-  const schema = { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"] };
+// Design C (2026-07-07): schema lanes are structured-TEXT only — the `format` prompt key
+// (and the structuredFormat() helper that built it) was deleted along with the live-gate
+// probe subsystem. A schema-bearing lane instead gets an in-prompt instruction to reply with
+// bare JSON (structuredTextInstruction/structuredCorrectiveInstruction), and the child's
+// final text is parsed back out with parseStructuredTextResult.
 
-  assert.deepEqual(structuredFormat(schema), {
-    type: "json_schema",
-    schema,
-  });
+test("structuredTextInstruction embeds the JSON Schema and forbids markdown/commentary", () => {
+  const schema = { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"] };
+  const instruction = structuredTextInstruction(schema);
+
+  assert.match(instruction, /single valid JSON object/);
+  assert.match(instruction, /Do not include markdown/);
+  assert.ok(instruction.includes(JSON.stringify(schema)), "instruction must embed the literal schema JSON");
+});
+
+test("structuredCorrectiveInstruction surfaces the prior validation failure and re-embeds the schema", () => {
+  const schema = { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"] };
+  const instruction = structuredCorrectiveInstruction(schema, "result.ok must be boolean");
+
+  assert.match(instruction, /previous response failed validation: result\.ok must be boolean/);
+  assert.match(instruction, /Reply again with ONLY a corrected JSON object/);
+  assert.ok(instruction.includes(JSON.stringify(schema)), "corrective instruction must re-embed the literal schema JSON");
+});
+
+test("parseStructuredTextResult parses bare JSON and recovers JSON embedded in surrounding prose", () => {
+  assert.deepEqual(parseStructuredTextResult('{"ok":true}'), { ok: true });
+  assert.deepEqual(parseStructuredTextResult('  {"ok":true}  \n'), { ok: true });
+  // Tolerates a model wrapping the JSON in commentary/code fences despite the instruction.
+  assert.deepEqual(parseStructuredTextResult('```json\n{"ok":true}\n```'), { ok: true });
+  assert.deepEqual(parseStructuredTextResult('Here is the result: {"ok":true} — done.'), { ok: true });
+});
+
+test("parseStructuredTextResult throws on empty or unrecoverable non-JSON text", () => {
+  assert.throws(() => parseStructuredTextResult(""), /empty response/);
+  assert.throws(() => parseStructuredTextResult("   "), /empty response/);
+  assert.throws(() => parseStructuredTextResult("not json at all"));
 });
 
 test("validateStructuredResult accepts schema-shaped values and rejects invalid ones", () => {

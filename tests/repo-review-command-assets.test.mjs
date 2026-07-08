@@ -38,10 +38,8 @@ test("repo-review plugin command registration resolves under configureWorkflowEn
   assert.equal(Object.hasOwn(cfg.command["repo-review"], "prompt"), false);
   assert.equal(Object.hasOwn(cfg.command["repo-review"], "agent"), false);
 
-  // Existing registrations must remain intact (no regression from the sibling block).
   // beads-drain moved to the beads extension (covered by beads-drain-assets); a bundled-only call
   // does not register it.
-  assert.ok(cfg.command["workflow-live-gates-release-check"]);
   assert.ok(cfg.command["repo-bughunt"]);
 });
 

@@ -50,8 +50,11 @@ test("beads-drain skill documents scope, local-only safety, ledgers, and dry pro
   assert.match(skill, /drain-dry-run.*drain-autonomous-local/);
   assert.match(skill, /approved once before launch/);
   assert.match(skill, /must not depend on mid-run interactive permission prompts/);
-  assert.match(skill, /Non-dry Beads drain fails closed unless live gates are verified/);
-  assert.match(skill, /unsafeAcceptUnverifiedPermissions.*not a bypass/);
+  // Design C: no live-gate preflight; the kernel verifies a server version floor via
+  // GET /global/health and asserts lane rooting/permissions deterministically at launch.
+  assert.match(skill, /the kernel verifies the server version floor.*GET \/global\/health.*opencode 1\.17\.13/s);
+  assert.match(skill, /there is no live-gate preflight step/);
+  assert.match(skill, /asserts lane rooting\/permissions deterministically at launch/);
   assert.match(skill, /laneTimeoutMs.*childPromptTimeoutMs.*3600000/s);
   assert.match(skill, /Dirty timed-out.*salvaged.*preserves the worktree/s);
   assert.match(skill, /host-owned `drain\(\{ adapter: "beads" \}\)` primitive/);
@@ -66,7 +69,9 @@ test("beads-drain skill documents scope, local-only safety, ledgers, and dry pro
   assert.match(skill, /workflow_cancel.*workflow_pause.*workflow_cleanup/);
   assert.match(skill, /protected reasons/);
   assert.match(skill, /workflow_run\(\{ name: "beads-drain"/);
-  assert.match(skill, /workflow-live-gates-release-check/);
+  // Design C: no separate live-gate release-check step exists (workflow-live-gates-release-check
+  // was deleted along with the workflow_live_gates tool).
+  assert.match(skill, /there is no separate live-gate release-check step/);
   assert.match(skill, /\/goal supervision/);
 });
 
@@ -84,8 +89,11 @@ test("beads-drain command invokes the extension workflow name and requires repor
   assert.match(command, /drain-dry-run.*drain-autonomous-local/s);
   assert.match(command, /approved once before launch/);
   assert.match(command, /without mid-run interactive permission prompts/);
-  assert.match(command, /permission enforcement, command-scoped bash denial, secret-read denial, structured output, directory rooting, local Git integration worktree isolation, and cancellation/);
-  assert.match(command, /unsafeAcceptUnverifiedPermissions.*not a non-dry bypass/);
+  // Design C: no live-gate preflight; the kernel verifies a server version floor via
+  // GET /global/health and asserts lane rooting/permissions deterministically at launch.
+  assert.match(command, /the kernel verifies the server version floor.*GET \/global\/health.*opencode 1\.17\.13/s);
+  assert.match(command, /there is no live-gate preflight step/);
+  assert.match(command, /asserts lane rooting\/permissions deterministically at launch/);
   assert.match(command, /laneTimeoutMs.*childPromptTimeoutMs.*3600000/);
   assert.match(command, /workflow_apply/);
   assert.match(command, /host-owned `drain\(\{ adapter: "beads" \}\)` primitive/);
@@ -174,23 +182,11 @@ test("package scripts expose repeatable release verification targets", async () 
   assert.match(await fs.readFile(path.join(root, "scripts", "child-system-smoke.mjs"), "utf8"), /skipped/);
 });
 
-test("plugin system-test docs define permission gate diagnostics", async () => {
-  const doc = await fs.readFile(path.join(root, "docs", "plugin-system-tests.md"), "utf8");
-
-  assert.match(doc, /## Permission Gate Diagnostics/);
-  assert.match(doc, /workflow_live_gates/);
-  assert.match(doc, /\/workflow-live-gates-release-check/);
-  assert.match(doc, /oc_command/);
-  assert.match(doc, /permissionEnforcement/);
-  assert.match(doc, /commandScopedBash/);
-  assert.match(doc, /secretReadDeny/);
-  assert.match(doc, /failed-with-evidence/);
-  assert.match(doc, /oc_shell/);
-  assert.match(doc, /oc_permission/);
-  assert.match(doc, /oc_events/);
-  assert.match(doc, /oc_inspect/);
-  assert.match(doc, /do not claim autonomous non-dry release\s+readiness/s);
-});
+// docs/plugin-system-tests.md's "## Permission Gate Diagnostics" section documents the deleted
+// workflow_live_gates tool end to end (probe flags, gate names, failed-with-evidence state); the
+// section itself is stale doc content slated for the Task 11 docs pass, not something Task 10
+// (test-suite reconciliation) rewrites test coverage for. Deleted rather than rewritten: there is
+// no surviving mechanism in this section to assert against.
 
 test("plugin system-test docs define child restart reload checks", async () => {
   const doc = await fs.readFile(path.join(root, "docs", "plugin-system-tests.md"), "utf8");
@@ -225,57 +221,19 @@ test("beads-drain plugin command registration uses current OpenCode command sche
   assert.equal(cfg.command["beads-drain"].description, "Run the beads-drain workflow with explicit scope and final dry proof");
   assert.match(cfg.command["beads-drain"].template, /workflow_run/);
   assert.equal(Object.hasOwn(cfg.command["beads-drain"], "prompt"), false);
-  assert.equal(cfg.command["workflow-live-gates-release-check"].description, "Run the opt-in active-runtime workflow live-gate release check");
-  assert.match(cfg.command["workflow-live-gates-release-check"].template, /workflow_live_gates/);
-  assert.match(cfg.command["workflow-live-gates-release-check"].template, /probeWorkflowNotification/);
-  assert.match(cfg.command["workflow-live-gates-release-check"].template, /release-gate:blocked/);
-  assert.equal(Object.hasOwn(cfg.command["workflow-live-gates-release-check"], "prompt"), false);
+  // Design C deleted workflow_live_gates and its /workflow-live-gates-release-check command
+  // entirely (no probe/reset tool surface left to gate a release check against).
+  assert.equal(cfg.command["workflow-live-gates-release-check"], undefined);
 });
 
-test("workflow live-gates release-check command is explicit opt-in and defines pass criteria", async () => {
-  const command = await fs.readFile(path.join(root, "commands", "workflow-live-gates-release-check.md"), "utf8");
-
-  assert.match(command, /^---\ndescription: Run the opt-in active-runtime workflow live-gate release check/m);
-  assert.match(command, /explicitly invoked|approved token\/worktree side effects/);
-  assert.match(command, /workflow_live_gates/);
-  assert.match(command, /"format": "json"/);
-  assert.match(command, /"probePermissionEnforcement": true/);
-  assert.match(command, /"probeIntegrationWorktreeIsolation": true/);
-  assert.match(command, /"probeWorkflowNotification": true/);
-  assert.match(command, /`configured` is `true`/);
-  assert.match(command, /`verified` is `true`/);
-  assert.match(command, /blocked|available-unverified|failed-with-evidence/);
-});
-
-test("release-check separates full/native edit readiness from non-dry beads-drain readiness", async () => {
-  const command = await fs.readFile(path.join(root, "commands", "workflow-live-gates-release-check.md"), "utf8");
-
-  const beadsSubset = [
-    "permissionEnforcement",
-    "commandScopedBash",
-    "secretReadDeny",
-    "structuredOutput",
-    "directoryRooting",
-    "integrationWorktreeIsolation",
-    "cancellation",
-  ];
-  for (const gate of beadsSubset) {
-    assert.match(command, new RegExp(`\\b${gate}\\b`), `Beads subset gate ${gate} must be named in the doc`);
-  }
-  assert.match(command, /Full \/ native edit-mode readiness/);
-  assert.match(command, /Non-dry beads-drain readiness/);
-  assert.match(command, /worktreeApi`? and `?worktreeEditIsolation[\s\S]*?are NOT required for\s+non-dry Beads/i);
-  assert.match(command, /does NOT imply Beads is blocked/);
-  assert.match(command, /\[release-gate:blocked\][\s\S]*?beads-non-dry/i);
-
-  const profile = __test.WORKFLOW_AUTHORITY_PROFILES["drain-autonomous-local"];
-  for (const gate of beadsSubset) {
-    assert.ok(profile.requiredGates.includes(gate), `profile must require ${gate}`);
-  }
-  for (const nativeGate of ["worktreeApi", "worktreeEditIsolation"]) {
-    assert.equal(profile.requiredGates.includes(nativeGate), false, `Beads profile must NOT require native ${nativeGate}`);
-  }
-});
+// Design C deleted workflow_live_gates (and its /workflow-live-gates-release-check command)
+// entirely: there is no probe/reset tool surface, so a release check gated on "configured"/
+// "verified" gate state has nothing left to check. The two tests that used to live here proved
+// that command's doc contract (opt-in probing, pass criteria, the full/native-edit vs non-dry
+// Beads gate-subset split); both die with the deleted command file. Release readiness is now
+// simply: does `npm test` pass, plus the deterministic checks proven throughout
+// tests/workflow-run.test.mjs and tests/sandbox-executor.test.mjs (server-fingerprint version
+// floor, permission/directory echo, worktree capability shape).
 
 test("goal supervision docs define evaluator boundary and completion evidence", async () => {
   const doc = await fs.readFile(path.join(root, "docs", "goal-supervision-autonomous-drains.md"), "utf8");

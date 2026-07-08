@@ -140,27 +140,6 @@ async function refreshDomainManifest(status) {
   return status;
 }
 
-function verifiedDrainLiveGates() {
-  return Object.fromEntries([
-    "permissionEnforcement",
-    "commandScopedBash",
-    "secretReadDeny",
-    "structuredOutput",
-    "directoryRooting",
-    "integrationWorktreeIsolation",
-    "cancellation",
-  ].map((name) => [name, { state: "verified", verified: true, evidence: `${name} forced verified in test` }]));
-}
-
-function verifiedDrainLiveGatesExceptPermissions() {
-  return {
-    ...verifiedDrainLiveGates(),
-    permissionEnforcement: { state: "failed-with-evidence", verified: false, evidence: "permission risk accepted in test" },
-    commandScopedBash: { state: "failed-with-evidence", verified: false, evidence: "command-scoped risk accepted in test" },
-    secretReadDeny: { state: "blocked", verified: false, evidence: "secret-read risk accepted in test" },
-  };
-}
-
 const EXTERNAL_WORKFLOW_SOURCE = `export const meta = { name: "external-source", profile: "read-only-review" };
 return true;`;
 
