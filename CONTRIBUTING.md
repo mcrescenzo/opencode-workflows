@@ -14,8 +14,7 @@ The full no-token test matrix needs the following tools on `PATH`:
 | Tool | Required for | Notes |
 | --- | --- | --- |
 | **Node ≥ 20.11** | everything | See `engines` in `package.json`. The test runner is Node's built-in `node --test`. |
-| **`git`** | worktree / apply / integration / drain tests | Several suites shell out to `git` to create temporary repos and exercise the worktree + `workflow_apply` paths. |
-| **`bd` (Beads CLI)** | `beads-drain` adapter + scratch tests | A few suites shell out to `bd` to exercise the beads-drain adapter against a scratch Beads database. All `repo-*` workflows and the rest of the matrix run without it. |
+| **`git`** | worktree / apply / integration tests | Several suites shell out to `git` to create temporary repos and exercise the worktree + `workflow_apply` paths. |
 | **`opencode` binary + local config** | the live child system smoke ONLY | The required system smoke (`npm run release:system-smoke-required`) needs the opencode binary and local opencode config and is intentionally NOT part of the token-free `npm test` / `release:no-token` matrix. |
 
 If a tool is missing, the affected suites fail with a clear message rather than silently
@@ -32,8 +31,8 @@ passing — do not treat a skipped/missing-tool run as release evidence.
   generate one locally, but it is not tracked to avoid maintaining two divergent lockfiles.
   `bun.lock` remains the single source of truth for the locked dependency set.
 - CI uses the same policy: `.github/workflows/ci.yml` installs dependencies with
-  `bun install --frozen-lockfile`, provisions the Beads CLI, verifies the prerequisite
-  tool versions, and then runs `npm run release:no-token`.
+  `bun install --frozen-lockfile`, verifies the prerequisite tool versions, and then
+  runs `npm run release:no-token`.
 
 ## Running the tests
 
@@ -42,7 +41,6 @@ From this directory:
 ```sh
 npm test                       # full no-token matrix (all suites)
 npm run test:workflows         # workflow_run / workflow_apply / repo-* regression
-npm run test:beads-drain       # beads-drain workflow/adapter/assets/scratch coverage
 npm run test:workflow-adapters # drain adapter focused suites
 npm run test:extension-seam    # extension registration and trusted asset seams
 npm run release:no-token       # complete public no-token release gate
@@ -61,9 +59,8 @@ npm run test:parent-integration   # OPTIONAL: only runs inside a private parent 
 A public release must not equate "skipped" with "verified":
 
 - The public CI workflow (`.github/workflows/ci.yml`) runs on pull requests, pushes to
-  `main`, and manual dispatch. It installs Node 22, Bun, Go, and
-  `github.com/steveyegge/beads/cmd/bd@v1.0.3` with the `gms_pure_go` build tag, then
-  runs the no-token release gate.
+  `main`, and manual dispatch. It installs Node 22 and Bun, verifies the prerequisite
+  tool versions, then runs the no-token release gate.
 - `npm run release:no-token` runs lockfile sync, the full token-free `npm test` matrix,
   and package dry-run validation, then explicitly notes that the live child system smoke is
   a **separate required** step.
