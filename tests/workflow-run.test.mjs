@@ -411,6 +411,29 @@ test("drain-autonomous-local launch refuses a sub-floor server", async () => {
   }
 });
 
+test("network-authority launch refuses a sub-floor server", async () => {
+  // Final-review fix pass (design-owner decision): network/mcp authority now joins the
+  // version-floor gate alongside edit/worktreeEdit/integration/shell (workflow-plugin.js's
+  // `authority.edit || authority.worktreeEdit || authority.integration || authority.shell ||
+  // authority.network || authority.mcp` check). The rationale is uniform across all six:
+  // webfetch/websearch/mcp tool access is granted purely by the permission ruleset
+  // (permissionRulesForAuthority), which is exactly the contract the version floor guarantees —
+  // there is no independent runtime check backing it up, so network/mcp-granting authority must
+  // refuse sub-floor servers just like the others.
+  const tooOldHealth = { data: { healthy: true, version: "1.0.0" } };
+  const { tools, context, directory, calls } = await makeHarness(async () => { throw new Error("must not prompt a child lane"); }, {
+    pluginContext: { __workflowServerHealth: tooOldHealth, serverUrl: "http://fingerprint-network.test" },
+  });
+  try {
+    const source = `export const meta = { name: "network-version-floor", authority: { network: true } };
+return { ok: true };`;
+    await assert.rejects(runApproved(tools, context, source), /requires opencode server >= /);
+    assert.equal(calls.create.length, 0, "the fingerprint check must reject before any session.create");
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("ad hoc authority remains supported and intentionally mapped", () => {
   const authority = __test.resolveRunAuthority({ authority: { shell: true } }, {});
   assert.equal(authority.profile, "ad-hoc");

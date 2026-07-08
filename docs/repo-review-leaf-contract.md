@@ -209,37 +209,36 @@ Defensive parsing: `args` may arrive as a JSON string; engines coerce to `{}` on
 Non-object/arrays are rejected to `{}`/defaults. This arg shape IS the meta-to-leaf injection
 contract.
 
-## 9. Structured-output policy (BOTH paths supported)
+## 9. Structured-output policy (structured-text only)
 
 Leaves declare schema lanes via `agent(prompt, { schema, tier, onFailure: "returnNull" })`. `tier`
 is `"fast"` (recon, finders — bulk work) or `"deep"` (skeptics — subtle correctness); synthesis is
 pure JS (no model). The kernel (`workflow-kernel/child-agent-runner.js`) resolves `tier -> concrete
 model` from `run.modelTiers`.
 
-**Both structured-output paths are supported and the guest source is identical for both:**
+**There is exactly one structured-output path.** Design C deleted the native
+`outputFormat: { type: "json_schema", schema }` route (it was gated behind a capability probe that
+no longer exists); the structured-text path is now unconditional for every schema lane:
 
-1. **Native structured output** — when `run.capabilities.structuredOutput === "available"`: the
-   kernel sets `outputFormat: { type: "json_schema", schema }` and reads the result from
-   `data.info.structured` (`run.adapter.getStructured`). (child-agent-runner.js lines 334, 347, 562-563.)
-2. **Structured-text fallback** — otherwise: the kernel injects `structuredTextInstruction(schema)`
-   into the system prompt, sets `outputFormat: { type: "text" }`, and parses the model's JSON text
-   back with `parseStructuredTextResult` (extracts the outermost `{...}`). (child-agent-runner.js
-   lines 335, 342, 347, 565-568; `workflow-kernel/structured-output.js`.)
+- When a lane declares `schema`, the kernel appends a JSON-schema instruction
+  (`structuredTextInstruction(schema)`) to the child's system prompt and sends the prompt as plain
+  `outputFormat: { type: "text" }`.
+- The reply text is parsed (`parseStructuredTextResult`, which extracts the outermost `{...}`) and
+  validated against `schema` with Ajv (`validateStructuredResult`, `workflow-kernel/structured-
+  output.js`).
+- On a parse or validation failure, the lane gets up to `correctiveRetries` corrective turns: the
+  kernel re-prompts the same child session with `structuredCorrectiveInstruction(schema,
+  validationMessage)` describing what was invalid. A response still invalid once retries are
+  exhausted fails the lane (or is dropped, when `onFailure: "returnNull"` is set).
 
-**Production reality:** native structured output is NOT available in the current runtime, so the
-**fallback is the DEFAULT path**. Leaves MUST therefore author schemas that are
-**text-JSON-parse-friendly**:
+Leaves MUST therefore author schemas that are **text-JSON-parse-friendly**:
 
 - Prefer plain `object`/`array`/`string`/`integer`/`boolean` and `enum` constraints.
 - Avoid regex/`oneOf`-heavy constructs and complex constraints the model cannot reliably emit as
-  raw JSON text. The fallback extracts the outermost JSON object and, by default, gives the same child
-  session one corrective turn with the validation error before a still-malformed response fails the lane;
-  `onFailure: "returnNull"` then converts that exhausted validation failure to a dropped result.
-- `structuredFormat()` omits `retryCount` (the OpenCode server adds its own; including it caused a
-  `getSessionMessages` readback rejection `Expected OutputFormatJsonSchema`).
+  raw JSON text.
 
-The contract test exercises BOTH paths against the same leaf and asserts the returned envelope is
-identical in shape.
+The contract test exercises this path against each leaf and asserts the returned envelope
+conforms to the shared shape.
 
 ## 10. Shared RECON_SCHEMA
 

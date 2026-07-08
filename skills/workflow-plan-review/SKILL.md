@@ -28,7 +28,7 @@ something to understand and refine, not a hash to echo back.
    - **Models** — `Default child model` and `Model plan: fast=… deep=…`.
    - **Lane budget** — `Max agents` (the ceiling on child lanes) and `Concurrency` (peak parallel).
    - **Cost/time** — `Budget ceilings`, `Lane timeout`, and the run deadline if present.
-   - **Authority** — `Authority profile`, `Required gates`, `Isolation`, `Mutation domains`. Call
+   - **Authority** — `Authority profile`, `Isolation`, `Mutation domains`, `Capability note`. Call
      out anything that mutates state or stops at `awaiting-diff-approval` / in-run apply.
    - **Background** — `Background: true/false`, and the heuristic recommendation line if present.
    You may condense or omit the technical envelope (hashes/capabilities/consent) from what you

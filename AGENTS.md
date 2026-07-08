@@ -1,7 +1,7 @@
 # AGENTS.md
 
 **Contract version:** `@opencode-ai/plugin@1.17.13` (declared range: `^1.17.13`)
-**Verified against runtime:** opencode 1.17.11
+**Verified against runtime:** opencode 1.17.13
 
 ## Scope And Layout
 
@@ -32,11 +32,10 @@
 - Non-dry `beads-drain` (`mode: "autonomous-local"`) requires a one-time launch approval; the kernel verifies the server version floor (`GET /global/health`, minimum opencode 1.17.13) and asserts lane rooting/permissions deterministically at launch — there is no live-gate preflight step.
 - Normal edit/integration workflows stop at the hash-gated `workflow_apply` boundary. The intentional exception is successful non-dry `beads-drain`, whose launch approval authorizes in-run local primary-tree apply and Beads finalization.
 - Schema lanes under `permission-ruleset` mode require the `structured_output` permission key to be explicitly allowed. The deny-by-default `*` rule hides the StructuredOutput tool from child sessions, which prevents schema-constrained lanes from completing and causes 10-minute timeouts. `permissionRulesForAuthority()` includes an explicit allow for `structured_output` after the catch-all deny.
-- The structured-output capability probe tests StructuredOutput under the SAME deny-by-default permission rules that workflow lanes use (not in an unrestricted session), preventing false-positive capability detection.
-- `structuredFormat()` omits `retryCount` because the OpenCode server adds its own internally; including it in the plugin's format object was redundant and contributed to a `getSessionMessages` readback rejection (`Expected OutputFormatJsonSchema`).
+- Structured-output is text-only: there is no native `json_schema` output-format route and no capability probe for one. Schema lanes get a JSON-schema instruction appended to the system prompt; the reply text is parsed and Ajv-validated against the schema, with corrective retries on failure (`workflow-kernel/child-agent-runner.js`, `workflow-kernel/structured-output.js`).
 
 ## Runtime Trust Model And Sensitive State
 
-- There is no LLM-probe live-gate subsystem, no `workflow_live_gates` tool, and no opt-in release-check command. Elevated (`edit`/`worktreeEdit`/`integration`/`shell`-granting) authority is checked once per server via a memoized `GET /global/health` fingerprint that refuses opencode servers older than `1.17.13`; lane rooting and worktree isolation are asserted from typed API fields at creation time; and each lane's deny-by-default permission ruleset is sent with the session and re-checked against the create echo. See README "Runtime Trust Model".
+- There is no LLM-probe live-gate subsystem, no `workflow_live_gates` tool, and no opt-in release-check command. Elevated (`edit`/`worktreeEdit`/`integration`/`shell`/`network`/`mcp`-granting) authority is checked once per server via a memoized `GET /global/health` fingerprint that refuses opencode servers older than `1.17.13`; lane rooting and worktree isolation are asserted from typed API fields at creation time; and each lane's deny-by-default permission ruleset is sent with the session and re-checked against the create echo. See README "Runtime Trust Model".
 - Raw run files under `.opencode/workflows/runs/` can contain sensitive local evidence. Prefer `workflow_status({ detail: "result" })` for redacted result display and `workflow_events` for redacted lifecycle-event evidence.
 - Background workflow execution is not durable across OpenCode process death; stale run dirs must be reconciled with `workflow_reconcile`.

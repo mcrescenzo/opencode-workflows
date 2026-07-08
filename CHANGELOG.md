@@ -11,12 +11,12 @@ and uses semantic versioning for published package releases.
 
 - Replaced the LLM-probe live-gate subsystem with a deterministic runtime
   trust model (Design C): a memoized `GET /global/health` server-version
-  fingerprint gates elevated (`edit`/`worktreeEdit`/`integration`/
-  `shell`-granting) authority at launch and refuses opencode servers older
-  than `1.17.13`; lane rooting and worktree isolation are asserted from typed
-  API fields at creation time instead of a behavioral probe; and each lane's
-  deny-by-default permission ruleset is sent with the session and re-checked
-  against the create echo.
+  fingerprint gates elevated (`edit`/`worktreeEdit`/`integration`/`shell`/
+  `network`/`mcp`-granting) authority at launch and refuses opencode servers
+  older than `1.17.13`; lane rooting and worktree isolation are asserted from
+  typed API fields at creation time instead of a behavioral probe; and each
+  lane's deny-by-default permission ruleset is sent with the session and
+  re-checked against the create echo.
 - Schema-bearing lanes are structured-text only: the kernel injects a
   JSON-schema instruction into the prompt and parses the model's JSON text
   back. The native `outputFormat: { type: "json_schema" }` path — never

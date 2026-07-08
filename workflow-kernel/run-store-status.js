@@ -14,7 +14,7 @@
 // This file now exists only to preserve the historical public surface: every symbol the old
 // run-store-status.js exported is re-exported here so existing importers
 // (workflow-plugin.js, sandbox-executor.js, child-agent-runner.js, lifecycle-control.js,
-// role-template-loading.js, live-gate-probes.js) and the index.js barrel resolve identically.
+// role-template-loading.js) and the index.js barrel resolve identically.
 // The split is behavior-preserving; no logic lives here.
 
 export {

@@ -1866,21 +1866,23 @@ async function startWorkflow(pluginContext, toolContext, args) {
   const fingerprint = await serverFingerprint(pluginContext);
   adapter.diagnostics.serverFingerprint = fingerprint;
   adapter.diagnostics.opencodeVersion = fingerprint.version ?? "unknown";
-  // "Elevated" here means edit/worktreeEdit/integration/shell authority specifically — the
-  // capabilities that rely on guarantees server-fingerprint.js's docstring describes as
-  // version-gated. edit/worktreeEdit/integration need the typed Session.directory echo +
-  // worktree path-distinctness checks. shell needs the session permission ruleset to be the
-  // sole, reliable enforcer of the audited shell command allowlist/denylist: child-agent-runner.js's
-  // per-lane permission echo tolerates "not-echoed" as a pass (it cannot prove the ruleset was
-  // applied), so the ruleset itself — the exact contract the version floor guarantees — is the
-  // only backstop, and shell-granting authority must refuse sub-floor servers just like the
-  // others. NOTE this is deliberately NOT `!authority.readOnly`: every built-in
-  // WORKFLOW_AUTHORITY_PROFILES entry (including apply-approved-plan and drain-autonomous-local)
-  // computes authority.readOnly as true (resolveRunAuthority only flips it false via an explicit
-  // readOnly:false or full:true declaration, which no profile sets) — so that check never fires.
-  // Network/mcp authority alone does not require any of these guarantees, so it remains
-  // intentionally excluded from this gate.
-  if (authority.edit || authority.worktreeEdit || authority.integration || authority.shell) {
+  // "Elevated" here means edit/worktreeEdit/integration/shell/network/mcp authority — every
+  // authority whose enforcement rests on the session permission ruleset / lane tools contract
+  // being honored by the server. edit/worktreeEdit/integration need the typed Session.directory
+  // echo + worktree path-distinctness checks. shell needs the session permission ruleset to be
+  // the sole, reliable enforcer of the audited shell command allowlist/denylist. network and mcp
+  // are gated the same way: webfetch/websearch/mcp tool access is granted or denied purely via
+  // the permission ruleset (permissionRulesForAuthority), with no independent runtime check of
+  // its own. In every case child-agent-runner.js's per-lane permission echo tolerates
+  // "not-echoed" as a pass (it cannot prove the ruleset was applied), so the ruleset itself — the
+  // exact contract the version floor guarantees — is the only backstop, and any of these
+  // authorities must refuse sub-floor servers alike. NOTE this is deliberately NOT
+  // `!authority.readOnly`: every built-in WORKFLOW_AUTHORITY_PROFILES entry (including
+  // apply-approved-plan and drain-autonomous-local) computes authority.readOnly as true
+  // (resolveRunAuthority only flips it false via an explicit readOnly:false or full:true
+  // declaration, which no profile sets) — so that check never fires. read-only-review and
+  // drain-dry-run remain exempt: they grant none of these authorities.
+  if (authority.edit || authority.worktreeEdit || authority.integration || authority.shell || authority.network || authority.mcp) {
     assertServerSupportsElevatedAuthority(fingerprint);
   }
   if ((authority.edit || authority.worktreeEdit) && adapter.capabilities.worktree !== "available") {

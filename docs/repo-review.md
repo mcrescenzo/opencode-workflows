@@ -288,26 +288,19 @@ exact existing duplicates). It should close only after the children are closed/d
 rationale, skipped/existing/ambiguous findings are reconciled, graph checks pass, and the scoped
 post-materialization review has no unresolved high/medium defects.
 
-## Structured-text fallback is the production path
+## Structured-text is the only structured-output path
 
 Leaves declare schema lanes via `agent(prompt, { schema, tier, onFailure:
-"returnNull" })`. Two structured-output paths are supported by the kernel
-(`workflow-kernel/child-agent-runner.js`, contract §9):
-
-1. **Native structured output** — when `run.capabilities.structuredOutput === "available"`:
-   the kernel sets `outputFormat: { type: "json_schema", schema }`.
-2. **Structured-text fallback** — otherwise: the kernel injects a JSON-schema
-   instruction into the system prompt, sets `outputFormat: { type: "text" }`, and parses
-   the model's JSON text back.
-
-**Production reality:** native structured output is currently **unavailable** in this
-runtime, so the
-**structured-text fallback is the production path**. The guest source is identical for
-both paths; the operator-visible difference is that malformed JSON from the model gets
-one same-session corrective turn by default before an exhausted validation failure is
-converted by `onFailure: "returnNull"` into a dropped (not crashing) result. Leaves
-author schemas that are text-JSON-parse-friendly (plain object/array/string/integer/
-boolean + enums; no regex/`oneOf`-heavy constructs).
+"returnNull" })`. Design C deleted the native `json_schema` output-format route
+(contract §9); the structured-text path is the only one the kernel
+(`workflow-kernel/child-agent-runner.js`) supports: it injects a JSON-schema
+instruction into the system prompt, sends the prompt as plain text, and parses
++ Ajv-validates the model's JSON reply. A malformed or invalid response gets one
+same-session corrective turn by default before an exhausted validation failure
+is converted by `onFailure: "returnNull"` into a dropped (not crashing) result.
+Leaves author schemas that are text-JSON-parse-friendly (plain
+object/array/string/integer/boolean + enums; no regex/`oneOf`-heavy
+constructs).
 
 ## Verification
 

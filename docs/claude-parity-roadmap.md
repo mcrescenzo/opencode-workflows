@@ -29,7 +29,7 @@ Statements here are backed by the plugin's actual behavior, not aspiration.
   registry**; the plugin has **no custom-subagent registry of its own**.
 - **Deterministic runtime trust model** **[shipped]**: there is no LLM-probe
   live-gate subsystem. Elevated (`edit`/`worktreeEdit`/`integration`/
-  `shell`-granting) authority is checked once per server via a memoized
+  `shell`/`network`/`mcp`-granting) authority is checked once per server via a memoized
   `GET /global/health` fingerprint that refuses servers below opencode
   `1.17.13`; lane rooting and worktree isolation are asserted from typed API
   fields at creation time; and each lane's deny-by-default permission ruleset

@@ -275,8 +275,9 @@ are never run by any repo-review workflow or command. The optional
 `inspect-with-shell` carve-outs (the `repo-complexity` churn lens and `repo-deps`
 manifest inspection) are deferred as a product-scope decision, not a runtime
 limitation — every `repo-*` lane stays plain read-only-review today. Note also
-that native structured output is currently unavailable in this runtime, so the
-kernel's structured-text fallback is the production path.
+that Design C deleted the native structured-output route; the kernel's
+structured-text path (JSON-schema system-prompt instruction, reply parsed +
+validated) is the only structured-output path.
 
 The full user-facing guide, per-domain one-liners, the arg tables, the nested-restriction
 and budgeting details, and the deferred-mutation boundary live in
@@ -315,9 +316,9 @@ Workflow authority is approved once at launch. The approval hash covers the
 source hash, runtime args, profile-expanded authority, budgets, concurrency,
 child model, nested workflow snapshots, and base commit when edits are possible.
 Approved runs must not stop mid-run for interactive permission prompts. Elevated
-authority (`edit`, `worktreeEdit`, `integration`, or `shell`) additionally
-consults a memoized per-server `GET /global/health` fingerprint at launch and
-refuses to start on an opencode server older than `1.17.13` (see "Runtime Trust
+authority (`edit`, `worktreeEdit`, `integration`, `shell`, `network`, or `mcp`)
+additionally consults a memoized per-server `GET /global/health` fingerprint at
+launch and refuses to start on an opencode server older than `1.17.13` (see "Runtime Trust
 Model").
 
 | Profile | Purpose | Auto-Approve Tier |
@@ -339,8 +340,9 @@ creation time, not from model-reported text.
 > **Network/MCP workflow authority is permission-rule enforced.** Ad-hoc `network`/`mcp`
 > authority (via `args.authority` or `meta.authority`) launches after the normal approval
 > handshake. The runtime emits `webfetch`/`websearch`/MCP permission rules from
-> the resolved authority profile. `networkAccess` remains an informational reserved diagnostic;
-> `mcpAccess` is diagnostic by default, and `mcpPolicy: { allow, deny }` can scope MCP
+> the resolved authority profile — network/mcp is granted by profile policy, coarse-gated by
+> the lane tools map, and covered by the server version floor (network/mcp-granting authority
+> refuses a sub-floor server, same as edit/shell). `mcpPolicy: { allow, deny }` can scope MCP
 > server/tool patterns at the run or lane level without allowing lane escalation.
 
 `workflow_apply` is the normal explicit primary-tree write boundary for edit or
@@ -625,8 +627,8 @@ and worktree isolation are asserted from typed API fields at creation time, and
 each lane's deny-by-default permission ruleset is sent with the session and
 re-checked against the create echo. The kernel trusts opencode itself — the
 plugin runs inside it — and verifies compatibility once per server via
-`GET /global/health`, refusing edit-, worktreeEdit-, integration-, and
-shell-granting ("elevated") profiles below opencode `1.17.13`.
+`GET /global/health`, refusing edit-, worktreeEdit-, integration-, shell-,
+network-, and mcp-granting ("elevated") profiles below opencode `1.17.13`.
 
 There is no LLM-probe live-gate subsystem, no `workflow_live_gates` tool, and no
 opt-in release-check command. None of the checks above spend model tokens,

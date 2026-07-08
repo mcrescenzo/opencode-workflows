@@ -211,7 +211,7 @@ below are genuinely different trust boundaries, not cosmetic labels:
 | --- | --- | --- | --- |
 | Read-only review (default) | `profile: "read-only-review"` (`{ readOnly: true }`) | Read files, glob, grep, list, LSP. Reason over in-repo evidence only. | No shell, no `webfetch`/`websearch`, no MCP. Cannot run commands or reach the network. |
 | Inspect-with-shell | `profile: "inspect-with-shell"` (`{ readOnly: true, shell: true }`) | Everything above **plus** an audited, command-scoped read-only shell. The runtime permission ruleset allows only documented inspection commands (`git ls-files`, `git log --numstat`, `npm ls --depth=0`, `cargo tree`, `pip list`, `go list`) and denies shell chaining, redirection, filesystem mutation, network fetch, and package install/publish at the rule level. | Network and MCP still denied. Shell is scoped to the audited allowlist; an explicit `authority.shell = { allow, deny }` override is still respected. |
-| Network-authorized research | `profile: "read-only-review"` with declared `authority: { readOnly: true, network: true }` (add `mcp: true` or a scoped `mcpPolicy` only for MCP doc lookups) | Everything in read-only review **plus** `webfetch`/`websearch` permission rules, and MCP permission rules when MCP authority is declared. Launch still follows the normal one-time approval handshake — there is no separate permission probe. | No shell, edit, or worktree mutation unless separately declared. Network/MCP authority is granted by profile policy and coarse-gated by the lane tools map; `networkAccess` and `mcpAccess` remain informational/reserved diagnostics with no behavioral probe for either — the permission ruleset and the server version floor cover the rest. |
+| Network-authorized research | `profile: "read-only-review"` with declared `authority: { readOnly: true, network: true }` (add `mcp: true` or a scoped `mcpPolicy` only for MCP doc lookups) | Everything in read-only review **plus** `webfetch`/`websearch` permission rules, and MCP permission rules when MCP authority is declared. Launch still follows the normal one-time approval handshake — there is no separate permission probe. | No shell, edit, or worktree mutation unless separately declared. Network/MCP authority is granted by profile policy and coarse-gated by the lane tools map; the permission ruleset and the server version floor (network/mcp-granting authority now refuses a sub-floor server, same as edit/shell) cover the rest. |
 
 Notes that keep this safe:
 
@@ -226,14 +226,15 @@ Notes that keep this safe:
   when running a command *is the evidence* (you need the actual output, not a
   file's contents). An explicit `authority.shell = { allow, deny }` override
   still wins over the audited list for a deliberate per-run scope.
-- Network/MCP workflow authority is enforced by generated permission rules and
-  coarse-gated by the lane tools map; launch follows the normal one-time
-  approval handshake, not a separate permission probe. `networkAccess` and
-  `mcpAccess` are both reported as informational reserved diagnostics — neither
-  has a behavioral probe. `mcpPolicy: { allow, deny }` can scope MCP
-  server/tool patterns at the run or lane level without allowing lane
-  escalation; the permission ruleset and the server version floor cover the
-  rest.
+- Network/MCP workflow authority is granted by profile policy (or ad-hoc
+  `authority: { network: true }` / `mcp: true`), enforced by generated
+  permission rules, and coarse-gated by the lane tools map; launch follows the
+  normal one-time approval handshake, not a separate permission probe. Nothing
+  reports `networkAccess`/`mcpAccess` as a diagnostic — there is no separate
+  probe for either. `mcpPolicy: { allow, deny }` can scope MCP server/tool
+  patterns at the run or lane level without allowing lane escalation; the
+  permission ruleset and the server version floor (network/mcp-granting
+  authority refuses a sub-floor server, same as edit/shell) cover the rest.
 
 ### Safe `workflow_run` shape (source)
 

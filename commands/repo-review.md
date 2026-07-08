@@ -34,7 +34,7 @@ Validate `$ARGUMENTS` before touching `workflow_run`.
 - Optional recognized keys: `domains`, `paths`, `exclude`, `maxReturnFindings`,
   `batchSize`, `recon`, `maxDirs`, `deepMode`.
 - `deepMode` may select `audited-shell` when the caller explicitly wants the
-  command-scoped shell inspection mode and the required gates are verified.
+  command-scoped shell inspection mode.
 - `domains` may name any subset of `bughunt`, `security`, `test-gaps`,
   `cleanup`, `modernize`, `perf`, `complexity`, `deps`, or their `repo-*` leaf
   names. Unknown domains are rejected rather than falling back to all domains.

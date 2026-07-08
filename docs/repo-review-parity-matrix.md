@@ -162,11 +162,11 @@ These hold for every leaf and are what the `repo-review` meta relies on.
   `requiredGates`). The `inspect-with-shell` profile is NOT used by
   any shipped leaf (a deferred product-scope decision, not a runtime limitation — see F.4/F.6).
 - **Structured-output policy (contract §9):** every schema lane is declared via
-  `agent(prompt, { schema, tier, onFailure:"returnNull" })`. The guest source is
-  IDENTICAL for both paths: native structured output (when
-  `capabilities.structuredOutput === "available"`) and the structured-text
-  fallback (the production default). Every leaf test covers the structured-text fallback path and
-  the fingerprint sentinel.
+  `agent(prompt, { schema, tier, onFailure:"returnNull" })`. Design C deleted the
+  native structured-output route; the structured-text path (JSON-schema system-prompt
+  instruction, reply parsed + Ajv-validated, with corrective retries) is the only
+  path the kernel supports. Every leaf test covers this path and the fingerprint
+  sentinel.
 - **Guest purity:** every leaf is import-free (no `import`/`require`, no
   `tests/helpers/` reference) — enforced by the contract test's no-import proof.
   Synthesis is PURE JS (no model) in every leaf.
