@@ -3,16 +3,6 @@ import { WorkflowAuthorityError } from "./errors.js";
 import { redactValue } from "./text-json.js";
 import { auditedShellPermissionPatterns } from "./audited-shell-policy.js";
 
-export const NON_DRY_DRAIN_REQUIRED_GATES = [
-  "permissionEnforcement",
-  "commandScopedBash",
-  "secretReadDeny",
-  "structuredOutput",
-  "directoryRooting",
-  "integrationWorktreeIsolation",
-  "cancellation",
-];
-
 export const AD_HOC_AUTHORITY_PROFILE = "ad-hoc";
 export const AUTO_APPROVE_TIERS = Object.freeze(["readOnly", "worktree", "all"]);
 const AUTO_APPROVE_TIER_RANK = Object.freeze({ readOnly: 1, worktree: 2, all: 3 });
@@ -20,27 +10,21 @@ const AUTO_APPROVE_TIER_BY_RANK = Object.freeze({ 1: "readOnly", 2: "worktree", 
 export const WORKFLOW_AUTHORITY_PROFILES = Object.freeze({
   "read-only-review": Object.freeze({
     authority: Object.freeze({ readOnly: true }),
-    requiredGates: Object.freeze([]),
   }),
   "inspect-with-shell": Object.freeze({
     authority: Object.freeze({ readOnly: true, shell: true }),
-    requiredGates: Object.freeze(["permissionEnforcement", "commandScopedBash"]),
   }),
   "drain-dry-run": Object.freeze({
     authority: Object.freeze({ readOnly: true }),
-    requiredGates: Object.freeze([]),
   }),
   "drain-autonomous-local": Object.freeze({
     authority: Object.freeze({ integration: true, network: false, mcp: false }),
-    requiredGates: Object.freeze(NON_DRY_DRAIN_REQUIRED_GATES),
   }),
   "edit-plan-only": Object.freeze({
     authority: Object.freeze({ worktreeEdit: true }),
-    requiredGates: Object.freeze(["permissionEnforcement", "worktreeApi", "directoryRooting", "worktreeEditIsolation"]),
   }),
   "apply-approved-plan": Object.freeze({
     authority: Object.freeze({ edit: true }),
-    requiredGates: Object.freeze(["permissionEnforcement", "worktreeApi", "directoryRooting", "worktreeEditIsolation"]),
   }),
 });
 
@@ -341,16 +325,12 @@ export function narrowMcpPolicy(parentPolicy, declaredMcpPolicy = {}) {
   };
 }
 
-export function normalizeRequiredGates(gates) {
-  return [...new Set((Array.isArray(gates) ? gates : []).filter((gate) => typeof gate === "string" && gate.trim()).map((gate) => gate.trim()))].sort();
-}
-
 export function resolveAuthorityProfile(meta = {}, args = {}) {
   const profileName = args.profile ?? meta.profile ?? meta.authorityProfile ?? meta.authority?.profile ?? AD_HOC_AUTHORITY_PROFILE;
-  if (profileName === AD_HOC_AUTHORITY_PROFILE) return { name: profileName, authority: {}, requiredGates: [] };
+  if (profileName === AD_HOC_AUTHORITY_PROFILE) return { name: profileName, authority: {} };
   const profile = WORKFLOW_AUTHORITY_PROFILES[profileName];
   if (!profile) throw new WorkflowAuthorityError(`Unknown workflow authority profile: ${profileName}`);
-  return { name: profileName, authority: profile.authority, requiredGates: profile.requiredGates };
+  return { name: profileName, authority: profile.authority };
 }
 
 export function resolveRunAuthority(meta = {}, args = {}) {
@@ -388,7 +368,6 @@ export function resolveRunAuthority(meta = {}, args = {}) {
     worktreeEdit: declared.worktreeEdit === true,
     integration: declared.integration === true,
     profile: profile.name,
-    requiredGates: normalizeRequiredGates([...profile.requiredGates, ...(Array.isArray(declared.requiredGates) ? declared.requiredGates : [])]),
   };
   authority.mode = authority.integration ? "integrationMode" : authority.edit || authority.worktreeEdit ? "editMode" : authority.readOnly ? "readOnly" : "full";
   authority.editGate = authority.edit || authority.worktreeEdit || authority.integration ? "requires workflow_apply approval before primary writes" : "not-requested";
@@ -464,7 +443,6 @@ export function authoritySummary(authority) {
     `worktreeEdit=${authority.worktreeEdit}`,
     `integration=${authority.integration}`,
     `profile=${authority.profile || AD_HOC_AUTHORITY_PROFILE}`,
-    `requiredGates=${authority.requiredGates?.length ? authority.requiredGates.join("|") : "none"}`,
   ];
   if (authority.editGate !== "not-requested") flags.push(authority.editGate);
   return flags.join(", ");

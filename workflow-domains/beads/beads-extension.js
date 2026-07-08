@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { createBeadsDrainAdapter, finalizeBeadsDomainMutation } from "./beads-drain-adapter.js";
-import { NON_DRY_DRAIN_REQUIRED_GATES } from "../../workflow-kernel/authority-policy.js";
 import {
   assertContainedRealPath,
   assertContainedRunDir,
@@ -225,10 +224,7 @@ export default {
           scope: options.scope,
           signal: run.abortController.signal,
         }),
-        // The host enforces these before any non-dry Beads mutation or lane launch (gate-union floor).
-        requiredGates: NON_DRY_DRAIN_REQUIRED_GATES,
       }),
-      requiredGates: NON_DRY_DRAIN_REQUIRED_GATES,
       supportsAutoApply: true,
       mutationOperations: MUTATION_OPS,
     },
