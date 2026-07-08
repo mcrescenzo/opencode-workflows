@@ -40,7 +40,7 @@ From this directory:
 
 ```sh
 npm test                       # full no-token matrix (all suites)
-npm run test:workflows         # workflow_run / workflow_apply / repo-* regression
+npm run test:workflows         # workflow_run / workflow_apply / model-tiering regression
 npm run test:workflow-adapters # drain adapter focused suites
 npm run test:extension-seam    # extension registration and trusted asset seams
 npm run release:no-token       # complete public no-token release gate

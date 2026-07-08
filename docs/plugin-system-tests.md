@@ -18,14 +18,13 @@ npm run release:no-token
 
 That script runs `npm run test:lockfile-sync`, the full `npm test` matrix, and
 `npm pack --dry-run --json` without model-token prompts. `npm test` includes the
-workflow-kernel, beads-drain, workflow, adapter, extension-seam,
+workflow-kernel, workflow, adapter, extension-seam,
 docs/package, permission, redaction, and release-script regression suites.
 
 For narrower iteration before the full release gate, use:
 
 ```sh
 npm run test:workflow-kernel
-npm run test:beads-drain
 npm run test:workflows
 ```
 
@@ -73,8 +72,9 @@ The required smoke must exercise and capture evidence for, at minimum:
 - child ID, PID, port, and trust mode
 - project directory and explicit plugin path (`opencode-workflows.js`)
 - startup health and OpenCode version
-- command registry entries (at least `repo-bughunt` and `repo-review`;
-  `beads-drain` only when the Beads extension is configured)
+- command registry entries: the core package ships zero bundled commands, so
+  confirm no plugin-bundled entries appear unless an operator-configured
+  extension or a project/global `commands/` file contributes one
 - tool registry entries (at least `workflow_run`, `workflow_status`, and
   `workflow_list`)
 - a deterministic workflow tool execution (the child-session tool smoke below)
@@ -109,19 +109,19 @@ Manual fallback path:
    discovery when startup import/lifecycle is the behavior under test.
 3. Inspect child health, PID, port, trust mode, startup logs, command registry,
    tool registry, and plugin command entries.
-4. Verify the bundled commands include `repo-bughunt` and `repo-review`.
-   Verify `beads-drain` only when the Beads extension is configured for this
-   child.
+4. Verify the command registry contains zero plugin-bundled entries: the core
+   package ships no bundled commands, so any commands present must come from
+   an operator-configured extension or a project/global `commands/` file.
 5. Stop the child and verify cleanup evidence shows the process is gone, such as
    `processAlive: false` or an equivalent disposed-child status.
 
 Current OpenCode child safe/pure mode can hide config-hook command/tool
 registration even when the explicit plugin path is present. If the safe child is
-healthy but the workflow commands or tools are absent, record that as a
-safe-mode registration limitation, not as release evidence. Use an inherited
-child for the actual plugin registration proof, then verify that `/command`
-contains the `repo-bughunt` and `repo-review` commands
-(`beads-drain` when the Beads extension is configured) and that
+healthy but workflow tools are absent, record that as a safe-mode registration
+limitation, not as release evidence. Use an inherited child for the actual
+plugin registration proof, then verify that `/command` contains no
+plugin-bundled entries (only whatever an operator-configured extension or
+project/global `commands/` file contributes, if anything) and that
 `/experimental/tool/ids` contains workflow tools such as `workflow_run`,
 `workflow_status`, and `workflow_list`.
 

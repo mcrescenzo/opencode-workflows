@@ -159,9 +159,10 @@ death; use `workflow_status`, `workflow_cancel`, `workflow_pause`, and
 Edit authority is only a cap. A lane receives edit tools only when it explicitly
 requests edit/worktree behavior. Edit-capable lanes run in isolated workflow
 worktrees or directories. Primary-tree writes happen through `workflow_apply`
-after source/base/diff/domain hashes and Git state are checked. Successful
-non-dry Beads drain is the special trusted extension path that can finalize
-in-run after its launch approval.
+after source/base/diff/domain hashes and Git state are checked. A successful
+non-dry drain workflow from a trusted source (core-bundled or
+extension-registered, with `supportsAutoApply: true`) is the one path that can
+finalize in-run after its launch approval.
 
 ## Review Checklist
 

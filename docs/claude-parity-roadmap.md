@@ -42,9 +42,12 @@ Statements here are backed by the plugin's actual behavior, not aspiration.
   request files; `workflow_reconcile` recovers stale runs/locks; cleanup
   preserves active/locked/ambiguous/apply-running runs.
 - **Config-time skill + command registration** **[shipped]**: the plugin config
-  hook pushes this directory's `skills/` into `cfg.skills.paths` and registers
-  the bundled `beads-drain` command (`workflow-plugin.js` lines ~534-535; README
-  "Command And Skill Registration").
+  hook pushes this directory's `skills/` into `cfg.skills.paths` and scans a
+  bundled `commands/` directory to auto-register any command file found there
+  (`configureWorkflowEntrypoints`, `workflow-plugin.js`; README "Command And
+  Skill Registration") — as of the pure-architecture cut that directory is
+  empty, so the plugin ships zero bundled commands; the mechanism itself is
+  unchanged and registers whatever a downstream packager bundles.
 - **Reliance on OpenCode's native config model** **[shipped]**: the plugin does
   not manage rules, permissions, or agent scope itself; it inherits OpenCode's
   global/project scope and permission system.

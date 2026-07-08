@@ -8,6 +8,19 @@ and uses semantic versioning for published package releases.
 ## [Unreleased]
 
 ### Changed
+- **BREAKING:** the plugin ships zero bundled workflows and commands. The
+  repo-* review suite (eight leaves + the repo-review meta, plus the
+  /repo-bughunt and /repo-review commands and the repo-review-command-protocol
+  skill) moved to the operator's global workflow registry. The bundled-tier
+  discovery mechanism remains for downstream packagers.
+
+### Removed
+- The deprecated beads domain (`workflow-domains/`): beads-drain workflow,
+  host drain adapter, review-materialize tool/command, beads-drain skill.
+  The trusted-extension mechanism itself is unchanged and now tested against
+  synthetic fixtures only.
+
+### Changed
 
 - Replaced the LLM-probe live-gate subsystem with a deterministic runtime
   trust model (Design C): a memoized `GET /global/health` server-version

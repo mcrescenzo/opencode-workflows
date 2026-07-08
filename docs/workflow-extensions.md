@@ -10,8 +10,10 @@
 
 `where a file lives` is independent of `how much the kernel trusts it`:
 
-1. **Untrusted guest workflows** — the scripts in `workflows/` (and project/global
-   dirs). They run in a sandboxed QuickJS VM with only injected globals
+1. **Untrusted guest workflows** — the scripts resolved from project, global, or
+   extension `workflows/` directories (the bundled tier remains a resolution
+   mechanism for downstream packagers; this repo ships none there). They run
+   in a sandboxed QuickJS VM with only injected globals
    (`args`, `agent`, `parallel`, `pipeline`, `phase`, `log`, `budget`, `workflow`,
    `drain`). No `fs`, `bd`, `child_process`, or `require`. Trust does **not** depend
    on where the file came from — running one confers no host power.

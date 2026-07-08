@@ -1,13 +1,14 @@
 # General-Purpose Workflow Harness Extraction Plan
 
-> Status: **IMPLEMENTED (2026-06-30).** The generic-harness extraction shipped:
-> drain modes/profiles/normalization are generic, beads logic (adapter + mutation
-> finalizers) is an external trusted extension at `workflow-domains/beads/`
-> (publish-excluded, config-loaded), and the kernel grep-gate is clean of
-> beads-drain references. See [workflow-extensions.md](workflow-extensions.md) for
-> the shipped architecture + how to write/register an extension. The
-> `review_materialize` tool has also been externalized as a Beads extension tool
-> now that extension-tool contribution support exists.
+> Status: **SUPERSEDED.** This IMPLEMENTED (2026-06-30) milestone shipped the
+> generic-harness extraction described below: drain modes/profiles/normalization
+> generic, beads logic (adapter + mutation finalizers) moved to an in-tree
+> `workflow-domains/beads/` trusted extension, and the kernel grep-gate clean of
+> beads-drain references. The pure-architecture cut later deleted
+> `workflow-domains/` entirely rather than externalizing it further — see
+> [workflow-extensions.md](workflow-extensions.md) for the current seam
+> mechanism and the CHANGELOG for the deletion. Current state: the core
+> package ships zero bundled domain extensions.
 > The plan text below is retained for rationale/history.
 >
 > **Audited 2026-06-29** against committed source (11-lane verification + gap
