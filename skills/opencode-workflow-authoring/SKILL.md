@@ -154,9 +154,9 @@ throttle.
 
 A workflow's return value is size-capped. Spill large findings with
 `persistArtifacts({ namespace, files: [{ name, content }] })` — `.json`,
-`.jsonl`, or `.md` file names only — and return a summary that references
-them; artifacts land under the run's private `artifacts/<namespace>/`
-directory. Use `inventoryFiles(...)` for a deterministic, sorted file
+`.jsonl`, or `.md` file names only, 16 MiB per file — and return a summary
+that references them; artifacts land under the run's private
+`artifacts/<namespace>/` directory. Use `inventoryFiles(...)` for a deterministic, sorted file
 inventory with bounded shards instead of spending an agent lane on "explore
 the repo with tools." `drain(...)` is the host-owned primitive behind
 autonomous drain harnesses (`meta.harness: "drain"` with the drain

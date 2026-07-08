@@ -57,7 +57,9 @@ export function laneAuthorityInstruction(authority = {}) {
   else denied.push("network");
   if (authority.mcp) granted.push("mcp");
   else denied.push("mcp");
-  if (authority.integration) granted.push("integration");
+  // Integration is enforced only for edit-capable lanes (resolveLanePolicy strips it from the
+  // permission ruleset otherwise) — never advertise a grant the ruleset will deny.
+  if (authority.integration && (authority.edit || authority.worktreeEdit)) granted.push("integration");
   const grantText = granted.length ? `read/search plus ${granted.join(", ")}` : "read/search only";
   const denyText = denied.length
     ? ` Not permitted: ${denied.join(", ")} — such tool calls are denied by policy; do not retry them.`

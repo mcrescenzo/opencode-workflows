@@ -97,6 +97,22 @@ test("problem card renders retry context and inspect hint", () => {
   assertLineWidths(card);
 });
 
+test("inspect hint splits onto two lines when a long run id exceeds the card width", () => {
+  const longId = "wf_overflow_beyond_line_max";
+  const snapshot = workflowToastCardSnapshot(baseRun({ id: longId }), { now: NOW });
+  const card = renderWorkflowProblemCard(snapshot, {
+    label: "verify:auth-token",
+    reason: "timeout",
+    attempt: 2,
+    maxAttempts: 3,
+    retryInMs: 8_000,
+    ordinal: "2nd failure this run",
+  });
+  const lines = card.message.split("\n");
+  assert.deepEqual(lines.slice(-2), ["inspect: workflow_status", `  runId=${longId}`]);
+  assertLineWidths(card);
+});
+
 test("terminal card renders lane totals, budget, final log, and inspect hint", () => {
   const snapshot = workflowToastCardSnapshot(baseRun({
     status: "completed",

@@ -1490,6 +1490,12 @@ test("laneAuthorityInstruction renders grants and denials from authority flags",
   );
   assert.match(laneAuthorityInstruction({ worktreeEdit: true }), /worktree edit \(isolated worktree only\)/);
   assert.match(laneAuthorityInstruction(undefined), /read\/search only/);
+  // Non-edit lanes have integration stripped from their enforced permissions, so it must not
+  // be advertised as a grant (default drain-autonomous-local lane shape).
+  assert.equal(
+    laneAuthorityInstruction({ readOnly: true, integration: true }),
+    "Lane authority: read/search only. Not permitted: edit, shell, network, mcp — such tool calls are denied by policy; do not retry them.",
+  );
 });
 
 test("child lane system prompt discloses the lane's resolved authority ceiling", async () => {

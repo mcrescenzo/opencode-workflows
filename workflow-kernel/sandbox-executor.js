@@ -421,7 +421,7 @@ function readVmErrorMessage(vm, errorHandle) {
 // (blocker: artifactPersistenceFailed) instead of crashing the whole workflow. This preserves the
 // read-only-review contract: the workflow performs no workspace/source writes, only controller-owned
 // runtime artifacts under the run directory (the kernel already persists state/events/result there).
-const ARTIFACT_MAX_BYTES = 16 * 1024 * 1024; // generous — the bead exists because output can exceed 256 KiB
+const ARTIFACT_MAX_BYTES = 16 * 1024 * 1024; // generous — artifacts exist because workflow output can exceed the 256 KiB result cap
 async function persistRunArtifacts(pluginContext, run, payload) {
   if (pluginContext?.__workflowArtifactFail) {
     return { ok: false, error: "artifact persistence disabled by test hook", dir: null, files: [] };

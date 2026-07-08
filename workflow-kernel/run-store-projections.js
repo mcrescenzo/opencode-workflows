@@ -376,13 +376,13 @@ async function computeSalvageCandidates(runDir, state = {}) {
   if (lanes.length === 0) return [];
   const journal = await loadJournal(runDir);
   const candidates = [];
+  const runId = state?.id || "<this run>";
   for (const lane of lanes) {
     const callId = lane?.callId;
     const childID = lane?.childID;
     if (!callId || !childID || lane.status !== "running") continue;
     const completed = journal.get(callId);
     if (completed && completed.outcome === "success") continue;
-    const runId = state?.id || '<this run>';
     candidates.push({
       callId,
       childID,
