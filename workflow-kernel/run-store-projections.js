@@ -369,7 +369,7 @@ async function removeLaneCheckpoint(runDir, callId, kind) {
 
 // Salvage candidates are mid-flight lanes (status "running" with a childID) whose owning
 // process died before recording a success journal entry. The child transcript may still
-// hold the lane result, so read-only status names each orphan and emits a session_read
+// hold the lane result, so read-only status names each orphan and emits a workflow_salvage
 // hint. Computed purely from durable projections + journal; no mutation, no resume effect.
 async function computeSalvageCandidates(runDir, state = {}) {
   const lanes = await readLaneProjections(runDir, state);
