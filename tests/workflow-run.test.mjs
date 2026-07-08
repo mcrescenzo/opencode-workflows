@@ -2002,6 +2002,22 @@ test("named project workflow resolves from a trusted root without opt-in (no reg
   }
 });
 
+test("by-name preview reports approveByReference: false (approve-by-reference is inline-source only)", async () => {
+  const { tools, context, directory } = await makeHarness(async () => {
+    throw new Error("named workflow should not call child prompts");
+  });
+  try {
+    const projectRoot = __test.projectWorkflowDir(context);
+    await fs.mkdir(projectRoot, { recursive: true });
+    await fs.writeFile(path.join(projectRoot, "named-project.js"), EXTERNAL_WORKFLOW_SOURCE, "utf8");
+
+    const preview = JSON.parse(await tools.workflow_run.execute({ name: "named-project", format: "json" }, context));
+    assert.equal(preview.approveByReference, false);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("workflow_save rejects duplicates and invalid sources", async () => {
   const { tools, context, directory } = await makeHarness(async () => {
     throw new Error("workflow_save validation must not prompt a model");

@@ -601,7 +601,13 @@ function releaseAgentSlot(run) {
 // so it never blocks an otherwise-valid approval.
 function nestedBudgetNotes(run) {
   if (!run.nestedSnapshots?.size) return [];
-  const uniqueByPath = [...new Map([...run.nestedSnapshots.values()].map((item) => [item.sourcePath, item])).values()];
+  // Dedup key: inline nested snapshots all share the "<inline>" sentinel path, so plain
+  // path-keyed dedup would collapse distinct inline nested workflows to one warning line —
+  // key those by hash instead (mirrors approvalSnapshotList in approval-hashing.js).
+  const uniqueByPath = [...new Map([...run.nestedSnapshots.values()].map((item) => [
+    item.sourcePath === "<inline>" ? `<inline>:${item.sourceHash}` : item.sourcePath,
+    item,
+  ])).values()];
   const notes = ["Nested budget: nested workflow() lanes run inside this run and share its Max agents budget; a nested workflow's own declared maxAgents is ignored at runtime."];
   for (const item of uniqueByPath) {
     let declared;
@@ -676,7 +682,7 @@ function approvalPreviewEnvelope(run) {
       ...run.sourceMetadata,
     },
     approvalHash: approvedHash,
-    approveByReference: true,
+    approveByReference: run.sourcePath === "<inline>",
     runtimeArgsPreview: run.argsPreview,
     laneBudget: {
       maxAgents: run.maxAgents,
