@@ -1,10 +1,11 @@
-// Audited-shell command policy for repo-review (iui1.7).
+// Audited-shell command policy for the kernel's "inspect-with-shell" authority profile.
 //
-// repo-review ships static + read-only by default (profile "read-only-review": readOnly, no
-// shell/network/mcp). The OPTIONAL audited-shell deep mode is the inspect-with-shell profile
-// (readOnly + shell) with a STRICT read-only command allowlist (git ls-files, git log --numstat,
-// npm ls --depth=0, cargo tree, pip list, go list). Installs, audit-network, and ANY mutation
-// command are denied. Enables real git-churn for complexity + live dep lists.
+// Most read-only workflows run under "read-only-review" (readOnly, no shell/network/mcp). The
+// OPTIONAL "inspect-with-shell" profile (readOnly + shell) layers a STRICT read-only command
+// allowlist on top (git ls-files, git log --numstat, npm ls --depth=0, cargo tree, pip list,
+// go list). Installs, audit-network, and ANY mutation command are denied. This lets any
+// workflow or extension that opts into the profile read real git-churn history and live
+// dependency trees without shell-level mutation or network access.
 //
 // This module is PURE (no fs/shell/network) so the policy is fully unit-testable without a real
 // repo. It supplies the allowlist/denylist that resolveRunAuthority (authority-policy.js) turns

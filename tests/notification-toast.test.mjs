@@ -72,7 +72,7 @@ function toastRun(overrides = {}) {
   return {
     id: "wf_x1",
     status: "running",
-    meta: { name: "repo-bughunt", phases: ["Scan", "Verify"] },
+    meta: { name: "fixture-review", phases: ["Scan", "Verify"] },
     currentPhase: "Verify",
     startedAt: "2026-07-07T12:00:00.000Z",
     agentsStarted: 1,
@@ -99,7 +99,7 @@ test("createWorkflowToastEventSink emits an immediate heartbeat on phase events"
 
   assert.equal(calls.length, 1);
   assert.equal(calls[0].variant, "info");
-  assert.equal(calls[0].title, "▶ repo-bughunt · 1m");
+  assert.equal(calls[0].title, "▶ fixture-review · 1m");
   assert.match(calls[0].message, /^└ Verify \(2\/2\)/);
 });
 
@@ -113,6 +113,6 @@ test("maybeShowWorkflowProgressToast uses policy dedup and ASCII card option", a
   assert.equal(await maybeShowWorkflowProgressToast(context, run, { now: now + 10_000, forceMs: 75_000 }), false);
 
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].title, "> repo-bughunt | 1m");
+  assert.equal(calls[0].title, "> fixture-review | 1m");
   assert.doesNotMatch(calls[0].message, /[└├⟳⚠»✓✗⧗·—]/);
 });

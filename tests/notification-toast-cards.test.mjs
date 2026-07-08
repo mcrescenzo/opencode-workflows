@@ -15,7 +15,7 @@ const NOW = Date.parse("2026-07-07T12:04:12Z");
 function baseRun(overrides = {}) {
   return {
     id: "wf_x1",
-    meta: { name: "repo-bughunt", phases: ["Scan", "Verify", "Fix"] },
+    meta: { name: "fixture-review", phases: ["Scan", "Verify", "Fix"] },
     currentPhase: "Verify",
     status: "running",
     startedAt: "2026-07-07T12:00:00Z",
@@ -44,7 +44,7 @@ function assertLineWidths(card) {
 
 test("heartbeat card renders indented outline status and cuts low-value fields", () => {
   const card = renderWorkflowHeartbeatCard(workflowToastCardSnapshot(baseRun(), { now: NOW }));
-  assert.equal(card.title, "▶ repo-bughunt · 4m12s");
+  assert.equal(card.title, "▶ fixture-review · 4m12s");
   assert.equal(card.message, [
     "└ Verify (2/3)",
     "  ├ ⟳ review:perf 2m · ⚠idle",
@@ -87,7 +87,7 @@ test("problem card renders retry context and inspect hint", () => {
     ordinal: "2nd failure this run",
   });
   assert.equal(card.variant, "warning");
-  assert.equal(card.title, "✗ lane failed · repo-bughunt");
+  assert.equal(card.title, "✗ lane failed · fixture-review");
   assert.equal(card.message, [
     "verify:auth-token — timeout (attempt 2/3)",
     "retrying in 8s · 2nd failure this run",
@@ -111,7 +111,7 @@ test("terminal card renders lane totals, budget, final log, and inspect hint", (
   }), { now: NOW });
   const card = renderWorkflowTerminalCard(snapshot);
   assert.equal(card.variant, "success");
-  assert.equal(card.title, "✓ repo-bughunt done · 12m40s");
+  assert.equal(card.title, "✓ fixture-review done · 12m40s");
   assert.equal(card.message, [
     "✓ Scan ✓ Verify ✓ Fix",
     "22 lanes: ✓20 ✗2",
@@ -128,7 +128,7 @@ test("apply card supports ASCII fallback for terminals with poor glyph rendering
     editPlan: { diffPlanHash: "abcdef0123456789", patches: [{}, {}] },
   }), { now: NOW });
   const card = renderWorkflowApplyCard(snapshot, { ascii: true });
-  assert.equal(card.title, "> repo-bughunt | apply running");
+  assert.equal(card.title, "> fixture-review | apply running");
   assert.equal(card.message, [
     "\\ apply running",
     "  patches 2",

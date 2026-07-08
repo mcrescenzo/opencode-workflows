@@ -1,6 +1,6 @@
 ---
 name: workflow-model-tiering
-description: Use BEFORE running any workflow whose lanes declare fast/deep tiers (e.g. repo-bughunt). Enumerate available models with workflow_models, map fast/deep to concrete models in the invoking session's family, and confirm with the user ONLY when the plan deviates from that family.
+description: Use BEFORE running any workflow whose lanes declare fast/deep tiers (e.g. a review workflow whose finder lanes are fast-tier and verifier lanes deep-tier). Enumerate available models with workflow_models, map fast/deep to concrete models in the invoking session's family, and confirm with the user ONLY when the plan deviates from that family.
 ---
 
 # Workflow model tiering

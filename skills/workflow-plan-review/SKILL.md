@@ -47,10 +47,10 @@ something to understand and refine, not a hash to echo back.
    - `laneTimeoutMs` (alias `childPromptTimeoutMs`) — per-lane prompt cap.
 
    **Per-workflow scope knobs** — read them from `runtimeArgsPreview` (or the text preview's
-   `Runtime args preview` line) and the workflow's declared args (e.g. `paths`/`depth`/
-   `categories` for repo-bughunt, `domains`/
-   `batchSize` for repo-review, `mode`/`scope` for beads-drain). If you are unsure which scope args
-   a named workflow accepts, check `workflow_list` or read its source before offering them.
+   `Runtime args preview` line) and the workflow's declared args (e.g. paths/depth/categories for a
+   review leaf, domains/batchSize for a meta-orchestrator, mode/scope for a drain workflow). If you
+   are unsure which scope args a named workflow accepts, check `workflow_list` or read its source
+   before offering them.
 
 4. **Re-plan on any change.** If the user refines anything, re-call `workflow_run` **without**
    `approve` with the new args/modelTiers/budget. You get a fresh preview and a fresh `approvalHash`
@@ -78,13 +78,13 @@ unwanted multi-lane run.
 
 Not every workflow has a static lane count you can quote up front:
 
-- **Static fan-out** (repo-bughunt, repo-* leaves, repo-review): the structure is knowable
+- **Static fan-out** (review leaves and meta-orchestrators): the structure is knowable
   (e.g. recon → N finders → skeptics → pure-JS synth), but some counts depend on results (number
   of skeptics depends on number of findings). Present the *structure* and flag counts that are
   data-dependent rather than implying a fixed number.
-- **Discovery-driven** (beads-drain): the lane count depends on the live backlog. For beads-drain
-  specifically, the dry-run (`mode: "dry-run"`) **is** the plan — it reports the ready items that
-  would be worked. Offer a dry-run as the preview for non-dry intent.
+- **Discovery-driven** (a drain workflow): the lane count depends on the live backlog/queue. For a
+  drain workflow specifically, the dry-run (`mode: "dry-run"`) **is** the plan — it reports the
+  ready items that would be worked. Offer a dry-run as the preview for non-dry intent.
 - **Dynamic/inline**: if you cannot determine the structure, say so plainly and lean on the
   envelope (authority, models, budget, background) plus `Max agents` as the ceiling.
 

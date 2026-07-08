@@ -42,8 +42,9 @@ See `CONTRIBUTING.md` for the full contributor prerequisites, lockfile policy, a
 
 ## Source Checkout Verification
 
-The npm package ships the runtime plugin, bundled workflows, commands, skills,
-and the "Active operator references" / "Active technical contracts" docs listed
+The npm package ships the runtime plugin and skills — the plugin bundles zero
+workflows and zero commands (see "Command And Skill Registration" below) —
+plus the "Active operator references" / "Active technical contracts" docs listed
 in the Documentation Map below (see `files` in `package.json` for the exact
 list). It does not ship this repository's `tests/`, `scripts/`, or reference
 extension source. It also does not ship the "Historical snapshots / audits" or
@@ -57,10 +58,9 @@ Run the nested repo workflow regression wrapper from this directory:
 npm run test:workflows
 ```
 
-This wrapper covers the core `workflow_run` / `workflow_apply` paths and the
-`repo-*` review workflows. Kernel drain, extension-seam, and durable
-state coverage live in the focused scripts below and in the catch-all `npm test`
-matrix.
+This wrapper covers the core `workflow_run` / `workflow_apply` paths. Kernel
+drain, extension-seam, and durable state coverage live in the focused scripts
+below and in the catch-all `npm test` matrix.
 
 Run focused kernel and extension coverage from this directory:
 
@@ -95,19 +95,21 @@ model-tier hints, and safe readback steps. The docs below are operator guidance,
 technical contracts, or historical context.
 
 **Packaged vs GitHub-only.** Under the `files[]` policy, a doc ships inside the
-published npm tarball only when a shipped command, skill, or workflow instructs
-an *agent* to read it at runtime (a prompt/instruction string, not a code comment
-or this README's own prose). `docs/workflow-plugin.md` is the only doc that
-clears that bar today — three bundled commands point a running agent at
-`docs/workflow-plugin.md#workflow-tool-reference`. Every other doc below lives in
-the GitHub repository only: read it from a source checkout, or follow the
-GitHub links in the table.
+published npm tarball only when it is load-bearing for the kernel API a shipped
+skill or extension directly depends on, not merely cited in a code comment or
+this README's own prose. `docs/workflow-plugin.md` is the only doc that clears
+that bar today: it is the canonical `workflow_*` tool reference
+(`docs/workflow-plugin.md#workflow-tool-reference`) that every extension,
+skill, or agent invoking `workflow_run`/`workflow_apply`/`workflow_status`
+depends on — independent of any bundled command, since the plugin ships none.
+Every other doc below lives in the GitHub repository only: read it from a
+source checkout, or follow the GitHub links in the table.
 
 | Category | Documents | Packaged? |
 | --- | --- | --- |
 | Ships with the npm package | `docs/workflow-plugin.md` | **Yes** |
-| Active operator references (GitHub only) | `README.md`, `commands/*.md`, `skills/*/SKILL.md`, [docs/workflow-recipes.md](https://github.com/mcrescenzo/opencode-workflows/blob/main/docs/workflow-recipes.md), [docs/plugin-system-tests.md](https://github.com/mcrescenzo/opencode-workflows/blob/main/docs/plugin-system-tests.md), [docs/repo-review.md](https://github.com/mcrescenzo/opencode-workflows/blob/main/docs/repo-review.md), [docs/run-audit-playbook.md](https://github.com/mcrescenzo/opencode-workflows/blob/main/docs/run-audit-playbook.md), [docs/goal-supervision-autonomous-drains.md](https://github.com/mcrescenzo/opencode-workflows/blob/main/docs/goal-supervision-autonomous-drains.md) | No (`README.md` itself ships) |
-| Active technical contracts (GitHub only) | [docs/workflow-extensions.md](https://github.com/mcrescenzo/opencode-workflows/blob/main/docs/workflow-extensions.md), [docs/repo-review-leaf-contract.md](https://github.com/mcrescenzo/opencode-workflows/blob/main/docs/repo-review-leaf-contract.md), [docs/repo-review-parity-matrix.md](https://github.com/mcrescenzo/opencode-workflows/blob/main/docs/repo-review-parity-matrix.md) | No |
+| Active operator references (GitHub only) | `README.md`, `skills/*/SKILL.md`, [docs/workflow-recipes.md](https://github.com/mcrescenzo/opencode-workflows/blob/main/docs/workflow-recipes.md), [docs/plugin-system-tests.md](https://github.com/mcrescenzo/opencode-workflows/blob/main/docs/plugin-system-tests.md), [docs/run-audit-playbook.md](https://github.com/mcrescenzo/opencode-workflows/blob/main/docs/run-audit-playbook.md), [docs/goal-supervision-autonomous-drains.md](https://github.com/mcrescenzo/opencode-workflows/blob/main/docs/goal-supervision-autonomous-drains.md) | No (`README.md` itself ships) |
+| Active technical contracts (GitHub only) | [docs/workflow-extensions.md](https://github.com/mcrescenzo/opencode-workflows/blob/main/docs/workflow-extensions.md) | No |
 | Historical snapshots / audits (GitHub only) | `docs/release-gate-validation-2026-06-16.md`, `docs/dogfood-rollout-2026-06-16.md`, `docs/workflow-autonomous-harness-design.md`, `docs/review-2026-06-19-bug-robustness-remediation-plan.md`, `docs/superpowers/plans/2026-06-23-port-repo-bughunt-to-opencode.md`, `docs/superpowers/plans/2026-06-23-session-aware-model-tiering-plan.md` | No |
 | Roadmap / planning (GitHub only) | `docs/workflow-autonomous-harness-plan.md`, `docs/general-purpose-harness-extraction-plan.md`, `docs/claude-parity-roadmap.md`, `docs/superpowers/specs/2026-06-23-session-aware-model-tiering-design.md` | No |
 
@@ -133,13 +135,15 @@ opencode plugin hooks:
 
 ## Command And Skill Registration
 
-At opencode startup the plugin config hook registers the bundled commands —
-`repo-bughunt` and `repo-review` — plus any
-commands contributed by configured extensions (for example a drain command from a
-trusted extension), and adds this plugin's `skills` directory (and extension skill dirs) to
-`skills.paths`. Restart opencode after
-changing plugin commands, skills, or config-time registration code; the running
-process keeps the previously loaded config.
+The plugin registers zero bundled commands of its own. At opencode startup the
+plugin config hook registers only the commands contributed by configured
+extensions (for example a drain command from a trusted extension) and by the
+operator's own project/global opencode config, and adds this plugin's `skills`
+directory — three authoring/operator skills (`opencode-workflow-authoring`,
+`workflow-model-tiering`, `workflow-plan-review`) — plus any extension skill
+dirs to `skills.paths`. Restart opencode after changing plugin commands,
+skills, or config-time registration code; the running process keeps the
+previously loaded config.
 
 ## Extension Trust Boundary
 
@@ -159,72 +163,17 @@ behavior. Only install extensions you would trust as local code.
 
 ## Source Versus Local State
 
-Intentional source assets live in `.github/`, `commands/`, `docs/`, `skills/`,
-`tests/`, the source-checkout reference extension directory, `workflow-kernel/`,
-`workflows/`, `opencode-workflows.js`, root package/community files, and this README. The local
-`.opencode/` directory is runtime/install state for this work area, including
-goal state, workflow run records, package metadata, and `node_modules`.
+Intentional source assets live in `.github/`, `docs/`, `skills/`, `tests/`
+(including the synthetic `fixture-drain` reference extension under
+`tests/fixtures/drain-extension/`), `workflow-kernel/`, `opencode-workflows.js`,
+root package/community files, and this README. The plugin bundles zero
+`workflows/` or `commands/`; those directories do not exist in this repo. The
+local `.opencode/` directory is runtime/install state for this work area,
+including goal state, workflow run records, package metadata, and
+`node_modules`.
 
 Those `.opencode/` artifacts are ignored rather than deleted so active workflow
 or goal evidence remains available locally while staying out of source review.
-
-## Repo Review Suite
-
-The `repo-*` review suite is a set of read-only analysis workflows ported from a
-Claude Code suite. It ships **eight leaf workflows** (`repo-bughunt`,
-`repo-security-audit`, `repo-test-gaps`, `repo-cleanup`, `repo-modernize`,
-`repo-perf`, `repo-complexity`, `repo-deps`), a **`repo-review` meta orchestrator**
-that runs all eight with one shared recon pass and merges/ranks findings cross-domain,
-and two commands: `/repo-bughunt` (single-domain) and `/repo-review` (full-suite).
-
-Every leaf and the meta run under `profile: "read-only-review"` — no shell, edit, git,
-network, or MCP. The QuickJS guest physically cannot write
-files, so every envelope carries `reportPath: null`; **guests return data, they never
-write**. Only the command wrapper persists a report under the gitignored
-`.repo-review/runs/` directory (`<run-id>-bughunt-report.md` or
-`<run-id>-repo-review-report.md`), and that report artifact is the only allowed
-workspace write from a repo-review command.
-
-Launch leaves/meta by name. Example leaf and meta runs (the operator resolves `fast`
-(recon + finders) and `deep` (skeptics) model tiers via `workflow_models`; see
-`workflow-model-tiering`):
-
-```js
-workflow_run({ name: "repo-bughunt", args: { "depth": "normal", "paths": ["src"] }, modelTiers: { "fast": "...", "deep": "..." } })
-workflow_run({ name: "repo-review",  args: { "depth": "thorough", "domains": ["bughunt", "security"] }, modelTiers: { "fast": "...", "deep": "..." } })
-```
-
-Workflow source can additionally request OpenAI-only per-lane reasoning effort:
-`agent(prompt, { tier: "deep", effort: "high" })`. Valid values are `minimal`,
-`low`, `medium`, and `high`; the plugin applies them through OpenAI
-`chat.params` provider options. A lane whose resolved model is not an OpenAI
-provider fails before child launch rather than silently ignoring `effort`.
-
-The meta uses **static one-level nesting only**: it calls each leaf via a literal
-`workflow("repo-bughunt", args)` name, and a nested leaf's own declared
-`maxAgents`/`concurrency` is **ignored at runtime** — the parent run's budget governs
-the whole tree (see "Sizing `maxAgents`" below). Read the merged result via
-`workflow_status({ runId, detail: "result" })`; treat raw
-`.opencode/workflows/runs/` files as local sensitive artifacts and prefer the redacted
-`workflow_status` readback.
-
-**Nothing mutates automatically.** `workflow_apply`, git writes, and any
-extension-contributed mutation (materialization or drain) are separate explicit
-follow-ups and are never run by any repo-review workflow or command. The optional
-`inspect-with-shell` carve-outs (the `repo-complexity` churn lens and `repo-deps`
-manifest inspection) are deferred as a product-scope decision, not a runtime
-limitation — every `repo-*` lane stays plain read-only-review today. Note also
-that Design C deleted the native structured-output route; the kernel's
-structured-text path (JSON-schema system-prompt instruction, reply parsed +
-validated) is the only structured-output path.
-
-The full user-facing guide, per-domain one-liners, the arg tables, the nested-restriction
-and budgeting details, and the deferred-mutation boundary live in
-[docs/repo-review.md](https://github.com/mcrescenzo/opencode-workflows/blob/main/docs/repo-review.md)
-(GitHub only, not packaged). The exact leaf envelope, finding fields,
-fingerprint, counts shape, size-fit semantics, and meta-to-leaf arg contract are the
-named technical spec in [docs/repo-review-leaf-contract.md](https://github.com/mcrescenzo/opencode-workflows/blob/main/docs/repo-review-leaf-contract.md)
-(GitHub only, not packaged).
 
 ## Sizing `maxAgents`
 

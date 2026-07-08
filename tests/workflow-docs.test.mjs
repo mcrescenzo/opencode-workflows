@@ -69,12 +69,3 @@ test("workflow tool reference lists every registered workflow tool and approval 
     assert.ok(doc.includes(term), `tool reference missing ${term}`);
   }
 });
-
-test("command docs link repeated safety caveats to canonical references", async () => {
-  const commandFiles = [];
-  for (const rel of commandFiles) {
-    const text = await read(rel);
-    assert.match(text, /Canonical references:/, `${rel} must point to canonical references`);
-    assert.ok(text.includes("docs/workflow-plugin.md#workflow-tool-reference"), `${rel} must link the workflow tool reference`);
-  }
-});

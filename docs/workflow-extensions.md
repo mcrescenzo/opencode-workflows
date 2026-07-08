@@ -1,8 +1,10 @@
 # Workflow Extensions (Trusted Domain Adapters)
 
-> Status: **implemented** (the generic-harness extraction shipped). The core plugin
-> is a domain-neutral workflow harness; domain-specific autonomous-drain behavior
-> (e.g. Beads) is supplied by **trusted extensions** loaded by explicit config.
+> Status: **implemented** (the generic-harness extraction shipped; the core package
+> ships zero bundled domain extensions as of the pure-architecture cut). The core
+> plugin is a domain-neutral workflow harness; domain-specific autonomous-drain
+> behavior (e.g. a ticket-tracker backlog drain) is supplied by **trusted
+> extensions** loaded by explicit config.
 
 ## The three trust tiers
 
@@ -31,10 +33,10 @@ Two principles follow:
 
 ## What a guest can't do, and why `drain()` exists
 
-A workflow script runs sandboxed, so it cannot read/write a domain store (e.g. run
-`bd`) or touch the filesystem. The host-owned `drain()` primitive is the trust
-boundary: a guest calls `drain({ adapter: "beads", mode })`, which marshals across
-to `runHostDrain` in the trusted host. The host creates the registered adapter and
+A workflow script runs sandboxed, so it cannot read/write a domain store (e.g. a
+ticket tracker's database) or touch the filesystem. The host-owned `drain()`
+primitive is the trust boundary: a guest calls `drain({ adapter: "my-domain", mode })`,
+which marshals across to `runHostDrain` in the trusted host. The host creates the registered adapter and
 runs the controller loop (discover → claim → orchestrate lanes → validate → stage
 mutations → finalize), all in trusted code. The verified-autonomous-drain safety
 guarantees (staged → finalized idempotent mutation ledger; gate enforcement;
@@ -168,8 +170,10 @@ export default {
 `toolKit` injects the kernel's single `tool` + `schema` (one zod instance — no
 `@opencode-ai/plugin` dependency in the extension), `pluginContext`, and
 `assertWriteWorkflowAllowed`. Tool names are fail-closed: an extension may not reuse a
-core tool name or a name another extension already contributed. `review_materialize`
-(in the beads extension) is the reference example.
+core tool name or a name another extension already contributed.
+`tests/extension-tool-contribution.test.mjs` exercises this contract end-to-end
+against a synthetic `ext_probe` tool (factory form) and a `plain_tool` (plain-object
+form).
 
 ## Security model
 
@@ -188,34 +192,28 @@ core tool name or a name another extension already contributed. `review_material
 - Domain mutations are staged and finalized only after a successful primary apply,
   through a durable idempotent ledger.
 
-## Beads is the reference extension
+## The in-tree reference example
 
-In this source repository, the Beads domain is the reference extension outside
-the published core package. It exercises every seam: the drain adapter +
-mutation finalizers (capabilities), the thin `beads-drain`
-workflow/command/skill (asset dirs), and the `review_materialize` plugin tool
-(tool contribution). The core kernel is domain-neutral.
+The core package ships zero bundled domain extensions; there is no
+`workflow-domains/` directory in this repo. Instead, this repository's own test
+suite is the reference example for the seam described above:
 
-The source-checkout reference extension lives at:
+- `tests/fixtures/drain-extension/extension.js` is a minimal extension
+  (`{ id: "fixture-drain-ext", assetDirs: { workflows: "./workflows" } }`) whose
+  `assetDirs.workflows` contributes
+  `tests/fixtures/drain-extension/workflows/fixture-drain.js`, a thin
+  `harness: "drain"` workflow exercised end-to-end (including auto-apply) in
+  `tests/workflow-run.test.mjs`.
+- `tests/extension-wiring.test.mjs`, `tests/extension-registry.test.mjs`, and
+  `tests/extension-auto-apply-trust.test.mjs` register synthetic extension
+  definitions (`id`, `drainAdapters`, `mutationHandlers`) directly against
+  `WorkflowPlugin` / `createExtensionRegistry`, covering the same contract the
+  `my-domain` examples above describe.
+- `tests/extension-tool-contribution.test.mjs` exercises the `tools(toolKit)`
+  factory form and the plain-object form end-to-end.
 
-```text
-workflow-domains/beads/beads-extension.js
-```
-
-Enable it from an OpenCode config that points at a source checkout:
-
-```json
-{
-  "plugin": [
-    ["./path/to/opencode-workflows/opencode-workflows.js", {
-      "extensions": ["./path/to/opencode-workflows/workflow-domains/beads/beads-extension.js"]
-    }]
-  ]
-}
-```
-
-When using `@mcrescenzo/opencode-workflows` from the published package, the core
-package does not contain `workflow-domains/`. Provide a separately installed or
-copied Beads extension module and list that module path in `extensions`. Without
-that explicit extension, `beads-drain` and `/review-materialize` are absent from
-workflow and command discovery.
+This scaffolding is domain-neutral test fixture code, not a bundled domain
+extension — it proves the seam works without shipping any domain logic. A real
+extension for your own domain follows the same shape (`id`, `assetDirs`,
+`drainAdapters`, `mutationHandlers`, and/or `tools`) and loads the same way, via
+the explicit `extensions` config shown above.

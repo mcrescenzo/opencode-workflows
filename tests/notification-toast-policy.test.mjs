@@ -11,7 +11,7 @@ import {
 function snapshot(overrides = {}) {
   return {
     id: "wf_x1",
-    name: "repo-bughunt",
+    name: "fixture-review",
     phase: { name: "Verify", label: "Verify (2/3)" },
     activeAgents: 3,
     queuedAgents: 5,
