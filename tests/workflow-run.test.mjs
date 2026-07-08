@@ -26,8 +26,35 @@ import { __resetFingerprintCacheForTests } from "../workflow-kernel/server-finge
 import { makeHarness, makeTempDir, HARNESS_DEFAULT_MODEL } from "./helpers/harness.mjs";
 import { createWorktreeAdapter } from "../workflow-kernel/worktree-adapter.js";
 import { fakeDrainAdapter, emptyDrainAdapter } from "./helpers/fake-drain-adapter.mjs";
+import { makeExtensionDir, writeFakeExtension } from "./helpers/fake-extension.mjs";
 const execFileAsync = promisify(execFile);
 const { __test } = workflowPlugin;
+
+// Fixture workflow with a fully-populated meta: the invocation-metadata contract
+// (ux.1) is now asserted against this fixture instead of any bundled workflow.
+const RICH_META_WORKFLOW = `export const meta = {
+  name: "fixture-rich",
+  description: "Fixture workflow with complete invocation metadata.",
+  profile: "read-only-review",
+  maxAgents: 4,
+  concurrency: 2,
+  phases: ["recon", "find"],
+  category: "fixture",
+  notes: "Read-only fixture. Finder lanes use fast tier, verification lanes use deep tier.",
+  examples: [
+    { label: "default scan", args: { depth: "normal", paths: ["src"] } },
+  ],
+  argsSchema: {
+    type: ["object", "null"],
+    properties: {
+      paths: { type: "array", items: { type: "string" } },
+      depth: { type: "string", enum: ["quick", "normal"] },
+      categories: { type: "array", items: { type: "string", enum: ["concurrency"] } },
+    },
+  },
+};
+return "ok";
+`;
 
 // The plugin-local no-token regression (this file + sibling suites) is the public
 // source of truth and must remain runnable from a standalone clone. The private
@@ -1606,37 +1633,50 @@ return true;`;
   assert.equal(lookupB.sourceHash, hashB);
 });
 
-test("workflow_list includes bundled workflows with source metadata", async () => {
-  const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }));
+test("workflow_list includes extension workflows with source metadata", async () => {
+  const extDir = await makeExtensionDir();
+  const extPath = await writeFakeExtension(extDir, {
+    id: "list-meta",
+    assetDirs: { workflows: "./workflows" },
+    workflows: { "fixture-rich": RICH_META_WORKFLOW },
+  });
+  const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }), {
+    extensions: [extPath],
+  });
   try {
     const listed = JSON.parse(await tools.workflow_list.execute({ format: "json" }, context));
-    const drain = listed.find((entry) => entry.scope === "extension" && entry.name === "beads-drain");
-    const drainPath = path.join(path.dirname(__test.BUNDLED_WORKFLOW_DIR), "workflow-domains", "beads", "workflows", "beads-drain.js");
-    const drainSource = await fs.readFile(drainPath, "utf8");
+    const entry = listed.find((e) => e.scope === "extension" && e.name === "fixture-rich");
+    const srcPath = path.join(extDir, "workflows", "fixture-rich.js");
+    const src = await fs.readFile(srcPath, "utf8");
 
-    assert.ok(drain, "missing extension beads-drain workflow");
-    assert.equal(drain.sourcePath, drainPath);
-    assert.equal(drain.sourceHash, __test.hash(drainSource));
-    assert.deepEqual(drain.phases, ["preflight", "snapshot", "claim", "spawn_lanes", "validate", "close", "final_audit", "complete"]);
-    assert.equal(drain.authority.integration, true);
+    assert.ok(entry, "missing extension fixture-rich workflow");
+    assert.equal(entry.sourcePath, srcPath);
+    assert.equal(entry.sourceHash, __test.hash(src));
+    assert.deepEqual(entry.phases, ["recon", "find"]);
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
+    await fs.rm(extDir, { recursive: true, force: true });
   }
 });
 
 test("workflow_list summary format renders authority= without throwing (regression: authoritySummary/truncateText imports)", async () => {
-  // The summary (non-json) formatter calls authoritySummary() and truncateText(); both were
-  // missing from role-template-loading.js imports, so any non-json workflow_list with entries
-  // threw ReferenceError at runtime. Existing tests only used format:"json", which skips this
-  // path. The bundled beads-drain workflow exercises the summary path by default.
-  const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }));
+  const extDir = await makeExtensionDir();
+  const extPath = await writeFakeExtension(extDir, {
+    id: "list-summary",
+    assetDirs: { workflows: "./workflows" },
+    workflows: { "fixture-rich": RICH_META_WORKFLOW },
+  });
+  const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }), {
+    extensions: [extPath],
+  });
   try {
     const summary = await tools.workflow_list.execute({}, context);
     assert.equal(typeof summary, "string");
-    assert.match(summary, /extension\/beads-drain/, "summary should list the extension beads-drain workflow");
+    assert.match(summary, /extension\/fixture-rich/, "summary should list the extension fixture workflow");
     assert.match(summary, /authority=/, "summary must render authority= via authoritySummary");
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
+    await fs.rm(extDir, { recursive: true, force: true });
   }
 });
 
@@ -1672,28 +1712,21 @@ test("ux.1: workflow_list bundled beads-drain carries runnable invocation metada
   }
 });
 
-test("ux.1: all bundled workflows expose machine-readable invocation metadata", async () => {
-  const { tools, context, directory } = await makeHarness(async () => {
-    throw new Error("workflow_list bundled metadata must not prompt a model");
+test("ux.1: extension workflows expose machine-readable invocation metadata", async () => {
+  const extDir = await makeExtensionDir();
+  const extPath = await writeFakeExtension(extDir, {
+    id: "ux1-meta",
+    assetDirs: { workflows: "./workflows" },
+    workflows: { "fixture-rich": RICH_META_WORKFLOW },
   });
+  const { tools, context, directory } = await makeHarness(async () => {
+    throw new Error("workflow_list metadata must not prompt a model");
+  }, { extensions: [extPath] });
   try {
     const listed = JSON.parse(await tools.workflow_list.execute({ format: "json" }, context));
-    // First-party workflows = bundled repo-* + the extension-contributed beads-drain. Every one must
-    // expose invocation metadata. beads-drain is now scope:"extension" (it moved to the beads extension).
-    const bundled = listed.filter((entry) => entry.scope === "bundled" || entry.scope === "extension");
-    assert.deepEqual(bundled.map((entry) => entry.name).sort(), [
-      "beads-drain",
-      "repo-bughunt",
-      "repo-cleanup",
-      "repo-complexity",
-      "repo-deps",
-      "repo-modernize",
-      "repo-perf",
-      "repo-review",
-      "repo-security-audit",
-      "repo-test-gaps",
-    ]);
-    for (const entry of bundled) {
+    const entries = listed.filter((e) => e.scope === "extension" && e.name === "fixture-rich");
+    assert.equal(entries.length, 1, "fixture workflow must be listed exactly once");
+    for (const entry of entries) {
       assert.ok(entry.argsSchema, `${entry.name} must expose argsSchema`);
       assert.ok(entry.invocation?.argsShape, `${entry.name} must expose a summarized args shape`);
       assert.ok(entry.invocation?.category, `${entry.name} must expose a category`);
@@ -1705,36 +1738,7 @@ test("ux.1: all bundled workflows expose machine-readable invocation metadata", 
     }
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
-  }
-});
-
-test("ux.1: repo-review bundled metadata exposes selection args and read-only authority hints", async () => {
-  const { tools, context, directory } = await makeHarness(async () => {
-    throw new Error("workflow_list repo-review metadata must not prompt a model");
-  });
-  try {
-    const listed = JSON.parse(await tools.workflow_list.execute({ format: "json" }, context));
-    const review = listed.find((entry) => entry.scope === "bundled" && entry.name === "repo-review");
-    assert.ok(review, "missing bundled repo-review workflow");
-    assert.equal(review.invocation.category, "repo-review-meta");
-    assert.equal(review.invocation.profile, "read-only-review");
-    assert.equal(review.authority.readOnly, true);
-    assert.equal(review.authority.edit, false);
-    assert.ok(review.argsSchema.properties.domains, "repo-review must document domain selection");
-    assert.ok(review.argsSchema.properties.batchSize, "repo-review must document batchSize");
-    assert.ok(/paths:array/.test(review.invocation.argsShape), "repo-review args shape must include paths");
-    assert.ok(/depth:string/.test(review.invocation.argsShape), "repo-review args shape must include depth");
-    assert.ok(/domains:array/.test(review.invocation.argsShape), "repo-review args shape must include domains");
-    assert.ok(/batchSize:integer/.test(review.invocation.argsShape), "repo-review args shape must include batchSize");
-    assert.ok(review.invocation.runExamples.some((line) => /"domains":\["bughunt","security"\]/.test(line)), "repo-review must show a domain-filtered run example");
-    assert.match(review.invocation.notes, /read-only/i);
-
-    const bughunt = listed.find((entry) => entry.scope === "bundled" && entry.name === "repo-bughunt");
-    assert.ok(bughunt.argsSchema.properties.categories, "repo-bughunt must document categories");
-    assert.ok(bughunt.invocation.argsExamples.some((example) => example.args?.categories?.includes("concurrency")), "repo-bughunt must show category-focused args");
-    assert.match(bughunt.invocation.notes, /fast tier.*deep tier/i);
-  } finally {
-    await fs.rm(directory, { recursive: true, force: true });
+    await fs.rm(extDir, { recursive: true, force: true });
   }
 });
 
@@ -2356,24 +2360,32 @@ test("first-run-slice template runs read-only, synthesizes in pure JS, and write
 });
 
 test("workflow_run resolves extension workflows by name and project overrides win", async () => {
-  const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }));
+  const extDir = await makeExtensionDir();
+  const extPath = await writeFakeExtension(extDir, {
+    id: "resolve-order",
+    assetDirs: { workflows: "./workflows" },
+    workflows: { "fixture-rich": RICH_META_WORKFLOW },
+  });
+  const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }), {
+    extensions: [extPath],
+  });
   try {
     await initGitRepo(directory);
 
-    // beads-drain's baseline source is now the beads extension's workflow dir (extension > bundled).
-    const bundledPath = path.join(path.dirname(__test.BUNDLED_WORKFLOW_DIR), "workflow-domains", "beads", "workflows", "beads-drain.js");
-    const bundledPreview = await tools.workflow_run.execute({ name: "beads-drain" }, context);
-    assert.match(bundledPreview, new RegExp(`Source: ${bundledPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+    const extWorkflowPath = path.join(extDir, "workflows", "fixture-rich.js");
+    const extPreview = await tools.workflow_run.execute({ name: "fixture-rich" }, context);
+    assert.match(extPreview, new RegExp(`Source: ${extWorkflowPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
 
-    const projectPath = path.join(__test.projectWorkflowDir(context), "beads-drain.js");
+    const projectPath = path.join(__test.projectWorkflowDir(context), "fixture-rich.js");
     await fs.mkdir(path.dirname(projectPath), { recursive: true });
-    await fs.writeFile(projectPath, `export const meta = { name: "beads-drain", description: "project override" };
+    await fs.writeFile(projectPath, `export const meta = { name: "fixture-rich", description: "project override" };
 return true;`, "utf8");
-    const projectPreview = await tools.workflow_run.execute({ name: "beads-drain" }, context);
+    const projectPreview = await tools.workflow_run.execute({ name: "fixture-rich" }, context);
     assert.match(projectPreview, new RegExp(`Source: ${projectPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
     assert.match(projectPreview, /Description: project override/);
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
+    await fs.rm(extDir, { recursive: true, force: true });
   }
 });
 
