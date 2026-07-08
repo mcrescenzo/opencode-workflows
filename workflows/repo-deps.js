@@ -24,17 +24,16 @@
 // noted. See DEPS_POLICY below.
 //
 // SHELL-INSPECTION DEFERRAL: the contract (§2/§12) and authority-policy.js reserve
-// the "inspect-with-shell" profile for the documented deps/complexity parity gaps,
-// where a lane could run a read-only command allowlist (e.g. `npm ls`, `cargo tree`)
-// to ground version trees and populate shellCoverage/coverageLimitations. That
-// profile requires verified `permissionEnforcement` + `commandScopedBash` live gates
-// (authority-policy.js:21-24), which are currently UNVERIFIED in this runtime
-// (Stage-0 gate rrev.1: FALLBACK-ACCEPTED, inspect-with-shell NOT verified). This
-// leaf therefore ships the DEFAULT "read-only-review" profile (requiredGates: []) and
-// the shell lens is DEFERRED until those gates are verified. When shell inspection is
-// later enabled, define an explicit read-only command allowlist (deny install/audit
-// network commands) and populate shellCoverage/coverageLimitations; until then, keep
-// the reduced-confidence policy below.
+// the "inspect-with-shell" profile (authority-policy.js:14-16; authority
+// readOnly:true, shell:true) for the documented deps/complexity parity gaps, where
+// a lane could run a read-only command allowlist (e.g. `npm ls`, `cargo tree`) to
+// ground version trees and populate shellCoverage/coverageLimitations. This leaf
+// therefore ships the DEFAULT "read-only-review" profile (authority-policy.js:11-13;
+// authority readOnly:true) and the shell lens is DEFERRED as a matter of profile
+// policy: this engine does not select `inspect-with-shell`. When shell inspection
+// is later enabled, define an explicit read-only command allowlist (deny
+// install/audit network commands) and populate shellCoverage/coverageLimitations;
+// until then, keep the reduced-confidence policy below.
 export const meta = {
   name: "repo-deps",
   description: "Report-only dependency health audit: outdated packages, known CVEs (from local-file analysis), unused/undeclared deps, license risk, version conflicts, and deprecated packages. Read-only lockfile/manifest inspection — no network, no installs, no package-manager mutation. Adversarially verifies the high-risk 'unused/undeclared' findings, ranks them, and returns a structured envelope plus a sequenced upgradePlan. Report-only: returns ranked structured findings; the workflow writes no files.",

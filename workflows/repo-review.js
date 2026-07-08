@@ -8,7 +8,7 @@
 // injected into every literal one-level workflow("repo-X", leafArgs) call, so all eight
 // domains analyze one coherent file inventory and cross-domain dedupe stays consistent.
 //
-// Authority: profile "read-only-review" (readOnly, requiredGates:[]). The meta NEVER
+// Authority: profile "read-only-review" (authority-policy.js:11-13; readOnly:true). The meta NEVER
 // calls materialize, drain, workflow_apply, git, or Beads mutation, and NEVER writes a
 // file — the QuickJS guest cannot. reportPath is always null; the command wrapper
 // persists the report (engine-vs-wrapper reversal, contract §1).
@@ -104,18 +104,19 @@ const batchSize = Number.isInteger(RT.batchSize) && RT.batchSize > 0 ? RT.batchS
 const scope = `Scope: paths = ${JSON.stringify(paths)}. Exclude (do not scan/report): ${JSON.stringify(exclude)}.`;
 
 // DEEP MODE (iui1.7): repo-review is static + read-only by default. audited-shell and
-// network-advisory are OPTIONAL, explicitly opt-in deep modes that require VERIFIED gates
-// (enforced at the kernel/command level when a caller passes profile:"inspect-with-shell" etc.).
-// The QuickJS guest itself NEVER requests shell or network — it stays static. This field reports
-// what was REQUESTED so the envelope + report disclose the (intentionally static) coverage limit.
+// network-advisory are OPTIONAL, explicitly opt-in deep modes that require a different
+// authority profile (e.g. "inspect-with-shell") selected at the kernel/command level; this
+// leaf never selects one itself. The QuickJS guest itself NEVER requests shell or network —
+// it stays static. This field reports what was REQUESTED so the envelope + report disclose
+// the (intentionally static) coverage limit.
 const deepModeRequested = ["audited-shell", "network-advisory"].includes(RT.deepMode) ? RT.deepMode : "static";
 const deepMode = {
   requested: deepModeRequested,
   active: "static",
   shellCoverage: "none",
   coverageLimitations: deepModeRequested === "static"
-    ? "Static, read-only analysis (no shell/git-churn, no network advisory lookups). Optional audited-shell / network-advisory modes require verified gates."
-    : `${deepModeRequested} requested but the review engine runs static in-guest; the deep mode requires verified gates enforced at the kernel/command level.`,
+    ? "Static, read-only analysis (no shell/git-churn, no network advisory lookups). Optional audited-shell / network-advisory modes require a different authority profile selected at the kernel/command level."
+    : `${deepModeRequested} requested but the review engine runs static in-guest; the deep mode requires a different authority profile selected at the kernel/command level.`,
 };
 
 // ---- standardized return envelope ----

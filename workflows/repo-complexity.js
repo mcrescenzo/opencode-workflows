@@ -74,19 +74,18 @@ const scope = `Scope: paths = ${JSON.stringify(paths)}. Exclude (do not scan/rep
 // Complexity is the ONE domain whose hotspot score depends on git churn (the
 // "high-churn-hotspot" category), which needs a shell (`git log`). The OPTIONAL
 // shell lens maps to the `inspect-with-shell` authority profile
-// (workflow-kernel/authority-policy.js:21-24; requiredGates:
-// ["permissionEnforcement","commandScopedBash"]). Those gates are currently
-// UNVERIFIED in this runtime, so this engine ships under `read-only-review`
-// (authority-policy.js:17-20; requiredGates: [], authority readOnly:true) as the
-// SAFE DEFAULT: no Bash, no `git`, no fs writes. Churn is therefore best-effort
-// (inferred from read-only tree signals, or 0 when unknown) and hotspotScore
-// approximates complexityScore. Enabling the shell/churn lens is a future,
-// separately-approved change gated on VERIFIED inspect-with-shell gates; until
-// then shellCoverage stays "none" (emitted on every exit path below). This engine
-// does NOT enable the shell lens.
+// (workflow-kernel/authority-policy.js:14-16; authority readOnly:true, shell:true).
+// This engine instead ships under the `read-only-review` profile
+// (authority-policy.js:11-13; authority readOnly:true) as the SAFE DEFAULT: no
+// Bash, no `git`, no fs writes. Churn is therefore best-effort (inferred from
+// read-only tree signals, or 0 when unknown) and hotspotScore approximates
+// complexityScore. Enabling the shell/churn lens is a future, separately-approved
+// change to select the `inspect-with-shell` profile for this engine; until then
+// shellCoverage stays "none" (emitted on every exit path below). This engine does
+// NOT enable the shell lens.
 const SHELL_COVERAGE = "none";
 const COVERAGE_LIMITATIONS =
-  "Shell/git churn not measured: read-only-review denies Bash, so `git log` churn is unavailable. churn is best-effort (0 when unknown) and hotspotScore approximates complexityScore. Enable inspect-with-shell (verified permissionEnforcement + commandScopedBash gates) for real git-log churn.";
+  "Shell/git churn not measured: read-only-review denies Bash, so `git log` churn is unavailable. churn is best-effort (0 when unknown) and hotspotScore approximates complexityScore. Enable inspect-with-shell (a separate, explicitly-selected authority profile) for real git-log churn.";
 
 // ---- lane coverage telemetry (iui1.2) ----
 // Tracks expected/completed/dropped lane counts per phase so a dropped scorer/verifier lane
