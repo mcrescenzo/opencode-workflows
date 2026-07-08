@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { drain } from "../workflow-kernel/drain-runtime.js";
-import { createTestFixDrainAdapter, defaultRunCommand, groupTestFailures } from "../workflow-kernel/test-fix-drain-adapter.js";
+import { createTestFixDrainAdapter, defaultRunCommand, groupTestFailures } from "./fixtures/test-fix-drain-adapter.js";
 
 function laneReport(itemId, overrides = {}) {
   return {

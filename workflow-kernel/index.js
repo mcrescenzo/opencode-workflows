@@ -58,7 +58,6 @@ export * from "./run-store-status.js";
 export * from "./sandbox-executor.js";
 export * from "./session-access.js";
 export * from "./structured-output.js";
-export * from "./test-fix-drain-adapter.js";
 export * from "./text-json.js";
 export * from "./workflow-source.js";
 export * from "./worktree-adapter.js";
