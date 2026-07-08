@@ -186,6 +186,17 @@ with `approve: true` and the matching `approvalHash`. With configured
 `options.autoApprove`, eligible readOnly/worktree/all-tier runs can launch on
 the first call; a per-call `autoApprove` argument may narrow that ceiling.
 
+Approving an inline-source preview does not require re-sending the source:
+present only `approve: true` + the `approvalHash` and the previewed bytes are
+reused (approve-by-reference). Re-sending the source works too but must be
+byte-identical — any drift re-keys `sourceHash`/`approvalHash`, and the
+mismatch response's `changedFields` will name the drifted field. Either way,
+the retry must still re-send the same `args` (and any other envelope-affecting
+params, e.g. `childModel`/`modelTiers`/`maxAgents`) used at preview —
+approve-by-reference only retains the source, so a changed envelope still
+re-keys and mismatches. For bodies you run more than once, `workflow_save` +
+run-by-`name` avoids the issue entirely.
+
 Foreground runs return a size-capped, secrets-redacted inline result when it
 fits. Always prefer `workflow_status({ runId, detail: "result" })` for the final
 answer path, especially for large results where inline output is omitted or

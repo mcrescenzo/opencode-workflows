@@ -209,6 +209,12 @@ additionally consults a memoized per-server `GET /global/health` fingerprint at
 launch and refuses to start on an opencode server older than `1.17.13` (see "Runtime Trust
 Model").
 
+Approving an inline-source preview does not require re-transmitting the source:
+an approve call may send only `approve: true` + `approvalHash`, and the
+previewed bytes are reused from a bounded in-memory store (approve-by-reference).
+A mismatched approve returns `changedFields` naming exactly which envelope
+fields re-keyed.
+
 | Profile | Purpose | Auto-Approve Tier |
 | --- | --- | --- |
 | `read-only-review` | Read-only analysis lanes. | `readOnly` |

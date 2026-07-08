@@ -41,6 +41,8 @@ workflow_templates({ format: "json", template: "first-run-slice", includeSource:
 workflow_template_save({ template: "first-run-slice", scope: "project" })
 
 // Option B: paste the template body as `source` into workflow_run (no save needed).
+// For large bodies prefer Option A: run-by-name never re-transmits source bytes,
+// and inline approve calls otherwise must be byte-identical (or approve-by-reference).
 ```
 
 The shipped body (abbreviated — the lanes and synthesis are the parts you adapt):
@@ -116,6 +118,10 @@ workflow_run({
 })
 ```
 
+For inline `source`, "exact" means byte-identical — re-typing the body drifts
+the hash. Prefer approving with only `approve: true` + the `approvalHash`
+(the previewed source is retained in-memory), or save once and run by `name`.
+
 The hash covers the source, args, authority, models, and budgets, so any edit
 between preview and approve invalidates it and forces a fresh preview. A read-only
 run completes directly and never enters `awaiting diff approval`; there is no
@@ -173,8 +179,16 @@ what to do:
   spent. Fix the source or pick the right profile and preview again — read-only
   runs cannot request `allowEdits` (it throws), so keep the slice read-only.
 - **Stale `approvalHash`.** If approve fails with a hash mismatch, your `source`
-  or `args` changed after the preview. Re-preview and approve the new hash; never
-  hand-edit a hash.
+  or `args` changed after the preview — the mismatch response's `changedFields`
+  names exactly which envelope field re-keyed. For inline `source` the usual
+  cause is re-transmission drift (a single re-typed byte re-keys the hash): do
+  not re-send the source on the retry — approve with only `approve: true` and
+  the `freshApprovalHash` (approve-by-reference), or `workflow_save` the body
+  once and run it by `name`, which re-reads byte-stable bytes from disk. Either
+  way, the retry must still re-send the same `args` (and any other
+  envelope-affecting params, e.g. `childModel`/`modelTiers`/`maxAgents`) used at
+  preview — approve-by-reference only retains the source, so a changed `args`
+  bag still re-keys the envelope and mismatches. Never hand-edit a hash.
 - **A lane fails or returns the wrong shape.** A lane that throws or returns
   output that fails its `schema` surfaces in `workflow_status detail: "full"` with
   the lane error; the run records it rather than silently dropping it. Because the

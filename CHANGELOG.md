@@ -7,11 +7,25 @@ and uses semantic versioning for published package releases.
 
 ## [Unreleased]
 
+### Added
+- Approve-by-reference: a `workflow_run` approve call for an inline-source preview may present
+  only `approve: true` + `approvalHash`; the previewed source bytes are reused from a bounded
+  module-level pending store (cleared on dispose/restart). Eliminates the byte-identical
+  re-transmission requirement that made inline approvals oscillate between two hashes.
+- Approval mismatches now return `changedFields` (field-level envelope diff vs the supplied
+  hash's recorded preview) and an inline re-transmission-drift `hint`.
+
 ### Changed
 - The live child-system smoke is demoted from a required public-release gate
   to a recommended, opt-in strict check: `release:system-smoke-required`
   keeps its fail-closed behavior, but the automated release workflow gates on
   the token-free suite only, and the docs/scripts now say so consistently.
+
+### Fixed
+- Approval envelope (`version` 2 → 3): distinct nested **inline** workflows no longer collapse
+  to one snapshot in the hash (they dedup by hash instead of the shared `"<inline>"` path).
+- A JSON-string `args` bag is decoded and normalized for every workflow (previously drain-only),
+  so string and object emissions of the same payload hash to the same `approvalHash`.
 
 ## [0.2.0] - 2026-07-08
 

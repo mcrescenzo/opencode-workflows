@@ -2763,21 +2763,21 @@ async function WorkflowPlugin(pluginContext, options) {
     tool: {
     workflow_run: tool({
       description:
-        "Run a sandboxed OpenCode workflow. By default this is two-phase: call WITHOUT approve=true to get the plan summary (use format=json for a structured workflow_preview with approvalHash, models, lane budget, authority, and cost), then call WITH approve=true and the matching approvalHash to execute; missing/stale hashes return approval_mismatch with executed=false. If the plugin is configured with options.autoApprove, an eligible call may launch immediately without approvalHash when the resolved authority tier is covered by the configured ceiling; args.autoApprove can only narrow that configured ceiling for one call. workflow_apply remains independently hash-gated.",
+        "Run a sandboxed OpenCode workflow. By default this is two-phase: call WITHOUT approve=true to get the plan summary (use format=json for a structured workflow_preview with approvalHash, models, lane budget, authority, and cost), then call WITH approve=true and the matching approvalHash to execute; missing/stale hashes return approval_mismatch with executed=false. If the plugin is configured with options.autoApprove, an eligible call may launch immediately without approvalHash when the resolved authority tier is covered by the configured ceiling; args.autoApprove can only narrow that configured ceiling for one call. An approve call for an inline-source preview may omit source and present only the approvalHash (approve-by-reference): the previewed bytes are reused from a bounded in-memory store, avoiding byte-identical re-transmission of the source. workflow_apply remains independently hash-gated.",
       args: {
         name: tool.schema.string().optional().describe("Saved workflow name, resolved project > global > extension > bundled."),
         scriptPath: tool.schema.string().optional(),
         allowExternalScriptPath: tool.schema.boolean().optional(),
-        source: tool.schema.string().optional().describe("Inline workflow source: export const meta = {...} plus top-level statements ending in return."),
+        source: tool.schema.string().optional().describe("Inline workflow source: export const meta = {...} plus top-level statements ending in return. Hashed into the approval envelope — an approve call that re-sends it must be byte-identical; prefer omitting it on approve (approve-by-reference), or workflow_save + name for reuse."),
         includeSourceSnippet: tool.schema.boolean().optional(),
         sourceSnippetMaxChars: tool.schema.number().int().positive().max(2000).optional(),
         // Object-typed so the model-facing JSON schema carries `type: "object"`. Under a permissive
         // `any()` schema some models (e.g. glm-5.2) emit `args` as a JSON-encoded string, which the
         // drain authority validator then has to reject. `.passthrough()` preserves the free-form
         // "any keys allowed" semantics of the args bag while constraining the top-level type.
-        args: tool.schema.object({}).passthrough().optional(),
+        args: tool.schema.object({}).passthrough().optional().describe("Runtime args bag for the workflow body (a JSON object, not a JSON-encoded string; a stringified object is decoded once and normalized before hashing)."),
         approve: tool.schema.boolean().optional().describe("Omit or false to get the approval preview; true executes when approvalHash matches the preview."),
-        approvalHash: tool.schema.string().optional().describe("Hash returned by the immediately prior preview for this exact envelope; any envelope change re-keys it."),
+        approvalHash: tool.schema.string().optional().describe("Hash returned by the immediately prior preview for this exact envelope; any envelope change re-keys it (mismatch responses list changedFields). With approve: true and no source/name, the previewed inline source is reused for this hash (approve-by-reference)."),
         autoApprove: tool.schema.enum(["readOnly", "worktree", "all"]).optional().describe("Narrow the plugin-configured autoApprove ceiling for this call (readOnly < worktree < all); it can never widen the configured ceiling."),
         format: tool.schema.enum(["summary", "json"]).optional(),
         resumeRunId: tool.schema.string().optional().describe("Resume a prior resumable run by id; unchanged lanes replay as zero-spend cache hits from the persisted journal."),

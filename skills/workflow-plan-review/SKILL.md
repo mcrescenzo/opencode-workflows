@@ -62,6 +62,9 @@ something to understand and refine, not a hash to echo back.
    Do not call `approve: true` in the same turn you presented the plan unless the user already said
    to run it. For an auto-approved run, skip this step and read back the result.
 
+   For an inline-source preview, approve with only `approve: true` and the matching
+   `approvalHash` (no source re-transmission needed — approve-by-reference).
+
 ## When you may skip the confirmation step
 
 - The plugin is configured with `options.autoApprove` and the resolved authority tier is covered by
