@@ -7,7 +7,25 @@ and uses semantic versioning for published package releases.
 
 ## [Unreleased]
 
+### Added
+- Child lanes now receive a one-line authority disclosure in their system
+  prompt (`laneAuthorityInstruction`), so a lane knows its tool ceiling up
+  front instead of discovering it through permission denials.
+
 ### Changed
+- Tool-surface accuracy and completeness pass (2026-07-08 agent-surface review):
+  per-argument schema docs for `workflow_run`, `workflow_save`, and
+  `workflow_status`; `workflow_apply` no longer cites a nonexistent
+  "workflow_run apply-preview"; `workflow_cleanup` documents its real
+  protection set and exposes `interruptedTtlMs`; `workflow_status` drops its
+  always-rejected `reconcile` arg; salvage hints point at `workflow_salvage`
+  instead of the unshipped `session_read`; toast inspect lines use `runId=`;
+  "v2" template jargon renamed to "starter".
+- Bundled skills corrected and extended: full injected-globals list
+  (`drain`, `persistArtifacts`, `inventoryFiles`), live extension-only
+  trusted-source wording, precise sandbox stub semantics, new Meta Fields /
+  Authority Profiles / Artifacts-Inventory-Drain reference sections, and the
+  fabricated `DEFAULT_CHILD_MODEL` fallback removed from model tiering.
 - **BREAKING:** the plugin ships zero bundled workflows and commands. The
   repo-* review suite (eight leaves + the repo-review meta, plus the
   /repo-bughunt and /repo-review commands and the repo-review-command-protocol
