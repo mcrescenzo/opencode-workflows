@@ -27,8 +27,7 @@ import {
   shapeGate,
 } from "./gate-shapes.js";
 // Live-gate probe functions live in live-gate-probes.js. liveGateReport /
-// promoteCapabilities below fan them out. `unwrapClientResult` is also used by
-// createCapabilityAdapter's worktree create/remove paths, so it is imported here.
+// promoteCapabilities below fan them out.
 import {
   probeBackgroundContinuationGate,
   probeCancellationGate,
@@ -44,7 +43,6 @@ import {
   probeWorkflowNotificationGate,
   probeWorktreeEditIsolationGate,
   probeWorktreeGate,
-  unwrapClientResult,
 } from "./live-gate-probes.js";
 
 // R32 (opencode-workflows-6ti): a verified gate may carry a weak evidenceStrength.
@@ -143,6 +141,16 @@ function resolvePackageEntry(packageName) {
       return undefined;
     }
   }
+}
+
+// Used by createCapabilityAdapter's worktree create/remove paths below, and by the
+// live-gate probe functions in live-gate-probes.js (imported back from there).
+export function unwrapClientResult(result, label) {
+  if (result?.error !== undefined) {
+    const error = result.error;
+    throw new Error(`${label} failed: ${error?.message || error?.error || JSON.stringify(error)}`);
+  }
+  return result;
 }
 
 export function readInstalledVersion(packageName) {
@@ -747,7 +755,6 @@ export {
   removeGitWorktreeForce,
   sessionMessagesPayloadForProbe,
   toolPartName,
-  unwrapClientResult,
   valueContainsString,
   withLiveProbeTimeout,
 } from "./live-gate-probes.js";

@@ -4,8 +4,10 @@
 // delivery) and returns a gate-shape result. The CapabilityAdapter / liveGateReport
 // orchestrator in capability-adapter.js fans these out; this module owns the probes and
 // their probe-only helpers. It imports gate-shape constructors from gate-shapes.js and
-// otherwise depends only on leaf runtime modules, so it does not import capability-adapter.js
-// back (capability-adapter.js imports this module, not the reverse).
+// otherwise depends only on leaf runtime modules. The one exception is
+// `unwrapClientResult`, a first-class export of capability-adapter.js (used by its own
+// worktree create/remove paths) that is imported back here for probe use; Node ESM
+// tolerates the resulting cycle for function declarations.
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -40,6 +42,7 @@ import {
   gateVerified,
   transportFailureGate,
 } from "./gate-shapes.js";
+import { unwrapClientResult } from "./capability-adapter.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -86,14 +89,6 @@ function denialProbeResult(error, label) {
   const evidence = extractTextFromError(error);
   if (isDenialEvidence(error)) return gateVerified(`${label} was rejected: ${truncateText(evidence, MAX_STATUS_STRING_CHARS)}`);
   return gateFailed(`${label} failed without denial evidence: ${truncateText(evidence, MAX_STATUS_STRING_CHARS)}`);
-}
-
-function unwrapClientResult(result, label) {
-  if (result?.error !== undefined) {
-    const error = result.error;
-    throw new Error(`${label} failed: ${error?.message || error?.error || JSON.stringify(error)}`);
-  }
-  return result;
 }
 
 function valueContainsString(value, needle, seen = new Set()) {
@@ -886,7 +881,6 @@ export {
   toolPartDenied,
   isDenialEvidence,
   denialProbeResult,
-  unwrapClientResult,
   valueContainsString,
   createdSessionRetainedPermission,
   deterministicToolProbeResult,
