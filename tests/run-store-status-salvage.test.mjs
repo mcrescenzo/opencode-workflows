@@ -77,7 +77,8 @@ test("computeSalvageCandidates flags only running lanes with a childID and no su
   assert.equal(candidates.length, 1);
   assert.equal(candidates[0].callId, ORPHAN.callId);
   assert.equal(candidates[0].childID, ORPHAN.childID);
-  assert.match(candidates[0].hint, /session_read\(\{ sessionId: "child-session-orphan" \}\)/);
+  assert.match(candidates[0].hint, /workflow_salvage runId=/);
+  assert.match(candidates[0].hint, /childID=child-session-orphan/);
   // Masking: expose only callId/childID/hint, never the lane's title/summary/model.
   assert.deepEqual(Object.keys(candidates[0]).sort(), ["callId", "childID", "hint"]);
 });
@@ -164,7 +165,8 @@ test("reconciled interrupted run surfaces orphaned lane childIDs with a session_
   assert.equal(salvage.length, 1);
   assert.equal(salvage[0].callId, ORPHAN.callId);
   assert.equal(salvage[0].childID, ORPHAN.childID);
-  assert.match(salvage[0].hint, /session_read\(\{ sessionId: "child-session-orphan" \}\)/);
+  assert.match(salvage[0].hint, /workflow_salvage runId=/);
+  assert.match(salvage[0].hint, /childID=child-session-orphan/);
   assert.deepEqual(Object.keys(salvage[0]).sort(), ["callId", "childID", "hint"]);
 });
 
@@ -241,7 +243,7 @@ test("compact, full, and summary status each surface the salvage hint", async ()
   assert.equal(compact.status, "interrupted");
   assert.equal(compact.salvageCandidates.length, 1);
   assert.equal(compact.salvageCandidates[0].childID, ORPHAN.childID);
-  assert.match(compact.salvageCandidates[0].hint, /session_read/);
+  assert.match(compact.salvageCandidates[0].hint, /workflow_salvage/);
 
   const full = await __test.fullStatusForEntry(entry);
   assert.equal(full.status, "interrupted");
@@ -250,7 +252,7 @@ test("compact, full, and summary status each surface the salvage hint", async ()
 
   const summary = __test.summarizeEntries([entry]);
   assert.match(summary, /salvage lane:orphan/);
-  assert.match(summary, /session_read\(\{ sessionId: "child-session-orphan" \}\)/);
+  assert.match(summary, /workflow_salvage runId=/);
 });
 
 // opencode-workflows-jbs3.8: per-lane failure visibility + no-progress staleness signal in the

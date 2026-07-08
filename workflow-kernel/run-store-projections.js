@@ -382,10 +382,11 @@ async function computeSalvageCandidates(runDir, state = {}) {
     if (!callId || !childID || lane.status !== "running") continue;
     const completed = journal.get(callId);
     if (completed && completed.outcome === "success") continue;
+    const runId = state?.id || '<this run>';
     candidates.push({
       callId,
       childID,
-      hint: `possible transcript evidence: session_read({ sessionId: "${childID}" })`,
+      hint: `salvage via workflow_salvage runId=${runId} (preview first); raw child transcript childID=${childID}`,
     });
   }
   return candidates;
