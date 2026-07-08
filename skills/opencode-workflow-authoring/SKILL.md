@@ -52,16 +52,50 @@ const notes = await parallel([
 return { notes };
 ```
 
-Injected globals are `agent`, `parallel`, `pipeline`, `workflow`, `phase`,
-`log`, `budget`, and `args`; do not import them.
+Injected globals are `agent`, `parallel`, `pipeline`, `workflow`, `drain`,
+`phase`, `log`, `budget`, `persistArtifacts`, `inventoryFiles`, and `args`;
+do not import them.
+
+## Meta Fields
+
+Beyond `name`/`description`, the kernel reads these `meta` fields:
+
+- `profile` or `authority` — named authority preset or ad-hoc flags (see
+  Authority Profiles below).
+- `argsSchema` — a JSON Schema validated (Ajv) against runtime `args` before
+  authority resolution; a mismatch rejects the call before any lane launches.
+  Declare it whenever the workflow reads `args`.
+- `maxAgents`, `concurrency`, `maxCost`, `maxTokens`, `maxRuntimeMs`,
+  `guestDeadlineMs` — author-set default ceilings; `workflow_run` args
+  override them per call.
+- `childModel` / `defaultChildModel` — workflow-level model default: below
+  `args.childModel`, above the invoking session's model.
+- `harness: "drain"` — opts into the drain harness and its `drain-dry-run` /
+  `drain-autonomous-local` profiles.
+- `phases` — declared phase names surfaced in previews and `workflow_status`.
+- `category`, `examples`, `notes` — cosmetic; surfaced by `workflow_list`.
+
+## Authority Profiles
+
+`meta.profile` / `workflow_run({ profile })` accepts: `read-only-review`
+(readOnly), `inspect-with-shell` (readOnly + audited shell), `drain-dry-run`
+(readOnly; drain harness), `drain-autonomous-local` (integration, no
+network/mcp; drain harness), `edit-plan-only` (worktreeEdit — isolated
+worktree, stops at the diff plan), and `apply-approved-plan` (edit). Omitting
+`profile` resolves to `ad-hoc`, which takes flags (`readOnly`, `shell`,
+`edit`, `worktreeEdit`, `network`, `mcp`, `integration`) directly from
+`meta.authority` / `args.authority`. Prefer `read-only-review` until the task
+truly needs more.
 
 ## QuickJS Sandbox
 
 The body runs in a deterministic QuickJS sandbox, not Node. Filesystem, process,
 network, clocks, timers, randomness, `crypto`, and imports are unavailable.
-`Date`, `Date.now`, `Math.random`, `performance`, `setTimeout`, `setInterval`,
-`clearTimeout`, and `clearInterval` throw if called. Use `workflow_status` run
-artifacts for timing and diagnostics instead of in-guest clocks.
+`Date`, `Date.now`, and `Math.random` are stubbed to throw on any call;
+`performance`, `crypto`, `setTimeout`, `setInterval`, `clearTimeout`, and
+`clearInterval` are `undefined`, so any use fails immediately. Use
+`workflow_status` run artifacts for timing and diagnostics instead of in-guest
+clocks.
 
 ## Fan-Out And Arity
 
@@ -116,6 +150,19 @@ in-flight reservations, so a loop can stop before launching the next child.
 Setting `maxCost` or `maxTokens` is an approval-envelope decision, not a casual
 throttle.
 
+## Artifacts, Inventory, And Drain
+
+A workflow's return value is size-capped. Spill large findings with
+`persistArtifacts({ namespace, files: [{ name, content }] })` — `.json`,
+`.jsonl`, or `.md` file names only — and return a summary that references
+them; artifacts land under the run's private `artifacts/<namespace>/`
+directory. Use `inventoryFiles(...)` for a deterministic, sorted file
+inventory with bounded shards instead of spending an agent lane on "explore
+the repo with tools." `drain(...)` is the host-owned primitive behind
+autonomous drain harnesses (`meta.harness: "drain"` with the drain
+profiles); the drain loop's lane execution is host-controlled and cannot be
+redefined from workflow source.
+
 ## Schema Lanes
 
 Use `schema` when a lane result must be structured. Native structured output is
@@ -144,6 +191,11 @@ fits. Always prefer `workflow_status({ runId, detail: "result" })` for the final
 answer path, especially for large results where inline output is omitted or
 partial.
 
+Resuming with `resumeRunId` re-validates the persisted run's `sourceHash`; a
+changed body is rejected unless `editAndResume: true` is set, which re-keys
+`sourceHash` and `approvalHash` (fresh approval required) while unchanged
+lanes still replay as zero-spend cache hits.
+
 ## Background Runs
 
 Explicit `background: true` returns quickly with a run id while execution
@@ -154,15 +206,23 @@ resume keeps the pinned mode. Background execution is not durable across process
 death; use `workflow_status`, `workflow_cancel`, `workflow_pause`, and
 `workflow_reconcile` for inspection and lifecycle control.
 
+`workflow_kill` force-terminates a wedged run when cancel/pause do not
+return; `workflow_events` pages the redacted lifecycle event log; and
+`workflow_salvage` recovers orphaned read-only lane results from an
+interrupted run's child transcripts (preview first, then approve).
+
 ## Edit And Apply
 
 Edit authority is only a cap. A lane receives edit tools only when it explicitly
 requests edit/worktree behavior. Edit-capable lanes run in isolated workflow
 worktrees or directories. Primary-tree writes happen through `workflow_apply`
-after source/base/diff/domain hashes and Git state are checked. A successful
-non-dry drain workflow from a trusted source (core-bundled or
-extension-registered, with `supportsAutoApply: true`) is the one path that can
-finalize in-run after its launch approval.
+after source/base/diff/domain hashes and Git state are checked. The one path
+that can finalize in-run after its launch approval is a successful non-dry
+drain workflow from a trusted source: a host-configured extension workflow
+directory whose registered drain adapter declares `supportsAutoApply: true`.
+The plugin ships zero bundled workflows, so project- and global-saved
+workflows always stop at `awaiting-diff-approval` and finalize through
+`workflow_apply`.
 
 ## Review Checklist
 

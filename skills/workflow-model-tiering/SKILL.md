@@ -8,7 +8,8 @@ description: Use BEFORE running any workflow whose lanes declare fast/deep tiers
 Workflows declare each lane's intent as `tier: "fast"` (cheap/bulk) or `tier: "deep"`
 (subtle reasoning); pure-JS lanes declare no model. The kernel resolves each tier to a
 concrete `provider/model` string from the run's `modelTiers` map, falling back to the
-invoking session's model (and finally to `DEFAULT_CHILD_MODEL`). Your job before running
+workflow's `meta.childModel` / `meta.defaultChildModel` and finally to the invoking
+session's model. Your job before running
 such a workflow is to pick the concrete fast/deep models and pass them as `modelTiers`.
 
 ## Procedure
@@ -53,5 +54,6 @@ such a workflow is to pick the concrete fast/deep models and pass them as `model
   providers fail before child launch.
 - `modelTiers` is covered by the approval hash, so changing the model plan re-triggers
   approval — you cannot silently swap models behind an already-approved hash.
-- Models are `provider/model` strings (exactly one `/`). A malformed tier value is a hard
-  error at planning time.
+- Models are `provider/model` strings — at least one `/`, not leading or trailing (the
+  first `/` splits provider from model id). A malformed tier value is a hard error at
+  planning time.
