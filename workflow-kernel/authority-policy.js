@@ -440,6 +440,29 @@ export function authorityArgsForWorkflow(meta = {}, args = {}) {
   return { ...args, profile: DRAIN_PROFILE_FOR_MODE[mode], args: { ...runtimeArgs, mode } };
 }
 
+// Generalizes the drain-only JSON-string tolerance above to every workflow: under a permissive
+// host a model may emit the `args` bag as a JSON-encoded string even though the tool schema
+// declares an object. A string that decodes to a plain object is normalized so the approval
+// envelope hashes the SAME runtimeArgs for the string and object emissions (otherwise the two
+// forms re-key approvalHash against each other). Anything else fails loudly here, at plan time.
+export function parseRuntimeArgsString(rawRuntime) {
+  if (typeof rawRuntime !== "string") return rawRuntime;
+  let parsed;
+  try {
+    parsed = JSON.parse(rawRuntime);
+  } catch {
+    throw new WorkflowAuthorityError(
+      "workflow args must be a JSON object when provided; got a string that is not valid JSON. Pass args as a JSON object, not a JSON-encoded string.",
+    );
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new WorkflowAuthorityError(
+      `workflow args must be a JSON object when provided; the supplied JSON string decodes to ${Array.isArray(parsed) ? "an array" : typeof parsed}. Pass args as a JSON object, not a JSON-encoded string.`,
+    );
+  }
+  return parsed;
+}
+
 export function resolveDrainMode(runtimeArgs = {}) {
   const mode = runtimeArgs.mode ?? (runtimeArgs.dryRun === false ? "autonomous-local" : "dry-run");
   if (mode !== "dry-run" && mode !== "autonomous-local") throw new WorkflowAuthorityError('drain mode must be "dry-run" or "autonomous-local"');

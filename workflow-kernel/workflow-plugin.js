@@ -137,6 +137,7 @@ import {
   effectiveAutoApproveCeiling,
   modelKey,
   normalizeAutoApproveTier,
+  parseRuntimeArgsString,
   resolveDrainMode,
   resolveLaneModel,
   resolveRequestedModel,
@@ -1663,6 +1664,13 @@ async function planWorkflowEnvelope(pluginContext, toolContext, args) {
   // rescue a stringified payload so it reaches the preview instead of being rejected by an
   // object-typed meta schema; a genuine non-JSON string still throws inside the canonicalizer.
   args = authorityArgsForWorkflow(meta, args);
+  // Same model-stringification tolerance for non-drain workflows (drain normalizes above, keeping
+  // its own error type): decode a JSON-string args bag into the object it encodes BEFORE the
+  // argsSchema check and the approval envelope, so string and object emissions of one payload
+  // cannot hash to different approvalHashes.
+  if (meta.harness !== "drain" && typeof args.args === "string") {
+    args = { ...args, args: parseRuntimeArgsString(args.args) };
+  }
   assertWorkflowArgsMatchSchema(meta, args.args);
   // Drain workflows accept a runtime-args laneTimeoutMs alias; arg-shape validation is handled by
   // the canonical drain normalization (authorityArgsForWorkflow) for harness==="drain" workflows.

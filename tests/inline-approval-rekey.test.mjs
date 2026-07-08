@@ -83,3 +83,29 @@ test("one-byte source drift between calls reproduces the two-hash oscillation", 
     await fs.rm(directory, { recursive: true, force: true });
   }
 });
+
+test("args bag as JSON string and as object hash to the same approvalHash", async () => {
+  const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }));
+  try {
+    const source = `export const meta = { name: "rekey-args", profile: "read-only-review", maxAgents: 0 };
+return args;`;
+    const payload = { mode: "first", n: 1 };
+    const hashObject = approvalHashFromJsonPreview(await tools.workflow_run.execute({ source, format: "json", args: payload }, context));
+    const hashString = approvalHashFromJsonPreview(await tools.workflow_run.execute({ source, format: "json", args: JSON.stringify(payload) }, context));
+    assert.equal(hashObject, hashString);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a non-JSON string args bag fails loudly at plan time", async () => {
+  const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }));
+  try {
+    await assert.rejects(
+      tools.workflow_run.execute({ source: SOURCE, format: "json", args: "not json" }, context),
+      /JSON object.*not a JSON-encoded string/s,
+    );
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
