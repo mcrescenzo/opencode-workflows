@@ -8,9 +8,9 @@ point, not a turnkey artifact: read the authority and sizing notes, then adjust
 the lanes to your actual surface area. These recipes mirror shipped behavior
 (`workflow_run`, `workflow_status`, the authority profiles in
 `workflow-kernel/authority-policy.js`, and the model-tier resolution in
-`workflow-kernel/workflow-plugin.js`); the README sections "Authority Profiles And
-Apply Boundary", "Sizing `maxAgents`", and `docs/workflow-plugin.md` are the
-deeper references.
+`workflow-kernel/workflow-plugin.js`); `docs/workflow-plugin.md` — the tool
+reference, the apply boundary, and "Sizing `maxAgents`: child-agent
+accounting" — is the deeper reference.
 
 ## Recipe: first-run read-only slice
 
@@ -145,8 +145,8 @@ When you later widen the fanout, raise `maxAgents` to **(number of `agent()`
 lanes)** and add one more slot only if you replace the JS synthesis with a report
 *agent*. Nested `workflow()` lanes share the parent's `maxAgents` (a nested
 workflow's own `meta.maxAgents` is ignored at runtime), so size the top-level cap
-to cover every lane any nested workflow will launch. See README "Sizing
-`maxAgents`".
+to cover every lane any nested workflow will launch. See `docs/workflow-plugin.md`
+"Sizing `maxAgents`: child-agent accounting".
 
 ### Read the result back
 
@@ -380,8 +380,9 @@ What keeps this recipe honest:
   writer, add one more slot.
 - Nested `workflow()` lanes share the parent run's `maxAgents`; a nested
   workflow's own `meta.maxAgents` is ignored at runtime. Size the top-level cap
-  to cover every lane any nested workflow will launch. See README "Sizing
-  `maxAgents`" and `docs/workflow-plugin.md` for the full accounting.
+  to cover every lane any nested workflow will launch. See
+  `docs/workflow-plugin.md` "Sizing `maxAgents`: child-agent accounting" for the
+  full accounting.
 - `concurrency` bounds how many lanes run at once (independent of the total
   `maxAgents` budget). For research, 3-4 is a good default: enough parallelism to
   finish quickly, low enough to keep token spend and provider rate-limit pressure
@@ -514,4 +515,21 @@ state. Use `detail: "full"` only for diagnostics/apply internals. Treat
 ledger — if something important landed there, the lanes did not actually prove
 it, and the right move is another scoped lane (or a stronger tier), not a louder
 claim.
-```
+
+## The other starter templates
+
+`first-run-slice` (above) is one of three starter templates shipped in
+`DEFAULT_TEMPLATES` (`workflow-kernel/role-template-loading.js`). List them with
+`workflow_templates` and materialize one with `workflow_template_save`:
+
+- **`scoped-parallel`** — the scoped-helper fan-out shape: maps `args.items`
+  (default `["one", "two"]`) through `parallel()`, one scoped-callback
+  `agent()` lane per item on the `explorer` role, `maxAgents: 4`. Start here
+  when the job is "run the same small task over a list" and you have already
+  proven the first-run-slice handshake.
+- **`edit-review`** — the schema-gated edit shape: a single `implementer`-role
+  lane (`authority: { edit: true }`, `maxAgents: 1`) that returns a structured
+  `patches` array instead of writing to your tree. Nothing lands until you
+  review the diff plan and call `workflow_apply` with the required hashes; this
+  template exists to demonstrate that edit → review → apply boundary end to
+  end.

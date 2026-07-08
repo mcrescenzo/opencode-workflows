@@ -15,7 +15,8 @@
    mechanism for downstream packagers; this repo ships none there). They run
    in a sandboxed QuickJS VM with only injected globals
    (`args`, `agent`, `parallel`, `pipeline`, `phase`, `log`, `budget`, `workflow`,
-   `drain`). No `fs`, `bd`, `child_process`, or `require`. Trust does **not** depend
+   `drain`, `persistArtifacts`, `inventoryFiles`). No `fs`, `bd`, `child_process`,
+   or `require`. Trust does **not** depend
    on where the file came from — running one confers no host power.
 2. **Trusted host extensions** — privileged Node modules loaded **only** from
    explicit config (never auto-discovered). They register the things a guest can't
@@ -61,6 +62,8 @@ export default {
         ...createMyAdapter({ /* cwd, actor, scope, signal, ... */ }),
       }),
       supportsAutoApply: true,        // opt into in-run auto-apply (autonomous-local)
+      // Informational only: the kernel never reads this field. Finalizers are
+      // resolved by the exact operation-name keys in mutationHandlers below.
       mutationOperations: ["my-domain.close", "my-domain.note"],
     },
   },
@@ -81,7 +84,9 @@ instructions (the core lane prompt is domain-neutral).
 ## Registering an extension
 
 In `opencode.json`, use the `[path, options]` tuple form for the plugin entry
-(verified to forward `options` on opencode 1.17.11+). Extension paths resolve
+(verified to forward `options` on opencode 1.17.11+; note the plugin's
+elevated-authority server floor is 1.17.13, so in practice run opencode
+≥ 1.17.13). Extension paths resolve
 relative to the **opencode config dir** (where `opencode.json` lives), so the same
 entry works on any machine:
 

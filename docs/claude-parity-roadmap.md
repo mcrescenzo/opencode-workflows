@@ -18,14 +18,14 @@ Statements here are backed by the plugin's actual behavior, not aspiration.
 
 - **In-process background workflows** **[shipped]**: `workflow_run({ background: true })`
   returns immediately and continues in the current OpenCode process. The kernel
-  records the owning process pid + start time (`workflow-plugin.js`:
+  records the owning process pid + start time (`run-store-fs.js`:
   `processAppearsAlive`, `selfProcessStartTime`) and detects cross-process
   staleness. There is **no detached supervisor, no respawn, and no attach**;
-  background runs die with the owning process (README "Background Completion
-  Notifications").
+  background runs die with the owning process (`docs/workflow-plugin.md`,
+  "Background execution is not durable across process death").
 - **Child-session lanes** **[shipped]**: implementation lanes run as OpenCode child
-  sessions via the server API (`child-session-runner.js`: `runChildAgent`,
-  `runNestedWorkflow`, slot accounting). These reuse OpenCode's **native agent
+  sessions via the server API (`child-agent-runner.js`: `runChildAgent`, slot
+  accounting; `sandbox-executor.js`: `runNestedWorkflow`). These reuse OpenCode's **native agent
   registry**; the plugin has **no custom-subagent registry of its own**.
 - **Deterministic runtime trust model** **[shipped]**: there is no LLM-probe
   live-gate subsystem. Elevated (`edit`/`worktreeEdit`/`integration`/
@@ -34,7 +34,7 @@ Statements here are backed by the plugin's actual behavior, not aspiration.
   `1.17.13`; lane rooting and worktree isolation are asserted from typed API
   fields at creation time; and each lane's deny-by-default permission ruleset
   is sent with the session and re-checked against the create echo (README
-  "Runtime Trust Model").
+  "Safety & privacy"; deep contract in `docs/workflow-plugin.md`).
 - **Hash-gated apply boundary** **[shipped]**: `workflow_apply` is the only
   primary-tree write path, gated by approved source hash, base commit, diff-plan
   hash, domain-mutation hash, and clean primary dirty state.
@@ -44,8 +44,7 @@ Statements here are backed by the plugin's actual behavior, not aspiration.
 - **Config-time skill + command registration** **[shipped]**: the plugin config
   hook pushes this directory's `skills/` into `cfg.skills.paths` and scans a
   bundled `commands/` directory to auto-register any command file found there
-  (`configureWorkflowEntrypoints`, `workflow-plugin.js`; README "Command And
-  Skill Registration") — as of the pure-architecture cut that directory is
+  (`configureWorkflowEntrypoints`, `workflow-plugin.js`) — as of the pure-architecture cut that directory is
   empty, so the plugin ships zero bundled commands; the mechanism itself is
   unchanged and registers whatever a downstream packager bundles.
 - **Reliance on OpenCode's native config model** **[shipped]**: the plugin does

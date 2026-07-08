@@ -67,7 +67,7 @@ A public release must not equate "skipped" with "verified":
 - `npm run release:system-smoke-required` is an opt-in strict mode that **fails closed**
   (non-zero exit) when live system-smoke evidence is missing — recommended before breaking
   or high-risk releases (the automated release workflow gates on the token-free suite
-  only); see `docs/plugin-system-tests.md` for the evidence checklist (child ID/PID/port,
+  only); see `docs/plugin-system-tests.md` (GitHub only, not packaged) for the evidence checklist (child ID/PID/port,
   trust mode, command + tool registry entries, deterministic workflow tool execution,
   restart/reload, and cleanup `processAlive: false`).
 

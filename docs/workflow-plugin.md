@@ -6,8 +6,8 @@
 This document is the reference for how the opencode-workflows plugin decides what
 to trust about a workflow run, and for the transcript-fallback / salvage
 architecture that recovers orphaned lane results after a crash. It mirrors
-shipped behavior; the README's "Source Of Truth And Transcript Fallback" section
-is the operator-facing summary, and this file is the deeper architecture note.
+shipped behavior; the README's "Safety & privacy" section is the operator-facing
+summary, and this file is the deeper architecture note.
 
 ## Workflow Tool Reference
 
@@ -147,8 +147,11 @@ A call without `approve` (or with a non-matching `approvalHash`) returns
 `mode: "preview"` and writes nothing. For each candidate lane it reports:
 
 - `callId`, `childID`
-- `parseVerdict` (`valid` / `invalid`) and `validationKind: "json-parse"` with
-  `originalSchemaAvailable: false`
+- `parseVerdict` (`valid` / `invalid`) plus the salvage-validation fields:
+  `validationKind` (`"json-schema"` when the lane's request checkpoint holds a
+  usable schema snapshot, `"json-parse"` otherwise), `originalSchemaAvailable`,
+  `schemaSnapshotStatus` (`present` / `absent` / `oversized` / `unavailable`),
+  `schemaHash`, and `schemaVerdict` (`valid` / `invalid` / `not-checked`)
 - `finalMessageFound`, `finalMessageLength`
 - `resumeSignatureAvailable` (whether the running projection captured a
   `signatureHash` that the resume path can match)
@@ -169,19 +172,29 @@ synthetic journal entry for each non-skipped read-only lane, via
 durable interrupted run directory). It never touches in-memory counters,
 `state.json`, worktrees, or integration ledgers.
 
-Validation is conservative JSON-parse only. The original per-lane AJV schema is
-not durably persisted (it lives only in the in-memory resolved lane context
-derived from the workflow script at runtime), so it cannot be reconstructed for
-an existing orphan. Outcome is `success` only when the final assistant message
-parses as JSON; otherwise the entry is written with outcome `failure` and an
-error summary, and carries no `result`.
+Validation is two-tier. Each schema lane's request checkpoint
+(`lanes/<callId>.request.json`) durably persists a bounded schema snapshot
+(`boundedSchemaSnapshot`, `workflow-kernel/structured-output.js`, capped at
+`MAX_SCHEMA_SNAPSHOT_BYTES` = 16 KiB). When that snapshot is `present`, salvage
+re-runs real AJV validation against it (`salvageValidationForParsedValue`):
+outcome is `success` only when the final assistant message parses as JSON
+**and** matches the stored schema (`schemaVerdict: "valid"`); a parse-able but
+schema-invalid message is written with outcome `failure` and a schema-mismatch
+error summary. When no usable snapshot exists (a schema-less lane, an oversized
+snapshot, or a legacy checkpoint predating snapshots), validation falls back to
+conservative JSON-parse only: outcome is `success` when the final assistant
+message parses as JSON. Either way, a `failure` entry carries an error summary
+and no `result`.
 
 ## The `salvagedFromTranscript` tag
 
 Every salvaged journal entry is tagged:
 
 - `salvagedFromTranscript: true`
-- `salvageValidation: { kind: "json-parse", originalSchemaAvailable: false }`
+- `salvageValidation: { kind, originalSchemaAvailable, schemaSnapshotStatus,
+  schemaHash, schemaVerdict, recoveredResultValid, validationError? }` — `kind`
+  is `"json-schema"` when the checkpointed schema snapshot was used for real
+  AJV validation, `"json-parse"` when only JSON parsing could be checked
 
 so a transcript-recovered result is never mistaken for a normally-captured,
 schema-validated result. The tag is the provenance marker the resume path and the
@@ -286,11 +299,13 @@ the run directory is left behind and surfaces as stale until `workflow_reconcile
 marks it interrupted. Only then can `workflow_salvage` recover orphaned
 read-only lane results that completed in the crash window. Completing the
 underlying workflow work after process death remains out of scope until a
-supervisor exists (tracked separately in `docs/claude-parity-roadmap.md`).
+supervisor exists (tracked separately in `docs/claude-parity-roadmap.md`,
+GitHub only — not packaged).
 
 Notification recovery (re-enqueuing an already-persisted completion notice on
-`session.idle`) is likewise only in-process recovery, not durable execution; see
-the README's "Notification recovery is not durable execution" section.
+`session.idle`) is likewise only in-process recovery, not durable execution: it
+can re-deliver a completion notice the process already persisted, but it cannot
+resume or complete the underlying run after process death.
 
 ## Sizing `maxAgents`: child-agent accounting
 

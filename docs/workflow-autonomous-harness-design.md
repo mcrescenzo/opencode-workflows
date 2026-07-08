@@ -3,7 +3,9 @@
 > Status: **Historical design snapshot**. This document captured the Phase 1 contract
 > before the implementation was split into `workflow-kernel/` modules and bundled
 > workflow assets. It remains useful for boundaries and terminology, but current
-> operator behavior is documented in the README, commands, skills, and tests.
+> operator behavior is documented in the README, skills, and tests. Several
+> symbols below (`workflow_live_gates`, `promoteCapabilities`, `liveGateReport`)
+> and the beads domain were subsequently removed (see CHANGELOG 0.2.0).
 
 `docs/workflow-autonomous-harness-plan.md` is the roadmap. This document is
 the Phase 1 implementation contract for the reusable autonomous harness and its
