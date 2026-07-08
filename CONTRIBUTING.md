@@ -15,7 +15,7 @@ The full no-token test matrix needs the following tools on `PATH`:
 | --- | --- | --- |
 | **Node ≥ 20.11** | everything | See `engines` in `package.json`. The test runner is Node's built-in `node --test`. |
 | **`git`** | worktree / apply / integration tests | Several suites shell out to `git` to create temporary repos and exercise the worktree + `workflow_apply` paths. |
-| **`opencode` binary + local config** | the live child system smoke ONLY | The required system smoke (`npm run release:system-smoke-required`) needs the opencode binary and local opencode config and is intentionally NOT part of the token-free `npm test` / `release:no-token` matrix. |
+| **`opencode` binary + local config** | the live child system smoke ONLY | The optional live system smoke (`npm run release:system-smoke-required`, recommended before breaking or high-risk releases) needs the opencode binary and local opencode config and is intentionally NOT part of the token-free `npm test` / `release:no-token` matrix. |
 
 If a tool is missing, the affected suites fail with a clear message rather than silently
 passing — do not treat a skipped/missing-tool run as release evidence.
@@ -63,11 +63,13 @@ A public release must not equate "skipped" with "verified":
   tool versions, then runs the no-token release gate.
 - `npm run release:no-token` runs lockfile sync, the full token-free `npm test` matrix,
   and package dry-run validation, then explicitly notes that the live child system smoke is
-  a **separate required** step.
-- `npm run release:system-smoke-required` **fails closed** (non-zero exit) when live
-  system-smoke evidence is missing — see `docs/plugin-system-tests.md` for the mandatory
-  evidence checklist (child ID/PID/port, trust mode, command + tool registry entries,
-  deterministic workflow tool execution, restart/reload, and cleanup `processAlive: false`).
+  a **separate, recommended** step.
+- `npm run release:system-smoke-required` is an opt-in strict mode that **fails closed**
+  (non-zero exit) when live system-smoke evidence is missing — recommended before breaking
+  or high-risk releases (the automated release workflow gates on the token-free suite
+  only); see `docs/plugin-system-tests.md` for the evidence checklist (child ID/PID/port,
+  trust mode, command + tool registry entries, deterministic workflow tool execution,
+  restart/reload, and cleanup `processAlive: false`).
 
 ## Style and boundaries
 

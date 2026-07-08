@@ -21,8 +21,8 @@ for (const check of checks) {
 
 console.log("\n[release-no-token] all no-token release checks passed");
 console.log(
-  "[release-no-token] NOTE: the live child system smoke is a SEPARATE REQUIRED release step and is intentionally not part of this no-token matrix (it needs the opencode binary/config and is not token-free).",
+  "[release-no-token] NOTE: the live child system smoke is a SEPARATE, RECOMMENDED step (not enforced by the automated release) and is intentionally not part of this no-token matrix (it needs the opencode binary/config and is not token-free).",
 );
 console.log(
-  "[release-no-token] run `npm run release:system-smoke-required` (fails closed when smoke evidence is missing) or complete the manual procedure in docs/plugin-system-tests.md before claiming public release readiness. A skipped smoke is NOT verified.",
+  "[release-no-token] run `npm run release:system-smoke-required` (opt-in strict mode; fails closed when smoke evidence is missing) or complete the manual procedure in docs/plugin-system-tests.md — recommended before breaking or high-risk releases. A skipped smoke is NOT verified evidence.",
 );

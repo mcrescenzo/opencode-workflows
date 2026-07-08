@@ -42,11 +42,14 @@ it prints a clear `skipped` message stating the evidence is INCOMPLETE (not
 verified) and exits `0` so local iteration is not blocked. **A skip is never
 release proof**: "skipped" must never be treated as "verified".
 
-## Required System-Smoke Release Gate
+## System-Smoke Strict Gate (Recommended, Opt-In)
 
-Public release requires live child-system smoke evidence that OpenCode startup,
-plugin registry, command/tool loading, restart semantics, and child cleanup
-actually work. The required gate is:
+Live child-system smoke evidence — proof that OpenCode startup, plugin
+registry, command/tool loading, restart semantics, and child cleanup actually
+work — is the strongest release verification this repo has. It is recommended
+before breaking or high-risk releases; the automated npm release
+(`.github/workflows/release.yml`) gates on the token-free suite only and does
+not enforce it. The opt-in strict gate is:
 
 ```sh
 npm run release:system-smoke-required
@@ -54,20 +57,20 @@ npm run release:system-smoke-required
 
 This runs `scripts/child-system-smoke.mjs --required`, which **fails closed**
 (non-zero exit, clear `REQUIRED GATE FAILED` message) when live smoke evidence
-is absent — so the release gate can never silently equate "skipped" with
+is absent — so a strict-mode run can never silently equate "skipped" with
 "verified". It is deliberately NOT part of `npm run release:no-token`, because
 the live smoke needs the `opencode` binary and local config and is not
-token-free; `release:no-token` prints a clear note that this is a separate
-required step.
+token-free; `release:no-token` prints a clear note that this is a separate,
+recommended step.
 
-To satisfy the required gate, set `OPENCODE_WORKFLOWS_CHILD_SMOKE=1` plus
+To satisfy the strict gate, set `OPENCODE_WORKFLOWS_CHILD_SMOKE=1` plus
 `OPENCODE_WORKFLOWS_CHILD_SMOKE_HELPER` to a local helper command (and
 optionally `OPENCODE_WORKFLOWS_CHILD_SMOKE_HELPER_ARGS` to a JSON array of
 string args), or complete the manual MCP `oc_plugin_smoke_test` / `oc_child_*`
 procedure below and record the evidence fields. When enabled and a helper
-returns non-zero, the required gate also fails closed.
+returns non-zero, the strict gate also fails closed.
 
-The required smoke must exercise and capture evidence for, at minimum:
+A valid smoke run must exercise and capture evidence for, at minimum:
 
 - child ID, PID, port, and trust mode
 - project directory and explicit plugin path (`opencode-workflows.js`)

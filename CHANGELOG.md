@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 This project follows the spirit of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and uses semantic versioning for published package releases.
 
+## [Unreleased]
+
+### Changed
+- The live child-system smoke is demoted from a required public-release gate
+  to a recommended, opt-in strict check: `release:system-smoke-required`
+  keeps its fail-closed behavior, but the automated release workflow gates on
+  the token-free suite only, and the docs/scripts now say so consistently.
+
 ## [0.2.0] - 2026-07-08
 
 ### Added

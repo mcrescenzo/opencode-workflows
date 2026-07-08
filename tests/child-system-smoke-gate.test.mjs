@@ -77,14 +77,14 @@ test("package.json exposes a separate required system-smoke gate script", async 
   );
 });
 
-// release:no-token must clearly call out the system smoke as a SEPARATE
-// required step, and must NOT add it to the no-token suite list.
-test("release:no-token documents the system smoke as a separate required step", async () => {
+// release:no-token must clearly call out the system smoke as a SEPARATE,
+// recommended step, and must NOT add it to the no-token suite list.
+test("release:no-token documents the system smoke as a separate recommended step", async () => {
   const releaseSrc = await fs.readFile(releaseScript, "utf8");
 
-  // The required gate is referenced as a separate step ...
+  // The strict gate is referenced as a separate step ...
   assert.match(releaseSrc, /release:system-smoke-required/);
-  assert.match(releaseSrc, /SEPARATE REQUIRED/i);
+  assert.match(releaseSrc, /SEPARATE, RECOMMENDED/i);
   // ... and a skip is explicitly not treated as verified.
   assert.match(releaseSrc, /skipped/i);
   assert.match(releaseSrc, /not verified/i);

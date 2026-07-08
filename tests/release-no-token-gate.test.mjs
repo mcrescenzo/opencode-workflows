@@ -82,6 +82,6 @@ test("release:no-token source keeps success and separate-smoke messages", async 
   assert.match(releaseSrc, /npm test/);
   assert.match(releaseSrc, /npm pack --dry-run --json/);
   assert.match(releaseSrc, /all no-token release checks passed/);
-  assert.match(releaseSrc, /SEPARATE REQUIRED release step/);
+  assert.match(releaseSrc, /SEPARATE, RECOMMENDED step/);
   assert.match(releaseSrc, /failed with status/);
 });

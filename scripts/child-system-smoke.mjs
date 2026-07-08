@@ -11,11 +11,13 @@ import { spawnSync } from "node:child_process";
 //      message stating the evidence is INCOMPLETE (not verified) and exits 0 so
 //      local iteration is not blocked.
 //
-//   2. Required release gate (`--required`):
+//   2. Opt-in strict gate (`--required`):
 //      `npm run release:system-smoke-required`. Fails closed (non-zero) when live
-//      smoke evidence is absent, so the public release gate cannot silently claim
-//      plugin compatibility from a skipped smoke. Use this gate (or the manual
-//      procedure in docs/plugin-system-tests.md) as the mandatory release proof.
+//      smoke evidence is absent, so a caller asking for strict verification can
+//      never mistake a skipped smoke for a verified one. Recommended before
+//      breaking or high-risk releases; the automated npm release
+//      (.github/workflows/release.yml) gates on the token-free suite only and
+//      does not run this.
 //
 // Running the real smoke requires the opencode binary/config and is NOT
 // token-free. Set OPENCODE_WORKFLOWS_CHILD_SMOKE=1 plus
@@ -50,7 +52,7 @@ function incomplete(reason) {
   }
   console.log(`[child-system-smoke] skipped (developer convenience; ${headline})`);
   console.log(
-    "[child-system-smoke] this skip is NOT release proof; run `npm run release:system-smoke-required` for the required gate or follow docs/plugin-system-tests.md.",
+    "[child-system-smoke] this skip is NOT release proof; run `npm run release:system-smoke-required` for the opt-in strict gate or follow docs/plugin-system-tests.md.",
   );
   process.exit(0);
 }
