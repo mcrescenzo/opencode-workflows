@@ -49,7 +49,6 @@ import {
 import {
   boundedSchemaSnapshot,
   structuredCorrectiveInstruction,
-  structuredFormat,
   structuredTextInstruction,
   parseStructuredTextResult,
   validateStructuredResult,
@@ -636,8 +635,10 @@ export async function runChildAgent(pluginContext, toolContext, run, payload, de
       Number.isInteger(opts.timeoutMs) && opts.timeoutMs > 0 ? opts.timeoutMs : (run.laneTimeoutMs ?? DEFAULT_CHILD_PROMPT_TIMEOUT_MS),
       MAX_CHILD_PROMPT_TIMEOUT_MS,
     );
-    const useNativeStructuredOutput = Boolean(schema && run.capabilities.structuredOutput === "available");
-    const useStructuredTextFallback = Boolean(schema && !useNativeStructuredOutput);
+    // Design C: the structured-TEXT path (instruction + parse + corrective retry) is the
+    // one production-proven route (see commit 0b48f51); native `format:` was gated behind
+    // a probe that no longer exists. Text is now the only structured path.
+    const useStructuredTextFallback = Boolean(schema);
     baseSystem = [
       "You are a child worker for an OpenCode workflow.",
       "Your final response is consumed as the workflow return value.",
@@ -649,7 +650,7 @@ export async function runChildAgent(pluginContext, toolContext, run, payload, de
       .filter(Boolean)
       .join("\n\n");
     policy = resolveLanePolicy(run, opts);
-    outputFormat = useNativeStructuredOutput ? structuredFormat(schema) : { type: "text" };
+    outputFormat = { type: "text" };
     resolved = {
       opts,
       modelKey: modelKey(model),
@@ -851,7 +852,6 @@ export async function runChildAgent(pluginContext, toolContext, run, payload, de
       ...(agent ? { agent } : {}),
       ...(model ? { model } : {}),
       system: baseSystem,
-      ...(useNativeStructuredOutput ? { format: outputFormat } : {}),
       parts: [textPart(prompt)],
     };
 
@@ -868,7 +868,6 @@ export async function runChildAgent(pluginContext, toolContext, run, payload, de
     const correctivePromptBody = (validationMessage) => ({
       ...(agent ? { agent } : {}),
       ...(model ? { model } : {}),
-      ...(useNativeStructuredOutput ? { format: outputFormat } : {}),
       parts: [textPart(structuredCorrectiveInstruction(schema, validationMessage))],
     });
     const finalValidationFailureClass = () => correctiveRetries > 0 ? "validation_exhausted" : "terminal";
@@ -1078,10 +1077,7 @@ export async function runChildAgent(pluginContext, toolContext, run, payload, de
         run.tokens.reasoning += tokens.reasoning;
         run.cost += cost;
 
-        if (useNativeStructuredOutput) {
-          result = run.adapter.getStructured(lastResult);
-          if (result === undefined) throw new Error(`Native structured workflow result was missing at ${run.capabilities.structuredOutputField}`);
-        } else if (useStructuredTextFallback) {
+        if (useStructuredTextFallback) {
           const rawText = responseText(lastResult);
           try {
             result = parseStructuredTextResult(rawText);

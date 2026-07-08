@@ -83,7 +83,7 @@ test("debug capture persists redacted prompt, schema, and transcript with privat
   const { tools, context, directory, calls } = await makeHarness(
     async () => ({
       data: {
-        parts: [],
+        parts: [{ type: "text", text: JSON.stringify({ ok: true }) }],
         info: {
           structured: { ok: true },
           tokens: { input: 1, output: 1, reasoning: 0 },
@@ -173,7 +173,7 @@ test("workflow_events filters, pages, and reports corrupt trailing lines", async
 test("workflow_apply records approval wait metrics in status and closeout", async () => {
   const { tools, context, directory } = await makeHarness(async () => ({
     data: {
-      parts: [],
+      parts: [{ type: "text", text: JSON.stringify({ patches: [{ path: "applied.txt", content: "applied\n" }] }) }],
       info: {
         structured: { patches: [{ path: "applied.txt", content: "applied\n" }] },
         tokens: { input: 1, output: 1, reasoning: 0 },

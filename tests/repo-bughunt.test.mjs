@@ -43,16 +43,19 @@ async function resultOutput(tools, context, runOutput) {
 
 // ---- response shapers ----
 
-// Canonical OpenCode NATIVE structured-output response shape (data.info.structured).
+// Design C: structured-TEXT is the only schema-lane path, so both shapers below
+// carry the JSON object in the text part (parsed back by parseStructuredTextResult).
+// `structured` is kept as a distinct name (rather than rewriting every call site)
+// and still populates `info.structured` too, though the kernel no longer reads it.
 function structured(obj) {
-  return { data: { parts: [{ type: "text", text: "ok" }], info: { structured: obj, tokens: { input: 1, output: 1, reasoning: 0 }, cost: 0 } } };
+  return { data: { parts: [{ type: "text", text: JSON.stringify(obj) }], info: { structured: obj, tokens: { input: 1, output: 1, reasoning: 0 }, cost: 0 } } };
 }
 
-// Structured-TEXT FALLBACK response shape: the JSON object is carried in a text
-// part (data.parts[].text) and parsed back by parseStructuredTextResult. Used
-// when run.capabilities.structuredOutput !== "available" (child-agent-runner.js
-// injects structuredTextInstruction into the system prompt and sets
-// outputFormat: { type: "text" }).
+// Structured-TEXT response shape: the JSON object is carried in a text part
+// (data.parts[].text) and parsed back by parseStructuredTextResult. This is the
+// ONLY structured-output path regardless of what run.capabilities.structuredOutput
+// reports (child-agent-runner.js injects structuredTextInstruction into the
+// system prompt and sets outputFormat: { type: "text" }).
 function textStructured(obj) {
   return { data: { parts: [{ type: "text", text: JSON.stringify(obj) }], info: { tokens: { input: 1, output: 1, reasoning: 0 }, cost: 0 } } };
 }

@@ -234,12 +234,13 @@ function portPrompt(config = {}) {
     }
     if (lanePrompt) {
       const m = text.match(/"id"\s*:\s*"([^"]+)"/);
-      return { data: { parts: [{ type: "text", text: "implemented" }], info: { structured: {
+      const laneResult = {
         itemId: m ? m[1] : "item-1", outcome: config.laneOutcome === "blocked" ? "blocked" : "implemented", summary: "implemented",
         readyForIntegration: config.laneOutcome !== "blocked",
         filesChanged: config.writeFile ? [config.writeFile.name] : [], commandsRun: ["write"],
         acceptanceEvidence: config.laneOutcome === "blocked" ? [] : ["written"], residualRisks: [], followups: [],
-      }, tokens: { input: 1, output: 1, reasoning: 0 }, cost: 0 } } };
+      };
+      return { data: { parts: [{ type: "text", text: JSON.stringify(laneResult) }], info: { structured: laneResult, tokens: { input: 1, output: 1, reasoning: 0 }, cost: 0 } } };
     }
     return { data: { parts: [], info: {} } };
   };
@@ -2185,11 +2186,12 @@ test("first-run-slice template runs read-only, synthesizes in pure JS, and write
     const text = String(input?.body?.parts?.[0]?.text ?? "");
     const match = text.match(/Read-only slice "([^"]+)"/);
     const slice = match ? match[1] : "primary";
-    return { data: { parts: [{ type: "text", text: "ok" }], info: { structured: {
+    const laneResult = {
       slice,
       claim: `slice ${slice} does X`,
       evidence: slice === "blank" ? "" : "file.js:10",
-    }, tokens: { input: 1, output: 1, reasoning: 0 }, cost: 0 } } };
+    };
+    return { data: { parts: [{ type: "text", text: JSON.stringify(laneResult) }], info: { structured: laneResult, tokens: { input: 1, output: 1, reasoning: 0 }, cost: 0 } } };
   });
   try {
     const source = __test.DEFAULT_TEMPLATES["first-run-slice"].replace(
@@ -2874,21 +2876,22 @@ test("non-dry beads-drain unsafe permission override cannot proceed with permiss
   const calls = [];
   const { tools, context, directory } = await makeHarness(async (input) => {
     await fs.writeFile(path.join(input.query.directory, "unsafe-permission.txt"), "accepted risk lane\n", "utf8");
+    const laneResult = {
+      itemId: "item-1",
+      outcome: "implemented",
+      summary: "implemented with accepted permission risk",
+      readyForIntegration: true,
+      filesChanged: ["unsafe-permission.txt"],
+      commandsRun: ["write unsafe-permission.txt"],
+      acceptanceEvidence: ["unsafe-permission.txt written"],
+      residualRisks: ["permission gates were accepted as unverified"],
+      followups: [],
+    };
     return {
       data: {
-        parts: [{ type: "text", text: "implemented" }],
+        parts: [{ type: "text", text: JSON.stringify(laneResult) }],
         info: {
-          structured: {
-            itemId: "item-1",
-            outcome: "implemented",
-            summary: "implemented with accepted permission risk",
-            readyForIntegration: true,
-            filesChanged: ["unsafe-permission.txt"],
-            commandsRun: ["write unsafe-permission.txt"],
-            acceptanceEvidence: ["unsafe-permission.txt written"],
-            residualRisks: ["permission gates were accepted as unverified"],
-            followups: [],
-          },
+          structured: laneResult,
           tokens: { input: 1, output: 1, reasoning: 0 },
           cost: 0,
         },
@@ -2916,21 +2919,22 @@ test("non-dry beads-drain proceeds when required live gates are forced verified"
   const calls = [];
   const { tools, context, directory } = await makeHarness(async (input) => {
     await fs.writeFile(path.join(input.query.directory, "beads-drain.txt"), "verified gates lane\n", "utf8");
+    const laneResult = {
+      itemId: "item-1",
+      outcome: "implemented",
+      summary: "implemented gated beads drain item",
+      readyForIntegration: true,
+      filesChanged: ["beads-drain.txt"],
+      commandsRun: ["write beads-drain.txt"],
+      acceptanceEvidence: ["beads-drain.txt written"],
+      residualRisks: [],
+      followups: [],
+    };
     return {
       data: {
-        parts: [{ type: "text", text: "implemented" }],
+        parts: [{ type: "text", text: JSON.stringify(laneResult) }],
         info: {
-          structured: {
-            itemId: "item-1",
-            outcome: "implemented",
-            summary: "implemented gated beads drain item",
-            readyForIntegration: true,
-            filesChanged: ["beads-drain.txt"],
-            commandsRun: ["write beads-drain.txt"],
-            acceptanceEvidence: ["beads-drain.txt written"],
-            residualRisks: [],
-            followups: [],
-          },
+          structured: laneResult,
           tokens: { input: 1, output: 1, reasoning: 0 },
           cost: 0,
         },
@@ -2969,21 +2973,22 @@ test("workflow drain non-dry accepted lanes flow through integration diff plan",
   const { tools, context, directory } = await makeHarness(async (input) => {
     prompts.push(input);
     await fs.writeFile(path.join(input.query.directory, "drain.txt"), "accepted lane\n", "utf8");
+    const laneResult = {
+      itemId: "item-1",
+      outcome: "implemented",
+      summary: "implemented fake drain item",
+      readyForIntegration: true,
+      filesChanged: ["drain.txt"],
+      commandsRun: ["write drain.txt"],
+      acceptanceEvidence: ["drain.txt written"],
+      residualRisks: [],
+      followups: [],
+    };
     return {
       data: {
-        parts: [{ type: "text", text: "accepted" }],
+        parts: [{ type: "text", text: JSON.stringify(laneResult) }],
         info: {
-          structured: {
-            itemId: "item-1",
-            outcome: "implemented",
-            summary: "implemented fake drain item",
-            readyForIntegration: true,
-            filesChanged: ["drain.txt"],
-            commandsRun: ["write drain.txt"],
-            acceptanceEvidence: ["drain.txt written"],
-            residualRisks: [],
-            followups: [],
-          },
+          structured: laneResult,
           tokens: { input: 1, output: 1, reasoning: 0 },
           cost: 0,
         },
@@ -3028,7 +3033,10 @@ return await drain({ adapter: "fake", dryRun: false, maxAttempts: 1, maxWaves: 2
       .map((line) => JSON.parse(line));
     assert.ok(validationLedger.some((entry) => entry.phase === "integration-validation" && entry.status === "passed"));
     assert.equal(await fileExists(path.join(context.directory, "drain.txt")), false);
-    assert.equal(prompts[0].body.format.type, "json_schema");
+    // Design C: structured-text is the only schema-lane path; the kernel must never send
+    // format: to session.prompt (child-agent-runner.js injects a structured-text instruction
+    // into the system prompt instead).
+    assert.ok(!("format" in prompts[0].body), "schema lanes must never send format: to session.prompt");
     assert.match(prompts[0].body.parts[0].text, /Do not mutate domain state directly/);
 
     const applied = await tools.workflow_apply.execute({
@@ -3051,21 +3059,22 @@ test("workflow drain integration validation failure blocks diff plan creation", 
   const calls = [];
   const { tools, context, directory } = await makeHarness(async (input) => {
     await fs.writeFile(path.join(input.query.directory, "drain.txt"), "accepted lane\n", "utf8");
+    const laneResult = {
+      itemId: "item-1",
+      outcome: "implemented",
+      summary: "implemented fake drain item",
+      readyForIntegration: true,
+      filesChanged: ["drain.txt"],
+      commandsRun: ["write drain.txt"],
+      acceptanceEvidence: ["drain.txt written"],
+      residualRisks: [],
+      followups: [],
+    };
     return {
       data: {
-        parts: [{ type: "text", text: "accepted" }],
+        parts: [{ type: "text", text: JSON.stringify(laneResult) }],
         info: {
-          structured: {
-            itemId: "item-1",
-            outcome: "implemented",
-            summary: "implemented fake drain item",
-            readyForIntegration: true,
-            filesChanged: ["drain.txt"],
-            commandsRun: ["write drain.txt"],
-            acceptanceEvidence: ["drain.txt written"],
-            residualRisks: [],
-            followups: [],
-          },
+          structured: laneResult,
           tokens: { input: 1, output: 1, reasoning: 0 },
           cost: 0,
         },
@@ -3178,21 +3187,22 @@ test("workflow drain partial failure with patches is not masked as clean awaitin
   const calls = [];
   const { tools, context, directory } = await makeHarness(async (input) => {
     await fs.writeFile(path.join(input.query.directory, "drain.txt"), "accepted lane\n", "utf8");
+    const laneResult = {
+      itemId: "item-1",
+      outcome: "implemented",
+      summary: "implemented fake drain item",
+      readyForIntegration: true,
+      filesChanged: ["drain.txt"],
+      commandsRun: ["write drain.txt"],
+      acceptanceEvidence: ["drain.txt written"],
+      residualRisks: [],
+      followups: [],
+    };
     return {
       data: {
-        parts: [{ type: "text", text: "accepted" }],
+        parts: [{ type: "text", text: JSON.stringify(laneResult) }],
         info: {
-          structured: {
-            itemId: "item-1",
-            outcome: "implemented",
-            summary: "implemented fake drain item",
-            readyForIntegration: true,
-            filesChanged: ["drain.txt"],
-            commandsRun: ["write drain.txt"],
-            acceptanceEvidence: ["drain.txt written"],
-            residualRisks: [],
-            followups: [],
-          },
+          structured: laneResult,
           tokens: { input: 1, output: 1, reasoning: 0 },
           cost: 0,
         },
@@ -3293,21 +3303,22 @@ test("workflow drain rejected lanes are recorded but excluded from integration",
   const calls = [];
   const { tools, context, directory } = await makeHarness(async (input) => {
     await fs.writeFile(path.join(input.query.directory, "rejected.txt"), "rejected lane\n", "utf8");
+    const laneResult = {
+      itemId: "item-1",
+      outcome: "blocked",
+      summary: "not ready for integration",
+      readyForIntegration: false,
+      filesChanged: ["rejected.txt"],
+      commandsRun: ["write rejected.txt"],
+      acceptanceEvidence: [],
+      residualRisks: ["blocked"],
+      followups: [],
+    };
     return {
       data: {
-        parts: [{ type: "text", text: "blocked" }],
+        parts: [{ type: "text", text: JSON.stringify(laneResult) }],
         info: {
-          structured: {
-            itemId: "item-1",
-            outcome: "blocked",
-            summary: "not ready for integration",
-            readyForIntegration: false,
-            filesChanged: ["rejected.txt"],
-            commandsRun: ["write rejected.txt"],
-            acceptanceEvidence: [],
-            residualRisks: ["blocked"],
-            followups: [],
-          },
+          structured: laneResult,
           tokens: { input: 1, output: 1, reasoning: 0 },
           cost: 0,
         },
@@ -3557,18 +3568,19 @@ test("beads-drain unsafe permission override no longer bypasses elevated permiss
   const calls = [];
   const { tools, context, directory } = await makeHarness(async (input) => {
     await fs.writeFile(path.join(input.query.directory, "delegated-gates.txt"), "delegated gates lane\n", "utf8");
+    const laneResult = {
+      itemId: "item-1",
+      outcome: "implemented",
+      summary: "implemented via delegated gates",
+      readyForIntegration: true,
+      filesChanged: ["delegated-gates.txt"],
+      commandsRun: ["write delegated-gates.txt"],
+      acceptanceEvidence: ["delegated-gates.txt written"],
+      residualRisks: ["permission gates were accepted as unverified"],
+      followups: [],
+    };
     return {
-      data: { parts: [{ type: "text", text: "implemented" }], info: { structured: {
-        itemId: "item-1",
-        outcome: "implemented",
-        summary: "implemented via delegated gates",
-        readyForIntegration: true,
-        filesChanged: ["delegated-gates.txt"],
-        commandsRun: ["write delegated-gates.txt"],
-        acceptanceEvidence: ["delegated-gates.txt written"],
-        residualRisks: ["permission gates were accepted as unverified"],
-        followups: [],
-      }, tokens: { input: 1, output: 1, reasoning: 0 }, cost: 0 } },
+      data: { parts: [{ type: "text", text: JSON.stringify(laneResult) }], info: { structured: laneResult, tokens: { input: 1, output: 1, reasoning: 0 }, cost: 0 } },
     };
   }, {
     capabilities: {
@@ -5584,7 +5596,7 @@ test("workflow_kill on a run owned by another process writes a durable kill requ
 test("run finalization releases run lock when cleanup state persistence fails", async () => {
   const { tools, context, directory } = await makeHarness(async () => ({
     data: {
-      parts: [{ type: "text", text: "patch" }],
+      parts: [{ type: "text", text: JSON.stringify({ patches: [{ path: "cleanup-finalizer.txt", content: "patched\n" }] }) }],
       info: {
         structured: { patches: [{ path: "cleanup-finalizer.txt", content: "patched\n" }] },
         tokens: { input: 1, output: 1, reasoning: 0 },
@@ -5789,7 +5801,7 @@ test("modelTiers resolves lane models and is covered by the approval hash", asyn
   const seen = [];
   const prompt = async (input) => {
     seen.push(input?.body?.model ? `${input.body.model.providerID}/${input.body.model.modelID}` : "none");
-    return { data: { parts: [{ type: "text", text: "ok" }], info: { structured: { ok: true }, tokens: { input: 1, output: 1, reasoning: 0 }, cost: 0 } } };
+    return { data: { parts: [{ type: "text", text: JSON.stringify({ ok: true }) }], info: { structured: { ok: true }, tokens: { input: 1, output: 1, reasoning: 0 }, cost: 0 } } };
   };
   const { tools, context, directory } = await makeHarness(prompt);
   try {
@@ -5982,7 +5994,7 @@ test("mfv9.14: inserted upstream lane reuses shifted edit lane by signature and 
     promptTexts.push(text);
     if (text.includes("BREAK_TAIL")) throw new Error("tail boom");
     if (text.includes("edit stable")) {
-      return { data: { parts: [{ type: "text", text: "patch" }], info: {
+      return { data: { parts: [{ type: "text", text: JSON.stringify({ patches: [{ path: "shifted-edit.txt", content: "patched\n" }] }) }], info: {
         structured: { patches: [{ path: "shifted-edit.txt", content: "patched\n" }] },
         tokens: { input: 1, output: 1, reasoning: 0 },
         cost: 0.01,

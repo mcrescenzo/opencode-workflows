@@ -53,18 +53,24 @@ export async function runLeafEnvelope(tools, context, request) {
 
 // ---- response shapers ----
 
-// Canonical OpenCode NATIVE structured-output response shape (data.info.structured).
-// Used when run.capabilities.structuredOutput === "available": the kernel sets
-// outputFormat {type:"json_schema"} and reads data.info.structured.
+// Design C: structured-TEXT is the only schema-lane path (child-agent-runner.js
+// never sends format: to session.prompt any more), so BOTH shapers below carry
+// the JSON object in the text part and are parsed back by parseStructuredTextResult.
+// `structured` is kept as a distinct name (rather than deleting it and rewriting
+// every call site) purely so existing callers/fixtures across the repo-review-*
+// leaf suites don't need renaming; it is otherwise identical to `textStructured`.
+// The `info.structured` field is also still populated so any leftover assertions
+// on it keep working, but it is no longer read by the kernel.
 export function structured(obj) {
-  return { data: { parts: [{ type: "text", text: "ok" }], info: { structured: obj, tokens: { input: 1, output: 1, reasoning: 0 }, cost: 0 } } };
+  return { data: { parts: [{ type: "text", text: JSON.stringify(obj) }], info: { structured: obj, tokens: { input: 1, output: 1, reasoning: 0 }, cost: 0 } } };
 }
 
-// Structured-TEXT FALLBACK response shape: the JSON object is carried in a text
-// part (data.parts[].text) and parsed back by parseStructuredTextResult. Used
-// when run.capabilities.structuredOutput !== "available" (the production default):
-// the kernel injects structuredTextInstruction into the system prompt, sets
-// outputFormat {type:"text"}, and extracts the JSON from the text part.
+// Structured-TEXT response shape: the JSON object is carried in a text part
+// (data.parts[].text) and parsed back by parseStructuredTextResult. This is the
+// ONLY structured-output path (child-agent-runner.js injects
+// structuredTextInstruction into the system prompt, sets outputFormat
+// {type:"text"}, and extracts the JSON from the text part) regardless of what
+// run.capabilities.structuredOutput reports.
 export function textStructured(obj) {
   return { data: { parts: [{ type: "text", text: JSON.stringify(obj) }], info: { tokens: { input: 1, output: 1, reasoning: 0 }, cost: 0 } } };
 }

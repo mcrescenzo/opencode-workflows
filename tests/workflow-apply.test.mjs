@@ -180,12 +180,13 @@ function portPrompt(config = {}) {
     }
     if (lanePrompt) {
       const m = text.match(/"id"\s*:\s*"([^"]+)"/);
-      return { data: { parts: [{ type: "text", text: "implemented" }], info: { structured: {
+      const laneResult = {
         itemId: m ? m[1] : "item-1", outcome: config.laneOutcome === "blocked" ? "blocked" : "implemented", summary: "implemented",
         readyForIntegration: config.laneOutcome !== "blocked",
         filesChanged: config.writeFile ? [config.writeFile.name] : [], commandsRun: ["write"],
         acceptanceEvidence: config.laneOutcome === "blocked" ? [] : ["written"], residualRisks: [], followups: [],
-      }, tokens: { input: 1, output: 1, reasoning: 0 }, cost: 0 } } };
+      };
+      return { data: { parts: [{ type: "text", text: JSON.stringify(laneResult) }], info: { structured: laneResult, tokens: { input: 1, output: 1, reasoning: 0 }, cost: 0 } } };
     }
     return { data: { parts: [], info: {} } };
   };
@@ -195,7 +196,7 @@ test("workflow_apply finalizes staged Beads mutations after patch apply", async 
   const toastCalls = [];
   const { tools, context, directory } = await makeHarness(async () => ({
     data: {
-      parts: [{ type: "text", text: "patch" }],
+      parts: [{ type: "text", text: JSON.stringify({ patches: [{ path: "applied.txt", content: "applied\n" }] }) }],
       info: {
         structured: { patches: [{ path: "applied.txt", content: "applied\n" }] },
         tokens: { input: 1, output: 1, reasoning: 0 },
@@ -295,7 +296,7 @@ return await agent("edit", { edit: true, schema: { type: "object", properties: {
 test("workflow_apply rejects staged domain mutations changed after diff approval", async () => {
   const { tools, context, directory } = await makeHarness(async () => ({
     data: {
-      parts: [{ type: "text", text: "patch" }],
+      parts: [{ type: "text", text: JSON.stringify({ patches: [{ path: "domain-hash.txt", content: "safe patch\n" }] }) }],
       info: {
         structured: { patches: [{ path: "domain-hash.txt", content: "safe patch\n" }] },
         tokens: { input: 1, output: 1, reasoning: 0 },
@@ -340,7 +341,7 @@ return await agent("edit", { edit: true, schema: { type: "object", properties: {
 test("workflow_apply leaves retryable apply-failed state when Beads finalization fails", async () => {
   const { tools, context, directory } = await makeHarness(async () => ({
     data: {
-      parts: [{ type: "text", text: "patch" }],
+      parts: [{ type: "text", text: JSON.stringify({ patches: [{ path: "finalization-failed.txt", content: "patch applied\n" }] }) }],
       info: {
         structured: { patches: [{ path: "finalization-failed.txt", content: "patch applied\n" }] },
         tokens: { input: 1, output: 1, reasoning: 0 },
@@ -399,7 +400,7 @@ return await agent("edit", { edit: true, schema: { type: "object", properties: {
 test("workflow_apply recovers a crash between completed-ledger and applied state write", async () => {
   const { tools, context, directory } = await makeHarness(async () => ({
     data: {
-      parts: [{ type: "text", text: "patch" }],
+      parts: [{ type: "text", text: JSON.stringify({ patches: [{ path: "crash-recovered.txt", content: "applied\n" }] }) }],
       info: {
         structured: { patches: [{ path: "crash-recovered.txt", content: "applied\n" }] },
         tokens: { input: 1, output: 1, reasoning: 0 },
@@ -471,7 +472,7 @@ return await agent("edit", { edit: true, schema: { type: "object", properties: {
 test("workflow_apply recovery refuses domain finalization when applied patch content drifted", async () => {
   const { tools, context, directory } = await makeHarness(async () => ({
     data: {
-      parts: [{ type: "text", text: "patch" }],
+      parts: [{ type: "text", text: JSON.stringify({ patches: [{ path: "drifted-after-apply.txt", content: "approved\n" }] }) }],
       info: {
         structured: { patches: [{ path: "drifted-after-apply.txt", content: "approved\n" }] },
         tokens: { input: 1, output: 1, reasoning: 0 },
@@ -531,7 +532,7 @@ return await agent("edit", { edit: true, schema: { type: "object", properties: {
 test("workflow_apply rejects an interrupted run with no matching completed ledger record", async () => {
   const { tools, context, directory } = await makeHarness(async () => ({
     data: {
-      parts: [{ type: "text", text: "patch" }],
+      parts: [{ type: "text", text: JSON.stringify({ patches: [{ path: "no-completed.txt", content: "applied\n" }] }) }],
       info: {
         structured: { patches: [{ path: "no-completed.txt", content: "applied\n" }] },
         tokens: { input: 1, output: 1, reasoning: 0 },
@@ -652,7 +653,7 @@ test("workflow_apply rejects symlink ancestor patch targets before writing", asy
   const escapeRoot = await tempDir();
   const { tools, context, directory } = await makeHarness(async () => ({
     data: {
-      parts: [{ type: "text", text: "ignored" }],
+      parts: [{ type: "text", text: JSON.stringify({ patches: [{ path: "link/newdir/file.txt", content: "escape\n" }] }) }],
       info: {
         structured: { patches: [{ path: "link/newdir/file.txt", content: "escape\n" }] },
         tokens: { input: 1, output: 1, reasoning: 0 },
@@ -716,11 +717,14 @@ test("rollbackPatches returns rollback failures instead of swallowing them", asy
 });
 
 test("workflow_apply rejects control and secret-like patch targets", async () => {
-  const { tools, context, directory } = await makeHarness(async () => ({
-    data: { parts: [{ type: "text", text: "patch" }], info: { structured: { patches: [
+  const controlSecretPatches = {
+    patches: [
       { path: ".git/hooks/post-commit", content: "#!/bin/sh\n" },
       { path: ".env", content: "TOKEN=secret\n" },
-    ] } } },
+    ],
+  };
+  const { tools, context, directory } = await makeHarness(async () => ({
+    data: { parts: [{ type: "text", text: JSON.stringify(controlSecretPatches) }], info: { structured: controlSecretPatches } },
   }));
   try {
     await initGitRepo(directory);
@@ -748,7 +752,7 @@ return await agent("edit", { edit: true, schema: { type: "object" } });`;
 
 test("workflow_apply fails clearly when an active apply lock exists", async () => {
   const { tools, context, directory } = await makeHarness(async () => ({
-    data: { parts: [{ type: "text", text: "patch" }], info: { structured: { patches: [{ path: "locked-apply.txt", content: "locked\n" }] } } },
+    data: { parts: [{ type: "text", text: JSON.stringify({ patches: [{ path: "locked-apply.txt", content: "locked\n" }] }) }], info: { structured: { patches: [{ path: "locked-apply.txt", content: "locked\n" }] } } },
   }));
   try {
     await initGitRepo(directory);
@@ -786,7 +790,7 @@ return await agent("edit", { edit: true, schema: { type: "object" } });`;
 test("workflow_apply fails closed while an active run lock is held by the owning run", async () => {
   const { tools, context, directory } = await makeHarness(async () => ({
     data: {
-      parts: [{ type: "text", text: "patch" }],
+      parts: [{ type: "text", text: JSON.stringify({ patches: [{ path: "active-run-lock.txt", content: "applied\n" }] }) }],
       info: {
         structured: { patches: [{ path: "active-run-lock.txt", content: "applied\n" }] },
         tokens: { input: 1, output: 1, reasoning: 0 },
@@ -842,7 +846,7 @@ return await agent("edit", { edit: true, schema: { type: "object", properties: {
 test("workflow_apply hash mismatches return structured retry payloads and do not apply", async () => {
   const { tools, context, directory } = await makeHarness(async () => ({
     data: {
-      parts: [{ type: "text", text: "patch" }],
+      parts: [{ type: "text", text: JSON.stringify({ patches: [{ path: "hash-mismatch.txt", content: "applied\n" }] }) }],
       info: {
         structured: { patches: [{ path: "hash-mismatch.txt", content: "applied\n" }] },
         tokens: { input: 1, output: 1, reasoning: 0 },
@@ -972,7 +976,7 @@ test("workflow_apply proceeds past a stale (dead-owner) run lock for interrupted
   // releasing run.lock — apply must still reach the patch/finalization path.
   const { tools, context, directory } = await makeHarness(async () => ({
     data: {
-      parts: [{ type: "text", text: "patch" }],
+      parts: [{ type: "text", text: JSON.stringify({ patches: [{ path: "stale-run-lock.txt", content: "applied\n" }] }) }],
       info: {
         structured: { patches: [{ path: "stale-run-lock.txt", content: "applied\n" }] },
         tokens: { input: 1, output: 1, reasoning: 0 },

@@ -745,13 +745,21 @@ test("laneSignature is stable and changes for lane-defining inputs", () => {
   // jbs3.3 (edit-and-resume / prefix reuse): the lane signature is content-addressed PER LANE and
   // deliberately does NOT mix in the whole-file run.sourceHash — editing an unrelated part of the
   // body must not invalidate this lane's cached result. A lane's own resolved inputs (prompt, model,
-  // role, schema, policy, runtimeArgs, capability mode) still fully determine its signature.
+  // role, schema, policy, runtimeArgs, signatureVersion) still fully determine its signature.
   assert.equal(signature({ sourceHash: "source-b" }), base, "sourceHash alone must NOT change a lane signature (per-lane content addressing)");
   assert.notEqual(signature({ runtimeArgs: { issue: "other" } }), base);
   assert.notEqual(signature({}, { modelKey: "anthropic/claude-sonnet" }), base);
   assert.notEqual(signature({}, { policy: { bash: "allow" } }), base);
   assert.notEqual(signature({}, { schema: { type: "object", required: ["ok"], properties: { ok: { type: "boolean" } } } }), base);
-  assert.notEqual(signature({ capabilities: { permissions: "shape-only", structuredOutput: true, structuredOutputField: "output" } }), base);
+  // Design C: capability probes are gone from the lane signature — laneSignature now embeds a
+  // constant `signatureVersion: 2` instead of the old capabilityMode object, so varying run.capabilities
+  // must NOT change the signature (this is precisely how the version bump invalidates every pre-C
+  // resume cache ONCE, deliberately, rather than keying resume on capability values forever).
+  assert.equal(
+    signature({ capabilities: { permissions: "shape-only", structuredOutput: false, structuredOutputField: "something-else" } }),
+    base,
+    "capabilities must not affect the lane signature (Design C: signatureVersion replaces capabilityMode)",
+  );
 });
 
 test("finalizeStagedDomainMutations rejects unsupported staged operations", async () => {

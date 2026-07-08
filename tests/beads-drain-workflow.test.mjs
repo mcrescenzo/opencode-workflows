@@ -174,7 +174,7 @@ function portPrompt(config = {}) {
     }
     if (lanePrompt) {
       const m = text.match(/"id"\s*:\s*"([^"]+)"/);
-      return { data: { parts: [{ type: "text", text: "implemented" }], info: { structured: {
+      const laneResult = {
         itemId: m ? m[1] : "item-1",
         outcome: config.laneOutcome === "blocked" ? "blocked" : "implemented",
         summary: "implemented fake Beads item",
@@ -184,7 +184,8 @@ function portPrompt(config = {}) {
         acceptanceEvidence: config.laneOutcome === "blocked" ? [] : ["written"],
         residualRisks: [],
         followups: [],
-      }, tokens: { input: 1, output: 1, reasoning: 0 }, cost: 0 } } };
+      };
+      return { data: { parts: [{ type: "text", text: JSON.stringify(laneResult) }], info: { structured: laneResult, tokens: { input: 1, output: 1, reasoning: 0 }, cost: 0 } } };
     }
     return { data: { parts: [], info: {} } };
   };
@@ -499,7 +500,7 @@ test("R11-followup-2: validate() receives the controller's git-derived changed p
       await fs.writeFile(path.join(input.query.directory, "beads-work.txt"), "real code change\n", "utf8");
     }
     if (lanePrompt) {
-      return { data: { parts: [{ type: "text", text: "implemented" }], info: { structured: {
+      const laneResult = {
         itemId: "item-1",
         outcome: "implemented",
         summary: "implemented",
@@ -510,7 +511,8 @@ test("R11-followup-2: validate() receives the controller's git-derived changed p
         acceptanceEvidence: ["written"],
         residualRisks: [],
         followups: [],
-      }, tokens: { input: 1, output: 1, reasoning: 0 }, cost: 0 } } };
+      };
+      return { data: { parts: [{ type: "text", text: JSON.stringify(laneResult) }], info: { structured: laneResult, tokens: { input: 1, output: 1, reasoning: 0 }, cost: 0 } } };
     }
     return { data: { parts: [], info: {} } };
   }, {

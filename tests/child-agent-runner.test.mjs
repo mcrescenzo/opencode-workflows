@@ -895,7 +895,9 @@ test("runChildAgent structured-text parse failure journals dirty salvage exactly
     },
   }), calls);
   const toolContext = { directory: root, sessionID: "parent-session", abort: new AbortController().signal };
-  const run = minimalChildRun(dir, { capabilities: { ...DEFAULT_CAPABILITIES, structuredOutput: "unavailable" } });
+  // Design C: structured-text is the ONLY schema-lane path, even when the mock capabilities
+  // advertise native support ("available") — the run must never send `format:` to session.prompt.
+  const run = minimalChildRun(dir, { capabilities: { ...DEFAULT_CAPABILITIES, structuredOutput: "available" } });
   const salvageCalls = [];
   try {
     await assert.rejects(
@@ -927,6 +929,7 @@ test("runChildAgent structured-text parse failure journals dirty salvage exactly
     );
 
     assert.equal(calls.prompt.length, 1, "terminal structured parse failure must not retry");
+    assert.ok(!("format" in calls.prompt[0].body), "structured-text path must never send format: to session.prompt");
     assert.equal(run.laneOutcomes.failure, 1, "failure should be recorded exactly once");
     assert.equal(salvageCalls.length, 1, "shared journalFailure path captures salvage exactly once");
     const lane = run.laneRecords.get("lane:structured-failure");
@@ -952,7 +955,9 @@ test("runChildAgent structured schema-validation failure journals dirty salvage 
     },
   }), calls);
   const toolContext = { directory: root, sessionID: "parent-session", abort: new AbortController().signal };
-  const run = minimalChildRun(dir, { capabilities: { ...DEFAULT_CAPABILITIES, structuredOutput: "unavailable" } });
+  // Design C: structured-text is the ONLY schema-lane path, even when the mock capabilities
+  // advertise native support ("available") — the run must never send `format:` to session.prompt.
+  const run = minimalChildRun(dir, { capabilities: { ...DEFAULT_CAPABILITIES, structuredOutput: "available" } });
   const salvageCalls = [];
   try {
     await assert.rejects(
@@ -984,6 +989,7 @@ test("runChildAgent structured schema-validation failure journals dirty salvage 
     );
 
     assert.equal(calls.prompt.length, 1, "terminal schema validation failure must not retry");
+    assert.ok(!("format" in calls.prompt[0].body), "structured-text path must never send format: to session.prompt");
     assert.equal(run.laneOutcomes.failure, 1, "failure should be recorded exactly once");
     assert.equal(salvageCalls.length, 1, "schema failure uses the shared journalFailure salvage path once");
     const lane = run.laneRecords.get("lane:schema-failure");
@@ -1013,7 +1019,9 @@ test("runChildAgent corrective retry re-prompts the same child session and succe
     };
   }, calls);
   const toolContext = { directory: root, sessionID: "parent-session", abort: new AbortController().signal };
-  const run = minimalChildRun(dir, { capabilities: { ...DEFAULT_CAPABILITIES, structuredOutput: "unavailable" } });
+  // Design C: structured-text is the ONLY schema-lane path, even when the mock capabilities
+  // advertise native support ("available") — the run must never send `format:` to session.prompt.
+  const run = minimalChildRun(dir, { capabilities: { ...DEFAULT_CAPABILITIES, structuredOutput: "available" } });
   try {
     const result = await runChildAgent(pluginContext, toolContext, run, {
       callId: "lane:corrective-success",
@@ -1033,6 +1041,8 @@ test("runChildAgent corrective retry re-prompts the same child session and succe
     assert.equal(calls.prompt.length, 2);
     assert.equal(calls.prompt[0].path.id, "child-1");
     assert.equal(calls.prompt[1].path.id, "child-1");
+    assert.ok(!("format" in calls.prompt[0].body), "structured-text path must never send format: to session.prompt");
+    assert.ok(!("format" in calls.prompt[1].body), "corrective retries must never send format: to session.prompt");
     assert.match(calls.prompt[1].body.parts[0].text, /previous response failed validation/i);
     assert.match(calls.prompt[1].body.parts[0].text, /ONLY a corrected JSON object/);
     assert.doesNotMatch(calls.prompt[1].body.parts[0].text, /not-a-boolean/);
@@ -1063,7 +1073,9 @@ test("runChildAgent corrective retry exhaustion records validation_exhausted as 
     },
   }), calls);
   const toolContext = { directory: root, sessionID: "parent-session", abort: new AbortController().signal };
-  const run = minimalChildRun(dir, { capabilities: { ...DEFAULT_CAPABILITIES, structuredOutput: "unavailable" } });
+  // Design C: structured-text is the ONLY schema-lane path, even when the mock capabilities
+  // advertise native support ("available") — the run must never send `format:` to session.prompt.
+  const run = minimalChildRun(dir, { capabilities: { ...DEFAULT_CAPABILITIES, structuredOutput: "available" } });
   try {
     await assert.rejects(
       runChildAgent(pluginContext, toolContext, run, {
@@ -1085,6 +1097,8 @@ test("runChildAgent corrective retry exhaustion records validation_exhausted as 
     assert.equal(calls.prompt.length, 2, "default correctiveRetries=1 gives one corrective turn");
     assert.equal(calls.prompt[0].path.id, "child-1");
     assert.equal(calls.prompt[1].path.id, "child-1");
+    assert.ok(!("format" in calls.prompt[0].body), "structured-text path must never send format: to session.prompt");
+    assert.ok(!("format" in calls.prompt[1].body), "corrective retries must never send format: to session.prompt");
     assert.equal(run.tokens.input, 2);
     assert.equal(run.tokens.output, 2);
     assert.equal(run.laneOutcomes.failure, 1);
@@ -1362,8 +1376,10 @@ test("runChildAgent records structured-text fallback parse failure details as te
       info: { tokens: { input: 1, output: 1, reasoning: 0 }, cost: 0 },
     },
   });
+  // Design C: structured-text is the ONLY schema-lane path, even when the mock capabilities
+  // advertise native support ("available") — the run must never send `format:` to session.prompt.
   const { tools, context, directory, calls } = await makeHarness(prompt, {
-    capabilities: { ...DEFAULT_CAPABILITIES, structuredOutput: "unavailable" },
+    capabilities: { ...DEFAULT_CAPABILITIES, structuredOutput: "available" },
   });
   try {
     const source = `export const meta = { name: "structured-text-terminal", profile: "read-only-review", maxAgents: 1 };
@@ -1381,6 +1397,7 @@ return await agent("return schema", {
     await assert.rejects(runApproved(tools, context, source), /Unexpected token|not valid JSON/i);
 
     assert.equal(calls.prompt.length, 1, "malformed structured-text output must not be retried");
+    assert.ok(!("format" in calls.prompt[0].body), "structured-text path must never send format: to session.prompt");
     const statuses = JSON.parse(await tools.workflow_status.execute({ format: "json", detail: "compact", limit: 50 }, context));
     const failed = statuses.find((entry) => entry.meta?.name === "structured-text-terminal");
     assert.ok(failed, "the failed structured-text run should be listed");

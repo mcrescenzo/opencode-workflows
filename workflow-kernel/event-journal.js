@@ -47,7 +47,7 @@ function laneSignature(run, prompt, resolved) {
   return hash(stableStringify({
     // jbs3.3 (edit-and-resume / prefix reuse): the lane signature is CONTENT-ADDRESSED per lane —
     // it hashes only this lane's own effective inputs (resolved prompt + model + agent/role/system +
-    // schema/outputFormat + permission policy + lane options + capability mode + runtimeArgs). The
+    // schema/outputFormat + permission policy + lane options + signatureVersion + runtimeArgs). The
     // whole-file `run.sourceHash` is deliberately NOT mixed in: a lane's output is fully determined
     // by the inputs above, so an edit to an UNRELATED part of the body must not invalidate this lane.
     // This lets an operator edit a workflow body and resume reusing every lane whose resolved inputs
@@ -68,11 +68,9 @@ function laneSignature(run, prompt, resolved) {
     schema: resolved.schema,
     permissionPolicy: resolved.policy,
     laneOptions: normalizeAgentOptions(resolved.opts),
-    capabilityMode: {
-      permissions: run.capabilities.permissions,
-      structuredOutput: run.capabilities.structuredOutput,
-      structuredOutputField: run.capabilities.structuredOutputField,
-    },
+    // v2: capability probes removed (Design C); bumping the version invalidates pre-C
+    // resume caches once, deliberately.
+    signatureVersion: 2,
     // runtimeDiagnostics (SDK/plugin versions, server URL, client-shape booleans) is
     // deliberately excluded: it does not affect a child agent's output and is volatile
     // across processes (the server URL/port is randomized on each OpenCode start), so
