@@ -110,8 +110,8 @@ source checkout, or follow the GitHub links in the table.
 | Ships with the npm package | `docs/workflow-plugin.md` | **Yes** |
 | Active operator references (GitHub only) | `README.md`, `skills/*/SKILL.md`, [docs/workflow-recipes.md](https://github.com/mcrescenzo/opencode-workflows/blob/main/docs/workflow-recipes.md), [docs/plugin-system-tests.md](https://github.com/mcrescenzo/opencode-workflows/blob/main/docs/plugin-system-tests.md), [docs/run-audit-playbook.md](https://github.com/mcrescenzo/opencode-workflows/blob/main/docs/run-audit-playbook.md), [docs/goal-supervision-autonomous-drains.md](https://github.com/mcrescenzo/opencode-workflows/blob/main/docs/goal-supervision-autonomous-drains.md) | No (`README.md` itself ships) |
 | Active technical contracts (GitHub only) | [docs/workflow-extensions.md](https://github.com/mcrescenzo/opencode-workflows/blob/main/docs/workflow-extensions.md) | No |
-| Historical snapshots / audits (GitHub only) | `docs/release-gate-validation-2026-06-16.md`, `docs/dogfood-rollout-2026-06-16.md`, `docs/workflow-autonomous-harness-design.md`, `docs/review-2026-06-19-bug-robustness-remediation-plan.md`, `docs/superpowers/plans/2026-06-23-port-repo-bughunt-to-opencode.md`, `docs/superpowers/plans/2026-06-23-session-aware-model-tiering-plan.md` | No |
-| Roadmap / planning (GitHub only) | `docs/workflow-autonomous-harness-plan.md`, `docs/general-purpose-harness-extraction-plan.md`, `docs/claude-parity-roadmap.md`, `docs/superpowers/specs/2026-06-23-session-aware-model-tiering-design.md` | No |
+| Historical snapshots / audits (GitHub only) | `docs/release-gate-validation-2026-06-16.md`, `docs/dogfood-rollout-2026-06-16.md`, `docs/workflow-autonomous-harness-design.md`, `docs/review-2026-06-19-bug-robustness-remediation-plan.md`, `docs/superpowers/plans/2026-06-23-port-repo-bughunt-to-opencode.md`, `docs/superpowers/plans/2026-06-23-session-aware-model-tiering-plan.md`, `docs/general-purpose-harness-extraction-plan.md`, `docs/superpowers/plans/2026-07-07-design-c-gate-simplification.md`, `docs/superpowers/specs/2026-07-08-pure-architecture-extraction-design.md`, `docs/superpowers/plans/2026-07-08-pure-architecture-extraction.md` | No |
+| Roadmap / planning (GitHub only) | `docs/workflow-autonomous-harness-plan.md`, `docs/claude-parity-roadmap.md`, `docs/superpowers/specs/2026-06-23-session-aware-model-tiering-design.md`, `docs/superpowers/specs/2026-07-07-toast-status-cards-design.md`, `docs/superpowers/plans/2026-07-08-agent-surface-docs-accuracy.md` | No |
 
 Canonical safety references: apply authority and primary-tree writes are in
 `Authority Profiles And Apply Boundary`; raw run artifacts, transcript fallback,
@@ -550,6 +550,12 @@ fanout or nest workflows. The recipe documents `maxAgents` sizing (one slot per
 `agent()` lane) and a failure-handling checklist (stale `approvalHash`, a lane
 that fails its schema, evidence-free claims that land in
 `droppedUnsupportedClaims`).
+
+Two more starter templates ship alongside it: `scoped-parallel` demonstrates
+the scoped-helper `parallel()` callback form over an `args.items` list, and
+`edit-review` demonstrates the smallest schema-gated edit lane (an edit lane
+must declare a schema returning `{ patches: [...] }`). List all three with
+`workflow_templates`; save a copy with `workflow_template_save`.
 
 The next recipe is **generic read-only deep research**: scoped `parallel()`
 inventory lanes that return claim + concrete evidence, with pure-JS synthesis
