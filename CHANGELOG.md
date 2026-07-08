@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 This project follows the spirit of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and uses semantic versioning for published package releases.
 
-## [Unreleased]
+## [0.2.0] - 2026-07-08
 
 ### Added
 - Child lanes now receive a one-line authority disclosure in their system
