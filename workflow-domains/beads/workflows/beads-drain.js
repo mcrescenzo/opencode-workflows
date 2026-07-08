@@ -17,7 +17,7 @@ export const meta = {
     { label: "local autonomous drain", args: { mode: "autonomous-local", scope: { label: "ready-for-agent" }, maxWaves: 8 } },
   ],
   argsSchema: {
-    type: ["object", "string", "array", "number", "boolean", "null"],
+    type: "object",
     properties: {
       mode: {},
       dryRun: {},

@@ -1659,6 +1659,13 @@ async function planWorkflowEnvelope(pluginContext, toolContext, args) {
   const sourceHash = hash(source);
   const { meta, body } = parseWorkflowSource(source);
   const sourceMetadata = sourcePreviewMetadata(source, sourcePath, args);
+  // Canonicalize drain invocations (profile<->mode reconciliation, plus one-shot parse of a
+  // model-emitted JSON string for the args bag) BEFORE the meta argsSchema check, authority,
+  // background, and hash so all of them — and the workflow body — see one consistent args object.
+  // No-op for non-drain. Running before assertWorkflowArgsMatchSchema lets the string normalization
+  // rescue a stringified payload so it reaches the preview instead of being rejected by an
+  // object-typed meta schema; a genuine non-JSON string still throws inside the canonicalizer.
+  args = authorityArgsForWorkflow(meta, args);
   assertWorkflowArgsMatchSchema(meta, args.args);
   // Drain workflows accept a runtime-args laneTimeoutMs alias; arg-shape validation is handled by
   // the canonical drain normalization (authorityArgsForWorkflow) for harness==="drain" workflows.
@@ -1721,7 +1728,6 @@ async function planWorkflowEnvelope(pluginContext, toolContext, args) {
   }
   // Canonicalize drain invocations (profile<->mode reconciliation) BEFORE authority/background/hash
   // so all of them — and the workflow body — see one consistent args object. No-op for non-drain.
-  args = authorityArgsForWorkflow(meta, args);
   const authority = resumeEntry && priorState?.authority && typeof priorState.authority === "object" ? priorState.authority : resolveRunAuthority(meta, args);
   const argsPreview = jsonPreview(args.args ?? null);
   const requestedBudgetCeilings = {
@@ -2695,7 +2701,11 @@ async function WorkflowPlugin(pluginContext, options) {
         source: tool.schema.string().optional(),
         includeSourceSnippet: tool.schema.boolean().optional(),
         sourceSnippetMaxChars: tool.schema.number().int().positive().max(2000).optional(),
-        args: tool.schema.any().optional(),
+        // Object-typed so the model-facing JSON schema carries `type: "object"`. Under a permissive
+        // `any()` schema some models (e.g. glm-5.2) emit `args` as a JSON-encoded string, which the
+        // drain authority validator then has to reject. `.passthrough()` preserves the free-form
+        // "any keys allowed" semantics of the args bag while constraining the top-level type.
+        args: tool.schema.object({}).passthrough().optional(),
         approve: tool.schema.boolean().optional(),
         approvalHash: tool.schema.string().optional(),
         autoApprove: tool.schema.enum(["readOnly", "worktree", "all"]).optional(),
@@ -2715,7 +2725,10 @@ async function WorkflowPlugin(pluginContext, options) {
         profile: tool.schema.enum(Object.keys(WORKFLOW_AUTHORITY_PROFILES)).optional(),
         background: tool.schema.boolean().optional(),
         debugCapture: tool.schema.boolean().optional(),
-        authority: tool.schema.any().optional(),
+        // Object-typed: resolveRunAuthority spreads args.authority as an object, so a stringified
+        // value would silently no-op into profile defaults instead of erroring. Same model-
+        // stringification risk as `args` above; constrain the type so the model emits an object.
+        authority: tool.schema.object({}).passthrough().optional(),
         baseCommit: tool.schema.string().optional(),
         maxCost: tool.schema.number().nonnegative().optional(),
         maxTokens: tool.schema.number().int().nonnegative().optional(),

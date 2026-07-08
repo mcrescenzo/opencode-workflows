@@ -406,7 +406,20 @@ const DRAIN_MODE_FOR_PROFILE = Object.freeze({ "drain-dry-run": "dry-run", "drai
 // Non-drain workflows pass through untouched. Generic over any meta.harness==="drain" workflow.
 export function authorityArgsForWorkflow(meta = {}, args = {}) {
   if (meta.harness !== "drain") return args;
-  const rawRuntime = args.args;
+  let rawRuntime = args.args;
+  // Tolerate a JSON-encoded string emitted by a model under a permissive tool schema: parse it once
+  // into an object so the agent can reach the preview/launch path instead of being rejected. A
+  // non-JSON string, or a non-string non-object (array/boolean/number), still falls through to the
+  // rejection below. This is a normalization at the authority edge only; the script-body scope guard
+  // in beads-drain.js is preserved unchanged (it guards the sharper risk of a string scope spreading
+  // into a char-indexed unfiltered drain).
+  if (typeof rawRuntime === "string" && rawRuntime.trim() !== "") {
+    try {
+      rawRuntime = JSON.parse(rawRuntime);
+    } catch {
+      // leave rawRuntime as the original string so the type check below rejects it
+    }
+  }
   if (rawRuntime !== undefined && rawRuntime !== null && (typeof rawRuntime !== "object" || Array.isArray(rawRuntime))) {
     throw new WorkflowAuthorityError('drain workflow args must be a JSON object when provided; omit args or pass {"mode":"dry-run"} or {"mode":"autonomous-local"}');
   }

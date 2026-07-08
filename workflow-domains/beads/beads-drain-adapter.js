@@ -73,11 +73,6 @@ export function isAssignedToActor(issue, actor) {
   return typeof actor === "string" && actor !== "" && (normalized.assignee === actor || normalized.owner === actor);
 }
 
-export function isLlmReady(issue) {
-  const normalized = normalizeIssue(issue);
-  return normalized.labels.includes("ready-for-agent") && Boolean(normalized.description) && Boolean(normalized.acceptance_criteria);
-}
-
 function issueTypesFromScope(scope = {}) {
   const requested = scope.issueTypes ?? scope.issue_type ?? scope.issueType;
   if (!requested) return undefined;
@@ -400,8 +395,7 @@ export function createBeadsDrainAdapter(options = {}) {
       if (issue.status === "blocked") return { status: "blocked", reason: "issue status is blocked" };
       if (issue.labels.some((label) => HUMAN_LABELS.has(label))) return { status: "human-gated", reason: "issue has human/blocking labels" };
       if (isInProgress(issue) && !isAssignedToActor(issue, actor)) return { status: "human-gated", reason: "in-progress issue is not assigned to this controller" };
-      if (!isLlmReady(issue)) return { status: "human-gated", reason: "issue is missing ready-for-agent label, description, or acceptance criteria" };
-      return { status: "ready", reason: isInProgress(issue) ? "continuing issue assigned to this controller" : "issue is LLM-ready" };
+      return { status: "ready", reason: isInProgress(issue) ? "continuing issue assigned to this controller" : "open issue matches drain scope" };
     },
     async claim(item) {
       const id = issueId(item);

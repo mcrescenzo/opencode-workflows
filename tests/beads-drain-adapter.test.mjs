@@ -9,7 +9,6 @@ import {
   createBeadsDrainAdapter,
   finalizeBeadsDomainMutation,
   filterReadyIssues,
-  isLlmReady,
   normalizeIssue,
 } from "../workflow-domains/beads/beads-drain-adapter.js";
 import { drain } from "../workflow-kernel/drain-runtime.js";
@@ -522,15 +521,19 @@ test("F5: a lane reporting exactly MAX_VERIFIER_COMMANDS is not treated as trunc
 });
 
 
-test("beads adapter classification is conservative and LLM-ready aware", async () => {
+test("beads adapter classification is conservative and no longer enforces a ready-for-agent gate", async () => {
   const { runBd } = createMockBd([]);
   const adapter = createBeadsDrainAdapter({ runBd, actor: "agent@example.com" });
 
-  assert.equal(isLlmReady(makeIssue("ready")), true);
   assert.equal((await adapter.classify(makeIssue("ready"))).status, "ready");
   assert.equal((await adapter.classify(makeIssue("closed", { status: "closed" }))).status, "done");
   assert.equal((await adapter.classify(makeIssue("epic", { issue_type: "epic" }))).status, "external");
-  assert.equal((await adapter.classify(makeIssue("missing", { acceptance_criteria: "" }))).status, "human-gated");
+  // The ready-for-agent readiness gate was removed (opencode-workflows-0y5f.5): an open issue that
+  // lacks the ready-for-agent label, a description, or acceptance criteria is now classified as a
+  // ready drain candidate instead of being skipped as human-gated. Only genuinely human/blocking
+  // labels, externally-owned in-progress work, blocked status, and wrong type still skip.
+  assert.equal((await adapter.classify(makeIssue("missing", { acceptance_criteria: "" }))).status, "ready");
+  assert.equal((await adapter.classify(makeIssue("unlabeled", { labels: [] }))).status, "ready");
   assert.equal((await adapter.classify(makeIssue("mine", { status: "in_progress", assignee: "agent@example.com" }))).status, "ready");
   assert.equal((await adapter.classify(makeIssue("other", { status: "in_progress", assignee: "other@example.com" }))).status, "human-gated");
   assert.equal(normalizeIssue({ id: "x", type: "task", state: "open", labels: "a b" }).issue_type, "task");

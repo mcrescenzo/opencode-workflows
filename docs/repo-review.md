@@ -278,7 +278,9 @@ a duplicate-aware Beads graph:
 The materializer uses native Beads `description`, `design`, and `acceptance` fields. Child
 tasks are labeled for review/implementation/domain/size and `needs-tests`, but are **not**
 marked `ready-for-agent` at creation time. A scoped `/beads-review post-materialization ...`
-pass must review/remediate the graph before `ready-for-agent` promotion or `beads-drain`.
+pass is recommended to review/remediate the graph before `beads-drain`. Note: beads-drain no
+longer enforces `ready-for-agent` as a drain prerequisite, so the label is optional for
+draining; the review pass is still valuable for catching materialization defects.
 
 The final gate is parented to the epic and depends on the active materialized children (plus safe
 exact existing duplicates). It should close only after the children are closed/deferred with

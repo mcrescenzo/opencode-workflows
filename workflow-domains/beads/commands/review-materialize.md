@@ -123,8 +123,9 @@ Report the dry-run result to the user:
 - How many are AMBIGUOUS (semantic duplicates needing human review — show the candidate bead IDs).
 - The planned epic title and final-gate title.
 - The planned child labels/readiness status. Children are intentionally **not** marked
-  `ready-for-agent` during materialization; they must pass post-materialization review/remediation
-  before autonomous drain.
+  `ready-for-agent` during materialization; a post-materialization review/remediation pass is
+  still recommended before autonomous drain to catch materialization defects, but beads-drain no
+  longer enforces the `ready-for-agent` label as a drain prerequisite.
 - Any `lossyFindings` warning.
 
 ## 6. Explicit approval gate
@@ -158,7 +159,7 @@ The adapter creates native Beads fields, not just markdown descriptions:
   criteria.
 - Children: one task per new finding, parented to the epic, with `description`, `design`, native
   `acceptance`, `implementation`/domain/size/`needs-tests` labels, and no automatic
-  `ready-for-agent` label.
+  `ready-for-agent` label (the label is optional for drain; see the readiness note above).
 - Final gate: parented to the epic, blocked by created children and safe exact existing duplicates,
   with acceptance requiring graph checks, duplicate/ambiguous reconciliation, and a clean scoped
   post-materialization review before close.

@@ -233,6 +233,38 @@ test("beads-drain rejects non-object runtime args before approval", async () => 
   }
 });
 
+test("regression: a model-emitted JSON string for workflow_run args is normalized and reaches the preview", async () => {
+  // Production evidence (ses_0c2babb15ffeJa6LDk58gTaTue, 2026-07-07): a glm-5.2 session emitted the
+  // workflow_run `args` parameter as a JSON-encoded string ('{"mode":"dry-run"}') rather than a
+  // structured object. Under the old permissive tool schema (tool.schema.any()) plus the multi-type
+  // meta argsSchema, the string was rejected at the drain authority edge before the agent could
+  // launch ANY scoped drain. opencode-workflows-0y5f.1 tightened the tool-definition schema to
+  // object-typed so the model emits an object directly; opencode-workflows-0y5f.2 added a one-shot
+  // JSON.parse at the authority edge so a stringified payload from any model is normalized instead
+  // of rejected. This test pins the normalization path: a stringified-JSON args value reaches the
+  // preview, while a genuinely non-JSON string is still rejected.
+  const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }));
+  try {
+    const preview = await tools.workflow_run.execute({ name: "beads-drain", args: '{"mode":"dry-run"}' }, context);
+    assert.match(preview, /approvalHash: [0-9a-f]{64}/);
+
+    // A stringified object carrying a scope is also normalized and reaches the preview.
+    const previewScoped = await tools.workflow_run.execute(
+      { name: "beads-drain", args: '{"mode":"dry-run","scope":{"issueTypes":["task"]}}' },
+      context,
+    );
+    assert.match(previewScoped, /approvalHash: [0-9a-f]{64}/);
+
+    // A genuinely invalid (non-JSON) string is still rejected with the authority error.
+    await assert.rejects(
+      tools.workflow_run.execute({ name: "beads-drain", args: "not-a-json-object" }, context),
+      /drain workflow args must be a JSON object/,
+    );
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("beads-drain rejects a string/array scope instead of degrading to an unfiltered drain", async () => {
   const calls = [];
   const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }), {

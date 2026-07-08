@@ -236,9 +236,13 @@ test("scratch validation failure prevents close and dry proof catches remaining 
     runLane: async (packet) => laneReport(packet.item.id, { commandsRun: [], acceptanceEvidence: [] }),
   });
 
+  // Post opencode-workflows-0y5f.5: the ready-for-agent gate is gone, so the unlabeled "remaining"
+  // task is now a ready candidate too. Both items are attempted, both fail validation (empty
+  // evidence), neither is closed, and both claims are released. The dry proof then catches both as
+  // remaining ready work, so the queue is correctly reported not-dry rather than falsely complete.
   assert.equal(report.status, "failed");
   assert.deepEqual(report.closed, []);
-  assert.deepEqual(report.failed.map((item) => item.itemId), [failing.id]);
+  assert.deepEqual(report.failed.map((item) => item.itemId), [failing.id, remaining.id]);
   assert.equal((await showIssue(cwd, failing.id)).status, "open");
   assert.equal((await showIssue(cwd, failing.id)).assignee, undefined);
   assert.equal((await showIssue(cwd, remaining.id)).status, "open");
