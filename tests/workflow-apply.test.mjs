@@ -194,7 +194,7 @@ return await agent("edit", { edit: true, schema: { type: "object", properties: {
     assert.equal(finalStatus.domainFinalization.finalized, 1);
     assert.ok(toastCalls.some((body) => body.variant === "info" && /^▶ apply-domain · apply running/.test(body.title) && /└ apply running/.test(body.message)), "missing apply-running toast card");
     assert.ok(toastCalls.some((body) => body.variant === "success" && /^▶ apply-domain · applied/.test(body.title) && /└ applied/.test(body.message)), "missing applied toast card");
-    assert.ok(toastCalls.every((body) => !/status:|runId=|cache|concurrency/.test(body.message)), "legacy apply toast body leaked");
+    assert.ok(toastCalls.every((body) => !/status:|cache|concurrency/.test(body.message)), "legacy apply toast body leaked");
 
     const reapplied = await tools.workflow_apply.execute({
       runId,

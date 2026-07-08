@@ -92,7 +92,7 @@ test("problem card renders retry context and inspect hint", () => {
     "verify:auth-token — timeout (attempt 2/3)",
     "retrying in 8s · 2nd failure this run",
     "▸ Verify: ✓14 ⟳3 ⧗5",
-    "inspect: workflow_status wf_x1",
+    "inspect: workflow_status runId=wf_x1",
   ].join("\n"));
   assertLineWidths(card);
 });
@@ -117,7 +117,7 @@ test("terminal card renders lane totals, budget, final log, and inspect hint", (
     "22 lanes: ✓20 ✗2",
     "188k tok · $0.84 · 71% of budget",
     "» 9 confirmed bugs",
-    "inspect: workflow_status wf_x1",
+    "inspect: workflow_status runId=wf_x1",
   ].join("\n"));
   assertLineWidths(card);
 });
@@ -133,7 +133,7 @@ test("apply card supports ASCII fallback for terminals with poor glyph rendering
     "\\ apply running",
     "  patches 2",
     "  diff abcdef012345",
-    "inspect: workflow_status wf_x1",
+    "inspect: workflow_status runId=wf_x1",
   ].join("\n"));
   assert.doesNotMatch(`${card.title}\n${card.message}`, /[└├⟳⚠»✓✗⧗·—]/);
   assertLineWidths(card);

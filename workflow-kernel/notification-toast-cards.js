@@ -360,9 +360,9 @@ function renderWorkflowApplyCard(snapshot, options = {}) {
 
 function inspectLines(snapshot) {
   const id = String(snapshot.id ?? "");
-  const oneLine = `inspect: workflow_status ${id}`;
+  const oneLine = `inspect: workflow_status runId=${id}`;
   if (oneLine.length <= CARD_LINE_MAX) return [oneLine];
-  return ["inspect: workflow_status", `  ${id}`];
+  return ["inspect: workflow_status", `  runId=${id}`];
 }
 
 function workflowToastCardSignature(snapshot) {

@@ -135,7 +135,7 @@ return { ok: true };`;
   assert.ok(toastCalls.some((body) => body.variant === "info" && /^▶ toast-flow/.test(body.title) && /└ Plan \(1\/2\)/.test(body.message)), "missing start/Plan heartbeat card");
   assert.ok(toastCalls.some((body) => body.variant === "info" && /^▶ toast-flow/.test(body.title) && /└ Done \(2\/2\)/.test(body.message)), "missing phase-change heartbeat card");
   assert.ok(toastCalls.some((body) => body.variant === "success" && /^✓ toast-flow done/.test(body.title) && /inspect: workflow_status/.test(body.message)), "missing terminal card");
-  assert.ok(toastCalls.every((body) => !/agents \d+ active|usage \$|runId=/.test(body.message)), "legacy flat toast body leaked");
+  assert.ok(toastCalls.every((body) => !/agents \d+ active|usage \$/.test(body.message)), "legacy flat toast body leaked");
 });
 
 test("workflowToastAscii plugin option flips workflow cards to ASCII", async () => {
@@ -4845,7 +4845,7 @@ test("workflow_cancel and workflow_pause interrupt in-memory runs", async () => 
     assert.equal(pauseRejects[0]?.code, "WORKFLOW_CANCELLED");
     assert.equal(JSON.parse(await fs.readFile(path.join(pauseDir, "state.json"), "utf8")).status, "pausing");
     assert.ok(toastCalls.some((body) => body.variant === "warning" && /^⚠ in-memory-pause-run pausing/.test(body.title) && /inspect: workflow_status/.test(body.message)), "missing pause terminal-style toast card");
-    assert.ok(toastCalls.every((body) => !/agents \d+ active|runId=|cache|concurrency/.test(body.message)), "legacy lifecycle toast body leaked");
+    assert.ok(toastCalls.every((body) => !/agents \d+ active|cache|concurrency/.test(body.message)), "legacy lifecycle toast body leaked");
     assert.deepEqual(abortCalls.map((input) => input.path.id), [`${cancelRunId}-child`, `${pauseRunId}-child`]);
   } finally {
     __test.runs.delete("in-memory-cancel-run");
