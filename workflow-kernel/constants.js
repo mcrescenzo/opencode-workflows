@@ -99,6 +99,9 @@ export const DEFAULT_CHILD_CREATE_TIMEOUT_MS = 30_000;
 export const DEFAULT_CHILD_PROMPT_TIMEOUT_MS = 10 * 60 * 1000;
 export const MAX_CHILD_PROMPT_TIMEOUT_MS = 60 * 60 * 1000;
 export const DEFAULT_LIVE_PROBE_TIMEOUT_MS = 60_000;
+// Floor verified against a live opencode 1.17.13: GET /global/health exists and
+// returns {healthy,version}; Session.directory is a typed required create echo.
+export const MIN_OPENCODE_SERVER_VERSION = "1.17.13";
 export const DEFAULT_SUBPROCESS_TIMEOUT_MS = 2 * 60 * 1000;
 export const DEFAULT_SUBPROCESS_MAX_BUFFER = 10 * 1024 * 1024;
 export const DEFAULT_KEEP_RUNS = 30;
