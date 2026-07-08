@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   approvalEnvelope,
+  approvalEnvelopeDiff,
   approvalHash,
   approvalSnapshotList,
 } from "../workflow-kernel/approval-hashing.js";
@@ -108,4 +109,19 @@ test("approvalHash changes when only sourceHash changes", () => {
     approvalHash(approval({ sourceHash: "hash-a" })),
     approvalHash(approval({ sourceHash: "hash-b" })),
   );
+});
+
+test("approvalEnvelopeDiff names exactly the changed fields, sorted", () => {
+  const before = approvalEnvelope(approval({ sourceHash: "hash-a" }));
+  const after = approvalEnvelope(approval({ sourceHash: "hash-b", maxAgents: 2 }));
+  const diff = approvalEnvelopeDiff(before, after);
+  assert.deepEqual(diff.map((entry) => entry.field), ["maxAgents", "sourceHash"]);
+  const sourceEntry = diff.find((entry) => entry.field === "sourceHash");
+  assert.equal(sourceEntry.before, '"hash-a"');
+  assert.equal(sourceEntry.after, '"hash-b"');
+});
+
+test("approvalEnvelopeDiff returns [] for identical envelopes", () => {
+  const envelope = approvalEnvelope(approval());
+  assert.deepEqual(approvalEnvelopeDiff(envelope, approvalEnvelope(approval())), []);
 });

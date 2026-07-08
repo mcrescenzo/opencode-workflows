@@ -1,4 +1,4 @@
-import { hash, hashStable, stableStringify } from "./text-json.js";
+import { hash, hashStable, stableStringify, truncateText } from "./text-json.js";
 
 export function approvalSnapshotList(nestedSnapshots) {
   // Dedup key: path-backed snapshots dedup by sourcePath (buildNestedSnapshots stores the same
@@ -43,4 +43,24 @@ export function approvalHash(approval) {
 
 export function computeDiffPlanHash(plan) {
   return hash(stableStringify({ patches: plan.patches, sourceHash: plan.sourceHash, baseCommit: plan.baseCommit, domainMutationHash: plan.domainMutationHash }));
+}
+
+// Field-level diff between two approvalEnvelope() objects. Values render via stableStringify and
+// are truncated so a mismatch response stays bounded even when runtimeArgs is large.
+const MAX_DIFF_VALUE_CHARS = 200;
+
+export function approvalEnvelopeDiff(previous, fresh) {
+  const fields = new Set([...Object.keys(previous ?? {}), ...Object.keys(fresh ?? {})]);
+  const changed = [];
+  for (const field of [...fields].sort()) {
+    const before = stableStringify(previous?.[field]);
+    const after = stableStringify(fresh?.[field]);
+    if (before === after) continue;
+    changed.push({
+      field,
+      before: truncateText(before, MAX_DIFF_VALUE_CHARS),
+      after: truncateText(after, MAX_DIFF_VALUE_CHARS),
+    });
+  }
+  return changed;
 }
