@@ -13,15 +13,6 @@ and uses semantic versioning for published package releases.
   /repo-bughunt and /repo-review commands and the repo-review-command-protocol
   skill) moved to the operator's global workflow registry. The bundled-tier
   discovery mechanism remains for downstream packagers.
-
-### Removed
-- The deprecated beads domain (`workflow-domains/`): beads-drain workflow,
-  host drain adapter, review-materialize tool/command, beads-drain skill.
-  The trusted-extension mechanism itself is unchanged and now tested against
-  synthetic fixtures only.
-
-### Changed
-
 - Replaced the LLM-probe live-gate subsystem with a deterministic runtime
   trust model (Design C): a memoized `GET /global/health` server-version
   fingerprint gates elevated (`edit`/`worktreeEdit`/`integration`/`shell`/
@@ -38,7 +29,10 @@ and uses semantic versioning for published package releases.
   with no applied patch is reported as failed, not completed.
 
 ### Removed
-
+- The deprecated beads domain (`workflow-domains/`): beads-drain workflow,
+  host drain adapter, review-materialize tool/command, beads-drain skill.
+  The trusted-extension mechanism itself is unchanged and now tested against
+  synthetic fixtures only.
 - The `workflow_live_gates` tool, the `/workflow-live-gates-release-check`
   command, and the `requiredGates` authority vocabulary (profiles, constant,
   preview field, and the drain gate funnel). There is no probe consent flow,

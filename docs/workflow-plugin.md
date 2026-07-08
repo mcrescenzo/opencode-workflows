@@ -52,7 +52,8 @@ not the handoff substrate; they are a fallback for a narrow crash window only.
 ## Source-of-truth hierarchy
 
 Stronger evidence always wins. Weaker evidence is recovery/diagnostic only and
-may never finalize work (close Beads, apply diffs, merge integration lanes):
+may never finalize work (finalize domain mutations, apply diffs, merge
+integration lanes):
 
 1. **Controller-owned run artifacts (authoritative).**
    The append-only `journal.jsonl`, the durable `result.json`, the domain and
@@ -195,8 +196,9 @@ integration gates read.
   `lane.committed`. Unreadable transcripts are reported `transcript-unreadable:*`
   and skipped.
 - **Never finalizes domain mutations or primary writes.** Salvage never calls
-  `integrate()` or `runAutoApply`, never closes Beads, and never applies a diff.
-  It only appends a tagged synthetic journal entry and updates a lane projection.
+  `integrate()` or `runAutoApply`, never finalizes domain mutations, and never
+  applies a diff. It only appends a tagged synthetic journal entry and updates
+  a lane projection.
 - **No auto-apply / always explicit.** Salvage is never automatic on resume. It
   requires an explicit preview, then an explicit approve with a matching hash.
 
