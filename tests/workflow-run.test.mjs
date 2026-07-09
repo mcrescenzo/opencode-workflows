@@ -1671,7 +1671,12 @@ test("ux.1: extension workflows expose machine-readable invocation metadata", as
   }, { extensions: [extPath] });
   try {
     const listed = JSON.parse(await tools.workflow_list.execute({ format: "json" }, context));
-    assert.deepEqual(listed.filter((e) => e.scope === "bundled"), [], "pure-architecture plugin bundles zero workflows");
+    // 0.3.0 deliberately reverses the 0.2.0 zero-bundled stance for exactly one flagship
+    // workflow (deep-research; see CHANGELOG and tests/publish-completeness.test.mjs). Assert
+    // the bundled set is exactly that one entry, not empty — no other bundled workflow should
+    // sneak in unnoticed.
+    const bundled = listed.filter((e) => e.scope === "bundled");
+    assert.deepEqual(bundled.map((e) => e.name), ["deep-research"], "expected exactly the bundled deep-research workflow");
     const entries = listed.filter((e) => e.scope === "extension" && e.name === "fixture-rich");
     assert.equal(entries.length, 1, "fixture workflow must be listed exactly once");
     for (const entry of entries) {
