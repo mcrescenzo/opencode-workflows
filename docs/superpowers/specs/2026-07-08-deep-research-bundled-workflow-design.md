@@ -1,5 +1,8 @@
 # Deep-Research Bundled Workflow — Design
 
+> Status: Approved design (2026-07-08) — implementation planned in
+> `docs/superpowers/plans/2026-07-08-deep-research-bundled-workflow.md`.
+
 **Date:** 2026-07-08
 **Status:** Approved (Michael, 2026-07-08) — all recommendations accepted
 **Scope:** First bundled workflow for `@mcrescenzo/opencode-workflows`: a faithful port of Claude Code's bundled `deep-research` workflow, hardened to house gold-standard conventions, plus a bundled `/deep-research` command and one small kernel enhancement (`meta.whenToUse`).
@@ -41,6 +44,7 @@ lanes, artifacts spill, toast phases, and resume.
 | D8 | Report persistence | Command persists exactly one report to `.deep-research/runs/<run-id>-report.md` (guest cannot write files) |
 | D9 | Version | Bump to **0.3.0** with stance-reframe CHANGELOG entry |
 | D10 | Release gate | Live end-to-end smoke test of `/deep-research` before publishing (§10) |
+| D11 | Kernel change #2 | **Plain-string args passthrough**: `workflow_run` string args that do not look like JSON (`{`/`[` prefix) pass through to the guest verbatim instead of throwing at plan time; JSON-looking strings still normalize to the object they encode (hash-drift fix preserved). Required for the CC-faithful `args: "<question>"` form; `meta.argsSchema` remains the per-workflow gate. |
 
 ### Deviation from the presented design (surfaced, not silent)
 
@@ -125,6 +129,9 @@ Accepted forms (defensively re-parsed in the body, house pattern from `repo-bugh
 
 1. **Plain string** → the whole string is the question (CC-faithful:
    `workflow_run({ name: "deep-research", args: "why is the sky blue?" })`).
+   Requires kernel change D11: today `workflow-plugin.js:1711-1713` JSON-parses every
+   string args bag via `parseRuntimeArgsString` (`authority-policy.js:448-462`) and throws
+   on non-JSON strings before the guest ever runs.
 2. **Object** `{ question, depth?, maxSources?, seedUrls? }`.
 3. **JSON string** encoding form 2 (agents sometimes stringify args).
 
@@ -244,12 +251,18 @@ structured-TEXT contract; `workflow-kernel/child-agent-runner.js:648-663`).
   reportPath: null,                            // guest cannot write files; command persists
   reportMarkdown,                              // rendered in pure JS; dropped first by size-fit
   truncatedFindings: boolean,
+  artifacts: { ok, dir, files } | null,        // persistArtifacts outcome (lossless spill)
 }
 ```
 
 - **Honesty rules:** every dropped lane appears in `laneCoverage`; all-search-lanes-empty
   with errors and no seedUrls → `status: "failed"`, explicit websearch-unavailable
   `abortReason` (never an empty-but-plausible report); partial lane drops → `"degraded"`.
+- **Kernel interaction (deliberate):** the kernel generically treats a returned object with
+  top-level `status: "failed"` as a failed run (`DRAIN_FAILURE_STATUSES` check,
+  `workflow-plugin.js:1068-1071`, applied to every workflow at `:1279`), so the terminal
+  message reads "Workflow <id> failed" for those envelopes. That is the honest signal we
+  want; `workflow_status detail:"result"` still returns the full envelope either way.
 - **Size-fit:** stay under a 230,000-byte budget (headroom below `MAX_RESULT_BYTES` =
   256 KiB, `workflow-kernel/constants.js:53`): drop `reportMarkdown` first, then halve
   `findings`, flagging `truncatedFindings` (house pattern, `repo-bughunt.js:326-359`).
@@ -326,8 +339,10 @@ All via `node --test tests/*.test.mjs`, using the existing harness
    parses via `parseWorkflowSource` with a valid meta/argsSchema.
 4. **`meta.whenToUse`** — unit tests on `listWorkflows`/`buildInvocationMetadata` (surfaces,
    truncates, curated fallback for bundled scope).
-5. **Existing suites stay green** (678 passing today; extension/command registration suites
-   already cover `registerCommandsFromDir` precedence).
+5. **Existing suites stay green** (686 tests today, all green once this spec/plan carry
+   their `> Status:` banners — `tests/workflow-docs.test.mjs:41` requires one on every
+   `docs/` markdown file; extension/command registration suites already cover
+   `registerCommandsFromDir` precedence).
 
 ## 8. Packaging and docs
 
