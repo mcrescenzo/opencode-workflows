@@ -42,11 +42,11 @@ test("files[] ships only the docs a shipped command/skill/workflow instructs an 
   // Amended files[] policy (2026-07-07): a shipped doc must be reachable from a shipped
   // runtime asset via an AGENT-FACING instruction string (prompt text a running agent will
   // follow), not merely cited from a code comment or README prose. docs/workflow-plugin.md
-  // is the only doc in this repo that clears that bar: as of the zero-bundled-commands
-  // pure-architecture cut (Task 6), it ships as the canonical workflow_* tool reference for
-  // the kernel API itself (workflow-kernel/), which every extension/skill/agent invoking
-  // workflow_run|workflow_apply|workflow_status directly depends on — no bundled command
-  // indirection is required for that dependency to hold.
+  // is the only doc in this repo that clears that bar: as of version 0.3.0 (which restored
+  // one bundled flagship workflow/command pair, deep-research), it ships as the canonical
+  // workflow_* tool reference for the kernel API itself (workflow-kernel/), which every
+  // extension/skill/agent invoking workflow_run|workflow_apply|workflow_status directly
+  // depends on — no bundled command indirection is required for that dependency to hold.
   assert.ok(pkg.files.includes("docs/workflow-plugin.md"), "files[] must include docs/workflow-plugin.md");
   assert.equal(pkg.files.includes("docs/"), false, "files[] must not blanket-include docs/ (ships internal planning docs)");
   assert.ok(pkg.files.includes("CONTRIBUTING.md"), "CONTRIBUTING.md must be included when README references it");

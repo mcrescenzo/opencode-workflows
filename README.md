@@ -197,7 +197,7 @@ this README's own prose. `docs/workflow-plugin.md` is the only doc that clears
 that bar today: it is the canonical `workflow_*` tool reference
 (`docs/workflow-plugin.md#workflow-tool-reference`) that every extension,
 skill, or agent invoking `workflow_run`/`workflow_apply`/`workflow_status`
-depends on — independent of any bundled command, since the plugin ships none.
+depends on — independent of any bundled command beyond the one flagship workflow and command pair (`deep-research`).
 Every other doc below lives in the GitHub repository only: read it from a
 source checkout, or follow the GitHub links in the table.
 
@@ -217,8 +217,7 @@ complete `workflow_*` tool table is in
 
 ## Source Checkout Verification
 
-The npm package ships the runtime plugin and skills — the plugin bundles zero
-workflows and zero commands (see "What it is *not*" above) — plus the "Active
+The npm package ships the runtime plugin and skills — the plugin bundles exactly one workflow and one command (`deep-research` — see "What it is *not*" above) — plus the "Active
 operator references" / "Active technical contracts" docs listed in the
 Documentation Map above (see `files` in `package.json` for the exact
 list). It does not ship this repository's `tests/`, `scripts/`, or reference
