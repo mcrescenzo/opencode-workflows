@@ -33,7 +33,7 @@ test("scoped package is configured for public publish", () => {
 });
 
 test("files[] ships every runtime-loaded asset dir", () => {
-  for (const dir of ["skills/", "workflows/"]) {
+  for (const dir of ["skills/", "workflows/", "commands/"]) {
     assert.ok(pkg.files.includes(dir), `files[] must include ${dir}`);
   }
 });
@@ -110,18 +110,22 @@ test("package metadata and community-health files are present for public release
   assert.ok(pkg.files.includes("CHANGELOG.md"), "CHANGELOG.md must be included in the published package");
 });
 
-test("the plugin ships exactly one bundled workflow (deep-research) and no bundled commands yet", () => {
-  // 0.3.0 deliberately reverses the 0.2.0 zero-bundled stance for exactly one flagship
-  // workflow (see CHANGELOG). Task 4 of the same release adds the bundled command; this
-  // test's command half flips there.
+test("the plugin ships exactly one bundled workflow and one bundled command (deep-research)", () => {
+  // 0.3.0 deliberately reversed the 0.2.0 zero-bundled stance for exactly one flagship
+  // workflow + command pair (see CHANGELOG 0.3.0). Anything else appearing in these dirs
+  // must be a deliberate decision that updates this list.
   assert.equal(existsSync(new URL("workflows/", root)), true);
   assert.deepEqual(
     readdirSync(fileURLToPath(new URL("workflows/", root))).sort(),
     ["deep-research.js"],
   );
+  assert.equal(existsSync(new URL("commands/", root)), true);
+  assert.deepEqual(
+    readdirSync(fileURLToPath(new URL("commands/", root))).sort(),
+    ["deep-research.md"],
+  );
   assert.ok((pkg.files ?? []).includes("workflows/"), "files[] must ship workflows/");
-  assert.equal(existsSync(new URL("commands/", root)), false);
-  assert.equal((pkg.files ?? []).includes("commands/"), false);
+  assert.ok((pkg.files ?? []).includes("commands/"), "files[] must ship commands/");
 });
 
 test("no domain extension assets exist in the repo (pure-architecture invariant)", () => {
@@ -138,12 +142,12 @@ test("npm pack --dry-run tarball excludes any domain extension dir entirely", ()
   const offenders = files.filter(
     (p) =>
       p.startsWith("workflow-domains/") ||
-      p.startsWith("commands/") ||
       p.startsWith("skills/repo-review-command-protocol") ||
       p.startsWith("skills/beads-drain"),
   );
   assert.deepEqual(offenders, [], `tarball must not ship domain extension assets, found: ${offenders.join(", ")}`);
   assert.ok(files.includes("workflows/deep-research.js"), "tarball must ship the bundled deep-research workflow");
+  assert.ok(files.includes("commands/deep-research.md"), "tarball must ship the bundled deep-research command");
   assert.ok(files.includes("SECURITY.md"), "tarball must ship SECURITY.md");
 });
 

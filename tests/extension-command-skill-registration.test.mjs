@@ -52,10 +52,12 @@ test("the first-registered command name wins on a collision (registration order 
   assert.doesNotMatch(cfg.command.dupe.template, /SECOND REGISTRATION/);
 });
 
-test("no-extension call registers no commands but still pushes the bundled skill dir", async () => {
+test("no-extension call registers only the bundled command but still pushes the bundled skill dir", async () => {
   const cfg = {};
   await configureWorkflowEntrypoints(cfg); // no second arg
-  assert.equal(Object.keys(cfg.command ?? {}).length, 0, "pure-architecture plugin bundles no commands");
+  // 0.3.0 deliberately reverses the pure-architecture zero-bundled-commands stance for exactly
+  // one flagship command (deep-research); see tests/publish-completeness.test.mjs.
+  assert.deepEqual(Object.keys(cfg.command ?? {}), ["deep-research"], "only the bundled deep-research command registers with no extension config");
   assert.ok(Array.isArray(cfg.skills.paths) && cfg.skills.paths.length >= 1, "bundled skill dir still pushed");
 });
 
@@ -74,4 +76,13 @@ test("bundled workflow authoring skill ships in the skill dir", async () => {
   assert.match(authoring, /budget\.remaining\(\)/);
   assert.match(authoring, /arity/);
   assert.match(authoring, /inline result/i);
+});
+
+test("the bundled deep-research command registers from BUNDLED_COMMAND_DIR with its frontmatter description", async () => {
+  const cfg = {};
+  await configureWorkflowEntrypoints(cfg, { workflows: [], commands: [], skills: [] });
+  assert.ok(cfg.command["deep-research"], "bundled deep-research command must register");
+  assert.match(cfg.command["deep-research"].description, /research/i);
+  assert.match(cfg.command["deep-research"].template, /workflow_run/);
+  assert.match(cfg.command["deep-research"].template, /name: "deep-research"|name: 'deep-research'|"deep-research"/);
 });

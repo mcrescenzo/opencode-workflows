@@ -16,6 +16,7 @@
     "opencode-workflows.js",
     "workflow-kernel/",
     "workflows/",
+    "commands/",
     "skills/",
     "docs/workflow-plugin.md",
     "README.md",
