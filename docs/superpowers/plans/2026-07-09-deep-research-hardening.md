@@ -114,12 +114,12 @@ In `backgroundDefaultLine`, add before the existing `source !== "heuristic"` ear
 - Modify: `workflow-kernel/child-agent-runner.js` (~line 1089, after `run.cost += cost;`)
 - Modify: `workflow-kernel/run-store-state.js` (~line 99, beside `cost: run.cost,`)
 - Modify: `workflow-kernel/run-store-rehydrate.js` (~line 26, beside the `droppedLaneCount` carry)
-- Modify: `workflow-kernel/run-store-status-format.js` (`compactStatusForEntry`, beside the `timeoutRecovery` conditional pattern)
+- Modify: `workflow-kernel/run-store-status-format.js` (`compactStatusForEntry` AND `fullStatusForEntry` — mirror each one's `timeoutRecovery` conditional pattern; the full view must carry the caveat too, since it surfaces `cost`/`liveCost`/`totalCost` most prominently)
 - Modify: `workflow-kernel/workflow-plugin.js` (`approvalSummary` after the `Budget ceilings:` line ~790; terminal success return array ~1304-1311)
 - Test: `tests/child-agent-runner.test.mjs`, `tests/durable-state.test.mjs`, `tests/workflow-run.test.mjs`
 
 **Interfaces:**
-- Produces: `run.costTrackingUnreliable: boolean` (sticky, never reset), persisted in state.json, rehydrated on resume; `compact.costTrackingWarning: string` (only when maxCost is set); one preview caveat line; one terminal-return warning line. Task 3 preserves the terminal line's position ahead of the JSON body.
+- Produces: `run.costTrackingUnreliable: boolean` (sticky, never reset), persisted in state.json, rehydrated on resume; `compact.costTrackingWarning: string` AND `full.costTrackingWarning: string` (both only when maxCost is set — parity: a `detail:"full"` reader must not see cost numbers with no caveat); one preview caveat line; one terminal-return warning line. Task 3 preserves the terminal line's position ahead of the JSON body.
 
 - [ ] **Step 1: Write the failing tests.**
 
@@ -136,7 +136,7 @@ test("costTrackingUnreliable: sticky when a lane reports tokens with cost=0; nev
 
 In `tests/durable-state.test.mjs`, extend the resume-rehydration test (~446-491): add `costTrackingUnreliable: true` to the prior-state fixture and assert it survives `rehydrateRunFromPriorState`. Also add: `checkBudgetBeforeLaunch` does NOT throw merely because the flag is set.
 
-In `tests/workflow-run.test.mjs`, beside the `Budget ceilings: maxCost=1.5, maxTokens=12` preview assertion (~1167-1174): assert the caveat line `Cost-ceiling caveat:` is present when `maxCost` is set and absent when it is not.
+In `tests/workflow-run.test.mjs`, beside the `Budget ceilings: maxCost=1.5, maxTokens=12` preview assertion (~1167-1174): assert the caveat line `Cost-ceiling caveat:` is present when `maxCost` is set and absent when it is not. Also assert that a `workflow_status` `detail:"full"` view of a run with `costTrackingUnreliable:true` and a `maxCost` ceiling includes `costTrackingWarning` (mirroring the compact/`detail:"compact"` assertion) — and is absent when `maxCost` is not set.
 
 - [ ] **Step 2: Run to verify failures.**
 - [ ] **Step 3: Implement.**
@@ -164,6 +164,14 @@ In `tests/workflow-run.test.mjs`, beside the `Budget ceilings: maxCost=1.5, maxT
     compact.costTrackingWarning =
       "At least one lane reported tokens with cost=0 (provider did not report per-lane cost); the maxCost ceiling may not reliably bound this run — use maxTokens as a backstop.";
   }
+```
+
+`run-store-status-format.js`, in `fullStatusForEntry`'s `redacted` object, mirror the `timeoutRecovery` conditional field (~line 849) so the full view carries the same honesty caveat where cost is most prominent (`cost` ~812, `usage.liveCost`/`usage.totalCost` ~818-820) — otherwise a `detail:"full"` caller sees cost with no unreliability warning, the opposite of the goal:
+
+```js
+    costTrackingWarning: state.costTrackingUnreliable === true && Number.isFinite(state.budgetCeilings?.maxCost)
+      ? "At least one lane reported tokens with cost=0 (provider did not report per-lane cost); the maxCost ceiling may not reliably bound this run — use maxTokens as a backstop."
+      : undefined,
 ```
 
 `workflow-plugin.js` `approvalSummary`, directly after the `Budget ceilings:` line:
@@ -729,7 +737,7 @@ Dedup gate (322-323) becomes:
 - Test: `tests/deep-research-workflow.test.mjs`
 
 **Interfaces:**
-- Produces: REPORT_SCHEMA gains optional `title: { type: "string", maxLength: 80 }` (NOT required — `DEFAULT_REPORT` stays valid); H1 renders `# Deep Research: <title or question, 80-char-truncated>` — byte-identical to today when `title` is absent (existing `/# Deep Research: test question/` assertion at line 133 keeps passing). Prompt now pins `vote`/`sources` semantics (prompt-only — Option A; Option B deferred). Method line annotates single-vote depths.
+- Produces: REPORT_SCHEMA gains optional `title: { type: "string", maxLength: 80 }` (NOT required — `DEFAULT_REPORT` stays valid); H1 renders `# Deep Research: <title, else question>`, truncated to 80 chars (77 + `…`). Byte-identical to today ONLY for questions ≤ 80 chars (existing `/# Deep Research: test question/` assertion at line 133 keeps passing); a title-absent question LONGER than 80 chars is now bounded to 80 — a deliberate, tested change from today's untruncated H1 (`QUESTION` is unbounded user input, `deep-research.js:51`; the full question still appears verbatim in the command's persisted metadata block, so nothing is lost). Prompt now pins `vote`/`sources` semantics (prompt-only — Option A; Option B deferred). Method line annotates single-vote depths.
 
 - [ ] **Step 1: Write the failing tests:**
 
@@ -743,6 +751,15 @@ test("synthesis title drives the report H1; long titles truncate", async () => {
     report: { ...DEFAULT_REPORT, title: "x".repeat(80) },  // maxLength-valid, render still bounds it
   }));
   assert.match(longRun.reportMarkdown, /# Deep Research: x{77}…|# Deep Research: x{80}/);
+});
+
+test("title-absent long question is bounded to 80 chars in the H1 (not byte-identical to today)", async () => {
+  // Regression for the corrected Interfaces claim: with no title the fallback is QUESTION,
+  // which today is emitted untruncated; the new render bounds it to 80 chars (77 + ellipsis).
+  const longQ = "z".repeat(200);
+  const { result } = await runDeepResearch(scriptedResponder(), { args: { question: longQ } });
+  assert.match(result.reportMarkdown, /# Deep Research: z{77}…/);
+  assert.ok(!result.reportMarkdown.includes("z".repeat(90)), "the H1 must not carry the full over-long question");
 });
 
 test("single-vote depths annotate the Method section", async () => {
@@ -792,24 +809,28 @@ Method line — append inside the existing push (after `st.unverified + " unveri
 **Interfaces:**
 - Produces: over-budget envelopes now also trim `refuted`/`unverified` (floor 5 each) after the findings-halving loop, and `truncatedFindings` is set truthfully whenever ANY trim happened or the envelope still exceeds the limit (kernel backstop will cut it).
 
-- [ ] **Step 1: Write the failing test:**
+- [ ] **Step 1: Write the failing test.** The size pressure MUST live in a field the budgeted arrays actually carry: `toRefuted`/`toUnverified` (`deep-research.js:429-430`) emit `{ claim, vote, source }` / `{ claim, erroredVotes, validVotes, source }` — they DROP `quote`. So inflating `quote` (as an earlier draft did) never reaches `refutedOut`/`unverifiedOut`; inflate `claim` instead. And enough DISTINCT central claims must reach the verify cap that MORE THAN 5 land refuted (the trim loop's floor is 5), while ≥ 1 stays confirmed (else the `confirmed.length === 0` early return at `:439` fires before `fitWithinBudget` is ever reached):
 
 ```js
-test("oversized refuted/unverified sets are trimmed with truncatedFindings=true", async () => {
+test("oversized refuted set is trimmed and sets truncatedFindings=true", async () => {
+  // ~40 distinct central claims, each ~6 KB in `claim` → the refuted array alone (~40 × 6 KB
+  // ≈ 240 KB) exceeds fitWithinBudget's 230000 LIMIT even after findings hit their floor of 5.
   const bigClaims = {
     ...DEFAULT_EXTRACT,
-    claims: [1, 2, 3, 4, 5].map((i) => ({ claim: `claim ${i} ` + "y".repeat(80), quote: "z".repeat(30000), importance: "central" })),
+    claims: Array.from({ length: 40 }, (_, i) => ({ claim: `claim ${i} ` + "y".repeat(6000), quote: "q", importance: "central" })),
   };
   const { result } = await runDeepResearch(scriptedResponder({
     extract: () => bigClaims,
-    verdict: () => ({ refuted: true, evidence: "contradicted by primary source", confidence: "high" }),
-  }));
-  // All claims refuted → confirmed-empty branch… so instead keep one confirmed:
-  // (fixture detail: make verdict refute all EXCEPT claims containing "claim 1")
+    // Refute everything EXCEPT the "claim 0" text → ≥1 confirmed survives, the rest kill.
+    verdict: (text) => text.includes("claim 0 ") ? DEFAULT_VERDICT : { refuted: true, evidence: "contradicted by primary source", confidence: "high" },
+  }), { args: { question: "test question", depth: "thorough" } }); // thorough → high verifyCap so > 5 claims reach verify
+  assert.equal(result.truncatedFindings, true, "trimming the refuted array must set truncatedFindings");
+  assert.ok(result.refuted.length >= 5, "the floor of 5 refuted must be respected");
+  assert.ok(JSON.stringify(result).length < 262144, "the envelope must fit under MAX_RESULT_BYTES after trimming");
 });
 ```
 
-Refine the fixture so at least one claim survives (the confirmed-empty branch returns before fitWithinBudget): `verdict: (text) => text.includes("claim 1") ? DEFAULT_VERDICT : { refuted: true, evidence: "contradicted by primary source", confidence: "high" }`. Assert: `result.truncatedFindings === true`, `result.refuted.length <= Math.max(5, <original>)` shrank, and `JSON.stringify(result).length < 262144`.
+Add a sibling `unverified`-path case: force the verifier lanes to ERROR so their votes count as `erroredVotes` and the claims land in `unverifiedClaims` (not `killed`) — e.g. a `verdict` that throws for most claims (`() => { throw new Error("verifier lane crashed"); }`) while a non-throwing branch keeps ≥ 1 confirmed (so neither the `confirmed.length === 0` nor the all-errored `verifiers-failed` branch returns first) — then assert `result.truncatedFindings === true` with `result.unverified.length >= 5`. Both arrays share the same trim loop, so one strong case per array is sufficient. If the chosen `depth`'s `verifyCap` proves too small to leave > 5 in either array, raise the claim count or the depth until it does — making that adjustment is the point of the red step.
 
 - [ ] **Step 2: Run to verify failure** (today: refuted list untrimmed, `truncatedFindings` false, kernel backstop silently truncates).
 - [ ] **Step 3: Implement.** Replace `fitWithinBudget`:
@@ -1161,3 +1182,11 @@ End with: `Report-only — nothing applied.`
 - **Placeholder scan:** Task 2 Step 1's first test is intentionally a specification of intent with harness details delegated to the adjacent fixture (the file's harness is bespoke); all other steps carry complete code. No TBDs.
 - **Type consistency:** `fitWarning` (string|null), `claimsDroppedByCap` (integer ≥0), `title` (string ≤80), `recommendBackground` (boolean), `costTrackingUnreliable` (boolean), `costTrackingWarning` (string) — names used identically across tasks 1-15.
 - **Test-contract audit:** prompt markers preserved (Tasks 6, 10); `DEFAULT_SCOPE`/`DEFAULT_REPORT` remain schema-valid (optional fields only); E2E foreground pin lands in the same commit as the meta flip (Task 13); ux.6 rewrite is scoped to compact (full-view test at 3741 untouched).
+
+## Amended 2026-07-09 (post-review, epic `opencode-workflows-mnfx`)
+
+A code-ground review of the materialized backlog surfaced three correctness/honesty gaps in this plan; all three are now fixed above:
+
+- **Task 2:** the sticky cost warning was added to `compactStatusForEntry` only. `fullStatusForEntry` surfaces `cost`/`liveCost`/`totalCost` most prominently, so a `detail:"full"` reader would see cost numbers with no caveat — the opposite of the honesty goal. Task 2 now also mirrors the caveat onto `fullStatusForEntry` (Files list + implement step + test assertion).
+- **Task 10:** the Interfaces "byte-identical to today when `title` absent" claim was false — `QUESTION` is unbounded (`deep-research.js:51`) and today's H1 is untruncated, whereas the new render bounds it to 80. Claim corrected (byte-identical only for questions ≤ 80 chars; longer questions are a deliberate, tested change) and a covering `title`-absent + long-question test added.
+- **Task 11:** the Step-1 fixture could not exercise the trim it targets — `toRefuted`/`toUnverified` drop the inflated `quote`, and 5 claims with ≥ 1 surviving leaves ≤ 4 refuted (below the > 5 floor), so the assertion failed red→red. Fixture rewritten to inflate `claim` across ~40 distinct claims at `thorough` depth, plus an `unverified`-path sibling case. (Task 3's `MAX_STATUS_STRING_CHARS` import source and assorted test-count/PEM-regex nits remain as noted in the review but are low-impact and self-correcting under TDD.)
