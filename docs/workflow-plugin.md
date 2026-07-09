@@ -30,6 +30,18 @@ summary, and this file is the deeper architecture note.
 | `workflow_templates` | Read-only; source retrieval is explicit. | None. | This is the shipped-template readback surface. |
 | `workflow_template_save` | Writes saved workflow source from a shipped template. | No approval hash; write-permission gated. | `workflow_list({ format: "json" })`. |
 
+### Workflow meta fields
+
+Beyond `name`/`description`, the kernel reads: `profile`/`authority`,
+`argsSchema` (Ajv-validated against runtime `args` before launch; string args
+that don't look like JSON pass through verbatim and are gated by this schema),
+`maxAgents`, `concurrency`, `maxCost`, `maxTokens`, `maxRuntimeMs`,
+`guestDeadlineMs`, `childModel`/`defaultChildModel`, `modelTiers`,
+`harness: "drain"`, and `phases`. Cosmetic fields surfaced by `workflow_list`:
+`category`, `examples`, `notes`, and `whenToUse` (a one-line "reach for this
+when…" discovery hint). See the `opencode-workflow-authoring` skill for the
+full authoring contract.
+
 ## Role Prompts And Defaults
 
 Workflow roles keep prompt text in user-editable `.md` files. A sibling

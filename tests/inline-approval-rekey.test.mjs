@@ -98,11 +98,14 @@ return args;`;
   }
 });
 
-test("a non-JSON string args bag fails loudly at plan time", async () => {
+test("a JSON-looking but invalid string args bag fails loudly at plan time", async () => {
+  // A genuine plain string (e.g. "not json") now passes through verbatim (see
+  // tests/plain-string-args.test.mjs) since rekey-repro declares no meta.argsSchema to gate it.
+  // A string that LOOKS like JSON but fails to parse must still fail loudly, not pass through.
   const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }));
   try {
     await assert.rejects(
-      tools.workflow_run.execute({ source: SOURCE, format: "json", args: "not json" }, context),
+      tools.workflow_run.execute({ source: SOURCE, format: "json", args: "{not json" }, context),
       /JSON object.*not a JSON-encoded string/s,
     );
   } finally {

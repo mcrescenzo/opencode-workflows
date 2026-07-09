@@ -1709,7 +1709,14 @@ async function planWorkflowEnvelope(pluginContext, toolContext, args) {
   // argsSchema check and the approval envelope, so string and object emissions of one payload
   // cannot hash to different approvalHashes.
   if (meta.harness !== "drain" && typeof args.args === "string") {
-    args = { ...args, args: parseRuntimeArgsString(args.args) };
+    const trimmedArgs = args.args.trim();
+    // JSON-looking strings must still normalize to the object they encode, so string and
+    // object emissions of one payload hash to the same approvalHash (the original drift fix).
+    // A genuine plain string passes through verbatim: argsSchema is the per-workflow gate
+    // (e.g. the bundled deep-research accepts a bare question string).
+    if (trimmedArgs.startsWith("{") || trimmedArgs.startsWith("[")) {
+      args = { ...args, args: parseRuntimeArgsString(args.args) };
+    }
   }
   assertWorkflowArgsMatchSchema(meta, args.args);
   // Drain workflows accept a runtime-args laneTimeoutMs alias; arg-shape validation is handled by
@@ -1934,6 +1941,12 @@ async function startWorkflow(pluginContext, toolContext, args) {
     notificationDelivery,
     debugCapture,
     debugCaptureSource,
+    // The JSON-string-args normalization (plain-string-args passthrough, above) only rewrites
+    // planWorkflowEnvelope's own local `args`; approval.runtimeArgs is the one place that
+    // survives the function boundary. Read it here instead of re-deriving from this function's
+    // `args.args` so the run object and the guest actually see the same normalized payload the
+    // approval envelope was hashed against.
+    runtimeArgs,
   } = approval;
   // Design C (2026-07-07): no live-gate probe preflight. A deterministic server-fingerprint
   // check gates elevated authority instead (server-fingerprint.js); per-lane permission and
@@ -1995,7 +2008,7 @@ async function startWorkflow(pluginContext, toolContext, args) {
     sourceMetadata,
     meta,
     authority,
-    runtimeArgs: args.args ?? null,
+    runtimeArgs,
     nestedSnapshots,
     argsPreview,
     status: "running",
@@ -2089,7 +2102,7 @@ async function startWorkflow(pluginContext, toolContext, args) {
   await writeState(run);
 
   if (run.background) {
-    run.done = runWorkflowExecution(pluginContext, toolContext, run, body, args.args).catch((_error) => {
+    run.done = runWorkflowExecution(pluginContext, toolContext, run, body, runtimeArgs).catch((_error) => {
       // Background run error after state-write attempt: best effort.
     });
     void run.done;
@@ -2102,7 +2115,7 @@ async function startWorkflow(pluginContext, toolContext, args) {
     ].join("\n");
   }
 
-    return await runWorkflowExecution(pluginContext, toolContext, run, body, args.args);
+    return await runWorkflowExecution(pluginContext, toolContext, run, body, runtimeArgs);
   } catch (error) {
     if (!run || run.status === "running") {
       // A throw after runs.set (e.g. appendEvent/writeState failing) leaves a phantom

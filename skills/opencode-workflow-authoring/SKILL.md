@@ -73,7 +73,9 @@ Beyond `name`/`description`, the kernel reads these `meta` fields:
 - `harness: "drain"` — opts into the drain harness and its `drain-dry-run` /
   `drain-autonomous-local` profiles.
 - `phases` — declared phase names surfaced in previews and `workflow_status`.
-- `category`, `examples`, `notes` — cosmetic; surfaced by `workflow_list`.
+- `category`, `examples`, `notes`, `whenToUse` — cosmetic; surfaced by
+  `workflow_list`. `whenToUse` is a one-line "reach for this when…" discovery
+  hint for agents browsing the registry.
 
 ## Authority Profiles
 
