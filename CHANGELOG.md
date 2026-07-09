@@ -7,6 +7,62 @@ and uses semantic versioning for published package releases.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-09
+
+### Added
+- **`meta.recommendBackground`** — a workflow may declare `recommendBackground: true`
+  to ask the kernel to default its runs to background; an explicit `background: true` /
+  `background: false` on the `workflow_run` call still wins.
+- **Sticky cost-tracking warning.** When a lane reports tokens with `cost: 0`, the run is
+  flagged cost-unreliable (persisted + rehydrated on resume) and surfaces as a preview
+  "Cost-ceiling caveat:" line (when `maxCost` is set), a `costTrackingWarning` string in
+  `workflow_status` (both compact and full), and a terminal warning line. Warning-only;
+  `checkBudgetBeforeLaunch` does not throw.
+- **Important-lines-first `workflow_run` output** — both the review-required and terminal
+  return paths now lift status/abortReason/summary/stats/artifacts lines, the readback
+  command, and trailers ahead of the raw redacted JSON body (now last), so tail-truncated
+  clients lose only the JSON dump. Lifted fields read the redacted projection.
+- **`argsSummary` in status meta** — a one-line args-shape view derived from `argsSchema`,
+  included in the `workflow_status` meta projection.
+- **deep-research `fitWarning`** — a first-class envelope field (string | null) carrying
+  harness-fit caveats; prefixes the report Caveats when present.
+- **`stats.claimsDroppedByCap` + `droppedByCap` artifact** — the verify-cap drop count is
+  now an explicit stat, and the cap-dropped claims are spilled into `findings.full.json`
+  as a `droppedByCap` array (lossless spill).
+- **Optional report `title`** (≤ 80 chars) in `REPORT_SCHEMA`; the report H1 renders the
+  title when present, else the question bounded to 80 (77 + ellipsis; byte-identical for
+  questions ≤ 80).
+- **Fetch-phase `laneCoverage`** — fetch lanes are now tallied in the per-phase coverage.
+- **In-guest artifact secret masking** — common secret patterns (AKIA/sk-/ghp_/xox/PEM/
+  Bearer) are masked over `report.md`, `findings.full.json`, and `sources.json` before
+  persistence.
+
+### Changed
+- **deep-research runs default to background** (declared `meta.recommendBackground: true`);
+  an explicit `background: false` restores foreground execution.
+- **`workflow_status` compact/result meta is now an allowlisted projection**
+  (`compactMetaProjection`). Full frontmatter/meta remains on `detail: "full"`; sensitive
+  meta keys (`apiKey`/`prompt`/`argsSchema`/`examples`/nested) are dropped (undefined) from
+  compact/result, not redacted in place. External consumers reading dropped keys from
+  compact must switch to `detail: "full"`.
+- **A crashed fetch lane now degrades deep-research run status** (it counts as a dropped
+  Fetch lane) instead of being invisible.
+- **An explicit `maxSources` is a hard fetch cap.** Presets keep their soft high-relevance
+  bypass; a user-supplied `maxSources` overrides the preset and is enforced as a hard
+  ceiling with no soft bypass.
+- **New abortReason `no-central-claims`** replaces a misdiagnosed `no-claims-extracted` at
+  `centralOnly` depths (claims existed but the `centralOnly` filter emptied the verify set).
+
+### Fixed
+- centralOnly abort misreporting `claimsExtracted: 0` (now reports an honest
+  `claimsExtracted` count with `abortReason: "no-central-claims"`).
+- `truncatedFindings` staying `false` when refuted/unverified claim sets overflowed and
+  relied on the kernel backstop (now set `true` whenever the floor-5 trim or kernel
+  backstop engages).
+- verifier default-refuting claims sourced from local files (a directly-read local source
+  is no longer default-refuted; the default-refute-on-uncertainty posture applies to
+  web-sourced claims).
+
 ## [0.3.0] - 2026-07-09
 
 ### Added

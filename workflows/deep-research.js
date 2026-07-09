@@ -1,7 +1,7 @@
 export const meta = {
   name: "deep-research",
   description: "Deep research harness — fan-out web searches, fetch sources, adversarially verify claims, synthesize a cited report.",
-  whenToUse: "When the user wants a deep, multi-source, fact-checked research report on any topic. Refine an underspecified question first; pass it as args.question (or args as a plain string).",
+  whenToUse: "When the user wants a deep, multi-source, fact-checked WEB research report on an externally-researchable topic — not this repo/private code (use a local investigation instead). Refine underspecified questions first; pass as args.question.",
   category: "research",
   notes: "Network-authorized read-only research: search/fetch/verify lanes use websearch/webfetch; scope/synthesize lanes are narrowed to read-only. No shell, no MCP, no edits.",
   examples: [
@@ -23,6 +23,7 @@ export const meta = {
   phases: ["Scope", "Search", "Fetch", "Verify", "Synthesize"],
   maxAgents: 160,
   concurrency: 8,
+  recommendBackground: true,
 };
 
 // deep-research: Scope → pipeline(Search → URL-dedup → Fetch+Extract) → adversarial Verify → Synthesize.
@@ -62,9 +63,10 @@ const PRESETS = {
   thorough: { angles: 5, maxFetch: 15, verifyCap: 25, votes: 3, refutesRequired: 2, centralOnly: false },
 };
 const P = PRESETS[DEPTH];
-const MAX_FETCH = Number.isInteger(RT.maxSources) && RT.maxSources >= 3 && RT.maxSources <= 30
+const USER_MAX_SOURCES = Number.isInteger(RT.maxSources) && RT.maxSources >= 3 && RT.maxSources <= 30
   ? RT.maxSources
-  : P.maxFetch;
+  : null;
+const MAX_FETCH = USER_MAX_SOURCES ?? P.maxFetch;
 
 // Model tiers are lane-intent constants (workflow-model-tiering skill): the single scope lane
 // feeds the whole funnel and verification is subtle adversarial judgment (deep); search and
@@ -94,11 +96,16 @@ function tallyPhase(name, results, labelOf) {
 }
 
 // ---- standardized return envelope ----
+let fitWarning = null;
 function envelope(status, extra) {
-  return {
+  const out = {
     domain: DOMAIN, schemaVersion: SCHEMA_VERSION, status, abortReason: null,
-    question: QUESTION, reportPath: null, laneCoverage, ...extra,
+    question: QUESTION, reportPath: null, laneCoverage, fitWarning, ...extra,
   };
+  if (fitWarning && typeof out.caveats === "string") {
+    out.caveats = out.caveats ? fitWarning + "\n\n" + out.caveats : fitWarning;
+  }
+  return out;
 }
 
 if (!QUESTION) {
@@ -133,6 +140,7 @@ const SCOPE_SCHEMA = {
   properties: {
     question: { type: "string" },
     summary: { type: "string" },
+    fitWarning: { type: ["string", "null"] },
     angles: {
       type: "array", minItems: 3, maxItems: 6,
       items: {
@@ -186,6 +194,7 @@ const REPORT_SCHEMA = {
   type: "object", required: ["summary", "findings", "caveats"],
   properties: {
     summary: { type: "string" },
+    title: { type: "string", maxLength: 80 },
     findings: {
       type: "array",
       items: {
@@ -214,8 +223,10 @@ const SCOPE_PROMPT =
   "- broad/primary · academic/technical · recent news · contrarian/skeptical · practitioner/implementation\n" +
   "- For medical: anatomy · common causes · serious differentials · authoritative refs · red flags\n" +
   "- For tech: state-of-art · benchmarks · limitations · industry adoption · cost/tradeoffs\n\n" +
-  "Make queries specific enough to surface high-signal results. Avoid redundancy.\n" +
-  "Return: the question (verbatim or lightly normalized), a 1-2 sentence decomposition strategy as `summary`, and the angles.";
+  "Make queries specific enough to surface high-signal results. Avoid redundancy.\n\n" +
+  "### Fit check\n" +
+  "This harness researches the PUBLIC WEB. If the question is primarily about a local/private codebase, an internal system, or anything public web search cannot see, set `fitWarning` to a 1-2 sentence explanation — the run still proceeds, but the warning rides the report — and angle the queries toward the PUBLIC aspects of the topic. Otherwise set `fitWarning` to null.\n\n" +
+  "Return: the question (verbatim or lightly normalized), a 1-2 sentence decomposition strategy as `summary`, the angles, and `fitWarning`.";
 
 const SEARCH_PROMPT = (angle) =>
   "## Web Searcher: " + angle.label + "\n\n" +
@@ -242,22 +253,43 @@ const FETCH_PROMPT = (source, angle) =>
   "4. Note the publish date if available.\n\n" +
   "If the fetch fails or the page is irrelevant or paywalled, return claims: [] and sourceQuality: \"unreliable\".";
 
-const VERIFY_PROMPT = (claim, v) =>
-  "## Adversarial Claim Verifier (voter " + (v + 1) + "/" + P.votes + ")\n\n" +
-  "Be SKEPTICAL. Try to REFUTE this claim. " + P.refutesRequired + "/" + P.votes + " refutations kill it.\n\n" +
-  "### Research question\n" + QUESTION + "\n\n" +
-  "### Claim under review\n\"" + claim.claim + "\"\n\n" +
-  "**Source:** " + claim.sourceUrl + " (" + claim.sourceQuality + ")\n" +
-  "**Supporting quote:** \"" + claim.quote + "\"\n\n" +
-  "### Checklist\n" +
-  "1. Is the claim actually supported by the quote, or is it an overreach or misread?\n" +
-  "2. Use the websearch tool to look for contradicting evidence — does any credible source dispute or heavily qualify this?\n" +
-  "3. Is the source quality sufficient for the claim's strength? (extraordinary claims need primary sources)\n" +
-  "4. Is the claim outdated? (check dates — old claims about fast-moving fields are suspect)\n" +
-  "5. Is this a marketing claim, press release, cherry-picked benchmark, or forum speculation?\n\n" +
-  "**refuted=true** if: unsupported by quote / contradicted / low-quality source for a strong claim / outdated / marketing fluff.\n" +
-  "**refuted=false** ONLY if: the claim is well-supported, current, and source quality matches claim strength.\n" +
-  "Default to refuted=true if uncertain. Evidence MUST be specific.";
+// URL detection mirrors normURL's scheme-strip regex (line 118) so the two never drift;
+// bare "www." hosts count as web. Anything else (repo paths like workflow-kernel/x.js)
+// is a local source — verifier lanes hold unconditional Read/Grep (authority-policy.js:498-502,
+// bounded to the run's directory), so direct inspection is the correct check there.
+const isWebSource = (u) => {
+  const s = String(u ?? "").trim();
+  return /^[a-z][a-z0-9+.-]*:\/\//i.test(s) || /^www\./i.test(s);
+};
+const VERIFY_PROMPT = (claim, v) => {
+  const local = !isWebSource(claim.sourceUrl);
+  return (
+    "## Adversarial Claim Verifier (voter " + (v + 1) + "/" + P.votes + ")\n\n" +
+    "Be SKEPTICAL. Try to REFUTE this claim. " + P.refutesRequired + "/" + P.votes + " refutations kill it.\n\n" +
+    "### Research question\n" + QUESTION + "\n\n" +
+    "### Claim under review\n\"" + claim.claim + "\"\n\n" +
+    "**Source:** " + claim.sourceUrl + " (" + claim.sourceQuality + ")\n" +
+    "**Supporting quote:** \"" + claim.quote + "\"\n\n" +
+    (local
+      ? "### Local source — read it directly\n" +
+        "This source is a local file path, not a URL. Use the Read or Grep tool to open it and check the quote and claim against the file's actual content. Do NOT rely on websearch for this claim — public web search cannot see private/local code, and the absence of public web-search results is NOT grounds for refuting it.\n\n"
+      : "") +
+    "### Checklist\n" +
+    "1. Is the claim actually supported by the quote, or is it an overreach or misread?\n" +
+    "2. " + (local
+      ? "Re-read the local source file directly — does it actually contain and support the quote?"
+      : "Use the websearch tool to look for contradicting evidence — does any credible source dispute or heavily qualify this?") + "\n" +
+    "3. Is the source quality sufficient for the claim's strength? (extraordinary claims need primary sources)\n" +
+    "4. Is the claim outdated? (check dates — old claims about fast-moving fields are suspect)\n" +
+    "5. Is this a marketing claim, press release, cherry-picked benchmark, or forum speculation?\n\n" +
+    "**refuted=true** if: unsupported by quote / contradicted / low-quality source for a strong claim / outdated / marketing fluff" +
+    (local ? " / the local file itself does not contain or support the quote" : "") + ".\n" +
+    "**refuted=false** ONLY if: the claim is well-supported, current, and source quality matches claim strength.\n" +
+    (local
+      ? "Default to refuted=true only when the file's ACTUAL CONTENT leaves you uncertain — never because websearch found nothing. Evidence MUST be specific.\n"
+      : "Default to refuted=true if uncertain. Evidence MUST be specific.\n")
+  );
+};
 
 // ---- Phase 0: Scope ----
 await phase("Scope");
@@ -276,6 +308,8 @@ if (!scope) {
 }
 await log("Q: " + QUESTION.slice(0, 80) + (QUESTION.length > 80 ? "…" : ""));
 const angles = scope.angles.slice(0, P.angles);
+fitWarning = typeof scope.fitWarning === "string" && scope.fitWarning.trim() ? scope.fitWarning.trim() : null;
+if (fitWarning) await log("fit warning: " + fitWarning.slice(0, 160));
 await log("Decomposed into " + angles.length + " angles: " + angles.map((a) => a.label).join(", "));
 
 // ---- dedup state — accumulates across searchers as they complete (no barrier) ----
@@ -319,8 +353,13 @@ const perAngle = await pipeline(
       const key = normURL(r.url);
       if (!key) continue;
       if (seen.has(key)) { dupes.push({ url: r.url, angle: searchResult.angle, dupOf: seen.get(key) }); continue; }
-      // High-relevance results still fetch past the budget (CC-faithful); medium/low are dropped.
-      if (fetchSlots <= 0 && relRank[r.relevance] >= 1) { budgetDropped.push({ url: r.url, angle: searchResult.angle }); continue; }
+      // Preset budgets are soft (CC-faithful: high-relevance results fetch past the budget;
+      // medium/low are dropped). An EXPLICIT user maxSources is a hard cap — high-relevance
+      // results and seed URLs consume and respect it like everything else.
+      if (fetchSlots <= 0 && (USER_MAX_SOURCES !== null || relRank[r.relevance] >= 1)) {
+        budgetDropped.push({ url: r.url, angle: searchResult.angle });
+        continue;
+      }
       seen.set(key, { angle: searchResult.angle, title: r.title });
       fetchSlots--;
       novel.push(r);
@@ -351,6 +390,22 @@ const perAngle = await pipeline(
 );
 tallyPhase("Search", perAngle, (i) => "search:" + (pipelineItems[i] && pipelineItems[i].label ? pipelineItems[i].label : i + 1));
 
+// Fetch-phase coverage: each surviving perAngle item is an array of per-source fetch results
+// (from the nested parallel()). A fetch lane's own error is caught INSIDE the stage and
+// returned as a fetchFailed record (never a pipeline null), so remap those to null here so
+// tallyPhase registers them as drops. Deliberate consequence: any crashed fetch lane degrades
+// the run status — matching the honesty gate below and the spec's partial-drop rule.
+const fetchLabels = [];
+const fetchResults = [];
+for (const item of perAngle) {
+  if (!Array.isArray(item)) continue; // dropped search lane — already tallied under "Search"
+  for (const s of item) {
+    fetchLabels.push(s ? "fetch:" + (s.url ?? "unknown") : "fetch:unknown");
+    fetchResults.push(s && s.fetchFailed ? null : s);
+  }
+}
+tallyPhase("Fetch", fetchResults, (i) => fetchLabels[i]);
+
 const allSources = [];
 for (const item of perAngle) {
   if (!Array.isArray(item)) continue;           // dropped search lane (already tallied)
@@ -370,7 +425,7 @@ if (allSources.length === 0) {
       "but need a working search provider). Retry, or pass seedUrls to research from known sources.",
     findings: [], refuted: [], unverified: [],
     sources: [], openQuestions: [], caveats: "",
-    stats: { depth: DEPTH, angles: angles.length, sourcesFetched: 0, claimsExtracted: 0, claimsVerified: 0, confirmed: 0, killed: 0, unverified: 0, afterSynthesis: 0, urlDupes: dupes.length, budgetDropped: budgetDropped.length, fetchFailures, agentCalls: 1 + searchAgentLanes },
+    stats: { depth: DEPTH, angles: angles.length, sourcesFetched: 0, claimsExtracted: 0, claimsVerified: 0, confirmed: 0, killed: 0, unverified: 0, claimsDroppedByCap: 0, afterSynthesis: 0, urlDupes: dupes.length, budgetDropped: budgetDropped.length, fetchFailures, agentCalls: 1 + searchAgentLanes },
     reportMarkdown: null, truncatedFindings: false, artifacts: null,
   });
 }
@@ -380,18 +435,24 @@ const qualRank = { primary: 0, secondary: 1, blog: 2, forum: 3, unreliable: 4 };
 let rankedClaims = [...allClaims].sort((a, b) =>
   (impRank[a.importance] - impRank[b.importance]) || (qualRank[a.sourceQuality] - qualRank[b.sourceQuality]));
 if (P.centralOnly) rankedClaims = rankedClaims.filter((c) => c.importance === "central");
+const claimsDroppedByCap = rankedClaims.length > P.verifyCap ? rankedClaims.slice(P.verifyCap) : [];
 rankedClaims = rankedClaims.slice(0, P.verifyCap);
 await log("Fetched " + allSources.length + " sources → " + allClaims.length + " claims → verifying top " + rankedClaims.length);
 
 const sourcesSummary = allSources.map((s) => ({ url: s.url, quality: s.sourceQuality, angle: s.angle, claimCount: s.claims.length }));
 
 if (rankedClaims.length === 0) {
+  // Distinguish "sources yielded nothing" from "claims existed but this depth's centralOnly
+  // filter dropped them all" — the latter misread as a websearch problem in the first live run.
+  const centralFiltered = allClaims.length > 0;
   return envelope("failed", {
-    abortReason: "no-claims-extracted",
-    summary: "No claims extracted. " + allSources.length + " source(s) fetched (" + fetchFailures + " failed), all empty. " +
-      dupes.length + " URL dupes, " + budgetDropped.length + " budget-dropped.",
+    abortReason: centralFiltered ? "no-central-claims" : "no-claims-extracted",
+    summary: centralFiltered
+      ? allClaims.length + " claim(s) extracted but none rated central; depth \"" + DEPTH + "\" verifies central claims only. Re-run at depth normal or thorough to verify supporting claims."
+      : "No claims extracted. " + allSources.length + " source(s) fetched (" + fetchFailures + " failed), all empty. " +
+        dupes.length + " URL dupes, " + budgetDropped.length + " budget-dropped.",
     findings: [], refuted: [], unverified: [], sources: sourcesSummary, openQuestions: [], caveats: "",
-    stats: { depth: DEPTH, angles: angles.length, sourcesFetched: allSources.length, claimsExtracted: 0, claimsVerified: 0, confirmed: 0, killed: 0, unverified: 0, afterSynthesis: 0, urlDupes: dupes.length, budgetDropped: budgetDropped.length, fetchFailures, agentCalls: 1 + searchAgentLanes + fetchLaneCount },
+    stats: { depth: DEPTH, angles: angles.length, sourcesFetched: allSources.length, claimsExtracted: allClaims.length, claimsVerified: 0, confirmed: 0, killed: 0, unverified: 0, claimsDroppedByCap: claimsDroppedByCap.length, afterSynthesis: 0, urlDupes: dupes.length, budgetDropped: budgetDropped.length, fetchFailures, agentCalls: 1 + searchAgentLanes + fetchLaneCount },
     reportMarkdown: null, truncatedFindings: false, artifacts: null,
   });
 }
@@ -418,6 +479,9 @@ const votedRaw = await parallel(rankedClaims.map((claim) => async ({ parallel })
   await log("\"" + claim.claim.slice(0, 50) + "…\": " + (valid.length - refuted) + "-" + refuted + (errored > 0 ? " (" + errored + " errored)" : "") + " " + mark);
   return { ...claim, verdicts: valid, refutedVotes: refuted, erroredVotes: errored, survives, isRefuted };
 }));
+// Granularity: Search tallies per pipeline LANE (angle/seed item); Fetch (above) per fetch
+// lane (novel source); Verify per CLAIM — each votedRaw entry aggregates its P.votes votes,
+// so an individual errored vote surfaces via erroredVotes/unverified, not as a lane drop here.
 tallyPhase("Verify", votedRaw, (i) => "verify:" + (rankedClaims[i] ? rankedClaims[i].claim.slice(0, 30) : i + 1));
 const voted = votedRaw.filter(Boolean);
 
@@ -432,6 +496,7 @@ const statsBase = () => ({
   depth: DEPTH, angles: angles.length, sourcesFetched: allSources.length,
   claimsExtracted: allClaims.length, claimsVerified: voted.length,
   confirmed: confirmed.length, killed: killed.length, unverified: unverifiedClaims.length,
+  claimsDroppedByCap: claimsDroppedByCap.length,
   urlDupes: dupes.length, budgetDropped: budgetDropped.length, fetchFailures,
   agentCalls: 1 + searchAgentLanes + fetchLaneCount + voted.length * P.votes + 1,
 });
@@ -492,13 +557,18 @@ const report = await agent(
   "3. Assign confidence per finding: high (multiple primary sources, unanimous votes), medium (secondary sources or split votes), low (single source or blog-quality).\n" +
   "4. Write a 3-5 sentence executive summary answering the research question.\n" +
   "5. Note caveats: what's uncertain, which sources were weak, what time-sensitivity applies.\n" +
-  "6. List 2-4 open questions that emerged but weren't answered.",
+  "6. List 2-4 open questions that emerged but weren't answered.\n" +
+  "7. `vote` per finding: copy EXACTLY the vote tally shown above for the underlying claim (e.g. \"3-0\"). When merging claims with different tallies, OMIT `vote` — never write prose there.\n" +
+  "8. Every `sources` entry MUST be copied verbatim from a Source: line above (a real URL or file path). Never cite this prompt's own structure — no \"refuted claim list\", no bracket indices.\n" +
+  "9. Optionally set `title`: a short (<= 80 chars) headline distilling the answer. Omit it if the question itself already reads as a title.",
   { label: "synthesize", phase: "Synthesize", tier: TIER_SYNTH, schema: REPORT_SCHEMA, readOnly: true, onFailure: "returnNull" },
 );
 
 // ---- report rendering (pure JS; no Date — the command stamps the persisted file) ----
 function renderMarkdown(rep, refutedList, unverifiedList) {
-  const lines = ["# Deep Research: " + QUESTION, "", "## Executive summary", "", rep.summary, "", "## Findings", ""];
+  const rawTitle = typeof rep.title === "string" && rep.title.trim() ? rep.title.trim() : QUESTION;
+  const title = rawTitle.length > 80 ? rawTitle.slice(0, 77) + "…" : rawTitle;
+  const lines = ["# Deep Research: " + title, "", "## Executive summary", "", rep.summary, "", "## Findings", ""];
   for (const f of rep.findings) {
     lines.push("### " + f.claim);
     lines.push("- **Confidence:** " + f.confidence + (f.vote ? " (vote " + f.vote + ")" : ""));
@@ -506,7 +576,8 @@ function renderMarkdown(rep, refutedList, unverifiedList) {
     lines.push("- **Sources:** " + f.sources.join(", "));
     lines.push("");
   }
-  if (rep.caveats) lines.push("## Caveats", "", rep.caveats, "");
+  const caveatsText = [fitWarning, rep.caveats].filter(Boolean).join("\n\n");
+  if (caveatsText) lines.push("## Caveats", "", caveatsText, "");
   if (Array.isArray(rep.openQuestions) && rep.openQuestions.length) {
     lines.push("## Open questions", "");
     for (const q of rep.openQuestions) lines.push("- " + q);
@@ -526,7 +597,11 @@ function renderMarkdown(rep, refutedList, unverifiedList) {
   lines.push("## Method", "",
     "Depth **" + DEPTH + "**: " + st.angles + " search angles, " + st.sourcesFetched + " sources fetched, " +
     st.claimsExtracted + " claims extracted, " + st.claimsVerified + " adversarially verified (" +
-    P.votes + " vote(s)/claim), " + st.confirmed + " confirmed / " + st.killed + " refuted / " + st.unverified + " unverified.");
+    P.votes + " vote(s)/claim), " + st.confirmed + " confirmed / " + st.killed + " refuted / " + st.unverified + " unverified." +
+    (P.votes === 1 ? " Note: this depth uses single-vote verification — each refutation is a single verifier's judgment; re-run at thorough for 3-vote panels." : ""));
+  if (st.claimsDroppedByCap > 0) {
+    lines.push("", st.claimsDroppedByCap + " lower-priority claim(s) were extracted but not verified (verify cap " + P.verifyCap + "); see findings.full.json → droppedByCap in artifacts for the full list.");
+  }
   return lines.join("\n");
 }
 
@@ -570,12 +645,31 @@ if (!report) {
 
 const reportMarkdown = renderMarkdown(report, refutedOut, unverifiedOut);
 
+// In-guest secret masking for artifacts. The returned envelope is redacted by the kernel at
+// the readback boundary (result-readback → redactFreeTextSecrets), but persistArtifacts
+// writes file content VERBATIM — without this pass, a token-shaped string quoted from a
+// fetched page would be masked in reportMarkdown yet land in the clear in report.md.
+// Patterns mirror the kernel redactor's high-signal shapes; keep them in sync by eye.
+const SECRET_PATTERNS = [
+  /\bAKIA[0-9A-Z]{16}\b/g,
+  /\bsk-[A-Za-z0-9_-]{16,}\b/g,
+  /\bghp_[A-Za-z0-9]{20,}\b/g,
+  /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g,
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
+  /\b(?:Bearer|Basic)\s+[A-Za-z0-9+/=_.-]{16,}/g,
+];
+function maskSecrets(text) {
+  let out = String(text ?? "");
+  for (const re of SECRET_PATTERNS) out = out.replace(re, "[redacted]");
+  return out;
+}
+
 const artifactPayload = {
   namespace: "deep-research",
   files: [
-    { name: "findings.full.json", content: JSON.stringify({ question: QUESTION, depth: DEPTH, report, confirmed, refuted: refutedOut, unverified: unverifiedOut, sources: sourcesSummary, stats: statsBase() }, null, 2) },
-    { name: "sources.json", content: JSON.stringify(sourcesSummary, null, 2) },
-    { name: "report.md", content: reportMarkdown },
+    { name: "findings.full.json", content: maskSecrets(JSON.stringify({ question: QUESTION, depth: DEPTH, report, confirmed, refuted: refutedOut, unverified: unverifiedOut, droppedByCap: claimsDroppedByCap.map((c) => ({ claim: c.claim, sourceUrl: c.sourceUrl, importance: c.importance, quality: c.sourceQuality })), sources: sourcesSummary, stats: statsBase() }, null, 2)) },
+    { name: "sources.json", content: maskSecrets(JSON.stringify(sourcesSummary, null, 2)) },
+    { name: "report.md", content: maskSecrets(reportMarkdown) },
   ],
 };
 let artifacts = null;
@@ -592,11 +686,13 @@ const finalStatus = laneCoverage.dropped > 0 ? "degraded" : "ok";
 function fitWithinBudget() {
   const LIMIT = 230000; // headroom under MAX_RESULT_BYTES (262144) for the host result wrapper
   let findingsOut = report.findings;
+  let refutedFit = refutedOut;
+  let unverifiedFit = unverifiedOut;
   let truncated = false;
   let md = reportMarkdown;
   const build = () => envelope(finalStatus, {
     summary: report.summary, findings: findingsOut,
-    refuted: refutedOut, unverified: unverifiedOut, sources: sourcesSummary,
+    refuted: refutedFit, unverified: unverifiedFit, sources: sourcesSummary,
     openQuestions: report.openQuestions ?? [], caveats: report.caveats ?? "",
     stats: { ...statsBase(), afterSynthesis: report.findings.length },
     reportMarkdown: md, truncatedFindings: truncated, artifacts,
@@ -606,6 +702,15 @@ function fitWithinBudget() {
     findingsOut = findingsOut.slice(0, Math.ceil(findingsOut.length / 2));
     truncated = true;
   }
+  // The refuted/unverified arrays were previously un-budgeted growth vectors: a large killed
+  // set could blow past LIMIT after findings hit their floor, silently relying on the kernel's
+  // partial-readback backstop while truncatedFindings stayed false.
+  while (jsonUtf8ByteLength(build()) > LIMIT && (refutedFit.length > 5 || unverifiedFit.length > 5)) {
+    if (refutedFit.length > 5) refutedFit = refutedFit.slice(0, Math.ceil(refutedFit.length / 2));
+    if (unverifiedFit.length > 5) unverifiedFit = unverifiedFit.slice(0, Math.ceil(unverifiedFit.length / 2));
+    truncated = true;
+  }
+  if (jsonUtf8ByteLength(build()) > LIMIT) truncated = true; // kernel backstop will engage — say so
   return build();
 }
 return fitWithinBudget();

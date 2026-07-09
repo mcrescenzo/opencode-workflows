@@ -51,7 +51,7 @@ export function inlineResultProjection(value, { maxBytes = MAX_INLINE_RESULT_BYT
   const result = redactResultValue(value);
   const text = jsonText(result, { pretty: true });
   const bytes = byteLength(text);
-  if (bytes > maxBytes) return { inline: false, bytes, maxBytes };
+  if (bytes > maxBytes) return { inline: false, bytes, maxBytes, result };
   return { inline: true, bytes, maxBytes, text, result };
 }
 

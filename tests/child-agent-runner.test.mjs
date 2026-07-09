@@ -1299,6 +1299,38 @@ test("runChildAgent reconciles the per-attempt reservation across a retry", asyn
   }
 });
 
+// opencode-workflows-mnfx.2: a lane reporting tokens with cost=0 means the provider gave no per-lane
+// pricing, so the maxCost ceiling cannot be trusted to bound the run. run.costTrackingUnreliable is
+// sticky (set once, never cleared) and accrual-unaffected: a later priced lane keeps the flag set
+// while its real cost still lands in run.cost.
+test("costTrackingUnreliable: sticky when a lane reports tokens with cost=0; never resets", async () => {
+  const { root, dir } = await tempRunDir("child-agent-cost-unreliable");
+  const calls = { create: [], prompt: [], abort: [] };
+  // Lane 1 reports tokens>0 with cost=0 (unpriced provider) → flag set. Lane 2 reports a real
+  // cost of 0.25 → flag STAYS set and the real cost still accrues.
+  let lane = 0;
+  const pluginContext = directPluginContext(async () => {
+    lane += 1;
+    if (lane === 1) {
+      return { data: { parts: [{ type: "text", text: "unpriced" }], info: { tokens: { input: 12, output: 3, reasoning: 0 }, cost: 0 } } };
+    }
+    return { data: { parts: [{ type: "text", text: "priced" }], info: { tokens: { input: 4, output: 1, reasoning: 0 }, cost: 0.25 } } };
+  }, calls);
+  const toolContext = { directory: root, sessionID: "parent", abort: new AbortController().signal };
+  const run = minimalChildRun(dir, { concurrency: 1, maxAgents: 5, budgetCeilings: { maxCost: 2, maxTokens: 100 } });
+  try {
+    await runChildAgent(pluginContext, toolContext, run, { callId: "lane:unpriced", prompt: "work 1", opts: {} }, directDeps());
+    assert.equal(run.costTrackingUnreliable, true, "an unpriced lane (tokens>0, cost=0) must set the sticky flag");
+    assert.equal(run.cost, 0, "the unpriced lane contributed no cost");
+
+    await runChildAgent(pluginContext, toolContext, run, { callId: "lane:priced", prompt: "work 2", opts: {} }, directDeps());
+    assert.equal(run.costTrackingUnreliable, true, "the flag is sticky — a later priced lane must not clear it");
+    assert.ok(Math.abs(run.cost - 0.25) < 1e-9, "real cost accrual is unaffected by the flag");
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("runChildAgent aborts a child session that is created after the create timeout", async () => {
   const { tools, context, directory, calls } = await makeHarness(async () => ({ data: { parts: [{ type: "text", text: "never prompted" }], info: {} } }), {
     pluginContext: { __workflowChildCreateTimeoutMs: 10, __workflowChildAbortTimeoutMs: 20 },

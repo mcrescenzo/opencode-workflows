@@ -38,10 +38,14 @@ Beyond `name`/`description`, the kernel reads: `profile`/`authority`,
 that don't look like JSON pass through verbatim and are gated by this schema),
 `maxAgents`, `concurrency`, `maxCost`, `maxTokens`, `maxRuntimeMs`,
 `guestDeadlineMs`, `childModel`/`defaultChildModel`, `modelTiers`,
-`harness: "drain"`, and `phases`. Cosmetic fields surfaced by `workflow_list`:
-`category`, `examples`, `notes`, and `whenToUse` (a one-line "reach for this
-when…" discovery hint). See the `opencode-workflow-authoring` skill for the
-full authoring contract.
+`harness: "drain"`, `phases`, and `recommendBackground` (boolean — when `true`,
+the workflow asks the kernel to default its runs to background; an explicit
+`background: true` / `background: false` on the `workflow_run` call still
+wins, and `recommendBackground` only supplies the default when `background`
+is omitted). Cosmetic fields surfaced by `workflow_list`: `category`,
+`examples`, `notes`, and `whenToUse` (a one-line "reach for this when…"
+discovery hint). See the `opencode-workflow-authoring` skill for the full
+authoring contract.
 
 ## Role Prompts And Defaults
 
@@ -95,6 +99,46 @@ integration lanes):
 
 Summarized: `journal / result / ledgers / worktrees` > `workflow_status` >
 `workflow_events` > `session transcripts (diagnostic only)`.
+
+### `workflow_status` meta projection and cost-tracking warning
+
+Two status-output details external consumers should know:
+
+- **Compact/result meta is an allowlisted projection.** The `meta` block returned by
+  `detail: "compact"` and `detail: "result"` is projected through an allowlist
+  (`compactMetaProjection`: `name`, `description`, `whenToUse`, `category`, `profile`,
+  `phases`, `maxAgents`, `concurrency`, and `argsSummary`). The full frontmatter/meta
+  block is **not** in the compact or result projection — it remains available only on
+  `detail: "full"`. Sensitive meta keys (`apiKey`, `prompt`, `argsSchema`, `examples`,
+  and nested keys) are **dropped** (set to `undefined`, so they do not appear at all),
+  not redacted in place. If you were reading any dropped key from compact, switch to
+  `detail: "full"`. `argsSummary` is a one-line view of the run's args shape derived
+  from `argsSchema`, so compact/result readers get the args shape without the full
+  schema.
+- **`costTrackingWarning` (cost-unreliable signal).** When a lane reports token usage
+  with `cost: 0`, the run is flagged cost-unreliable (sticky: it persists to durable
+  state and rehydrates on resume). This surfaces as a **`costTrackingWarning`** string
+  in `workflow_status` output in **both** the compact and full views. It is
+  warning-only: the run still launches (`checkBudgetBeforeLaunch` does not throw), and a
+  `maxCost` ceiling is still tracked on a best-effort token basis — the caveat is the
+  signal that cost accounting for the run should not be treated as exact.
+
+### `workflow_run` output shape: important lines first
+
+Both the review-required and the terminal `workflow_run` return messages put the
+human-readable lines **before** the raw redacted JSON body. The lifted lines — run
+status, `abortReason`, summary, stats, the artifacts spill pointer, `Result file:`,
+the recommended readback command, and trailers — are emitted first, and the raw
+redacted JSON dump is now the **last** block. A client that tail-truncates the message
+therefore loses only the JSON dump, never the result pointers or the readback command.
+The lifted fields read only the redacted projection, so the same secrets-only redaction
+that governs `detail: "result"` readback governs the inline lift.
+
+When a run was flagged cost-unreliable (see `costTrackingWarning` above) **and** a
+`maxCost` ceiling is set, the `workflow_run` **approval preview** additionally carries a
+**"Cost-ceiling caveat:"** line warning that cost tracking for the run may be
+inaccurate. The terminal return carries the matching warning line as well. The caveat is
+advisory: it does not block launch.
 
 ## Debug capture mode
 

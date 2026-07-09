@@ -24,6 +24,7 @@ function rehydrateRunFromPriorState(run, prior) {
     }
   }
   if (Number.isFinite(prior.droppedLaneCount)) run.droppedLaneCount = prior.droppedLaneCount;
+  if (prior.costTrackingUnreliable === true) run.costTrackingUnreliable = true;
   if (typeof prior.startedAt === "string") run.startedAt = prior.startedAt;
   if (prior.debugCapture && typeof prior.debugCapture === "object") run.debugCapture = prior.debugCapture;
   if (typeof prior.firstResultAt === "string") run.firstResultAt = prior.firstResultAt;

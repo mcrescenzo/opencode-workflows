@@ -1,6 +1,6 @@
 {
   "name": "@mcrescenzo/opencode-workflows",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "opencode plugin providing durable, resumable multi-agent workflow orchestration: the architecture for building, running, and supervising workflows, plus one flagship bundled workflow (deep-research).",
   "type": "module",
   "main": "./opencode-workflows.js",

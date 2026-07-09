@@ -1088,6 +1088,14 @@ export async function runChildAgent(pluginContext, toolContext, run, payload, de
         run.tokens.reasoning += tokens.reasoning;
         run.cost += cost;
 
+        // Sticky: a lane reporting tokens with cost=0 means the provider gave no per-lane
+        // pricing, so budget-accounting's maxCost comparison (which reads run.cost) cannot be
+        // trusted to bound this run. Never reset — later priced lanes must not hide that
+        // earlier spend evaded the ceiling.
+        if (cost === 0 && (tokens.input + tokens.output + tokens.reasoning) > 0) {
+          run.costTrackingUnreliable = true;
+        }
+
         if (useStructuredTextFallback) {
           const rawText = responseText(lastResult);
           try {

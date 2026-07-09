@@ -98,6 +98,7 @@ async function doWriteState(run) {
     replayedTokens: run.replayedTokens,
     cost: run.cost,
     replayedCost: run.replayedCost,
+    costTrackingUnreliable: run.costTrackingUnreliable === true,
     cacheStats: run.cacheStats,
     budgetCeilings: run.budgetCeilings,
     autoApproved: run.autoApproved,

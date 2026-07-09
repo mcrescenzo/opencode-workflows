@@ -381,3 +381,127 @@ architecture self-containedly so implementation does not require the extracted s
 - **Live smoke (D10)**: before release, run `/deep-research` end-to-end on a simple
   question in a real session; verify Exa reachability, approval UX, toast phases, report
   persistence.
+
+---
+
+## 11. Amended 2026-07-09 (deep-research hardening batch)
+
+This subsection records the envelope, schema, abort-reason, and behavioral changes
+landed by the 2026-07-09 deep-research hardening plan
+(`docs/superpowers/plans/2026-07-09-deep-research-hardening.md`). It amends §4 and §5
+above; the original 2026-07-08 decisions are unchanged and remain the record of intent.
+
+### 11.1 Envelope additions (`workflows/deep-research.js` return)
+
+- **`fitWarning`** (string | null) is now a first-class top-level envelope field. When
+  non-null it is the leading caveat — it prefixes the Caveats section of the rendered
+  report and surfaces in the returned envelope. It captures harness-level fitness
+  warnings (e.g. a non-web question routed at a web research harness). It is `null` on a
+  clean fit.
+- **`stats.claimsDroppedByCap`** (integer ≥ 0) — the number of ranked claims the verify
+  cap dropped. This is the previously-implicit gap between `claimsExtracted` (ranked) and
+  `claimsVerified`; it is now an explicit, auditable stat.
+- **`droppedByCap`** artifact key — when `stats.claimsDroppedByCap > 0`, the
+  `findings.full.json` artifact (under `artifacts/deep-research/`) carries a `droppedByCap`
+  array listing the cap-dropped claims (claim text + importance + source-quality), so the
+  spill remains lossless even though those claims did not reach verification.
+- **`truncatedFindings`** is now set `true` whenever the refuted/unverified claim sets are
+  trimmed (floor of 5 each) **or** when the size-fit kernel backstop will engage — it no
+  longer stays `false` while relying on the kernel to truncate silently.
+
+### 11.2 REPORT_SCHEMA + report rendering
+
+- **Optional report `title`** (string, ≤ 80 chars) added to `REPORT_SCHEMA`. When present,
+  the rendered `reportMarkdown` H1 is the title. When absent, the H1 is the question
+  bounded to 80 chars (77 chars + ellipsis when longer; byte-identical for questions ≤ 80).
+  This lets the caller name the report independently of the research question.
+
+### 11.3 Abort-reason honesty
+
+- New abortReason **`no-central-claims`** replaces a previously misdiagnosed
+  `no-claims-extracted` at `centralOnly` depths (`quick` preset verifies
+  central-importance claims only). When claims were extracted but the `centralOnly` filter
+  emptied the verify set, the run now reports `no-central-claims` and an honest
+  `claimsExtracted` count, instead of falsely reporting `claimsExtracted: 0` /
+  `no-claims-extracted`.
+
+### 11.4 Fetch phase: lane coverage + crash degradation
+
+- Fetch lanes are now tallied in **`laneCoverage`** (Fetch phase expected/completed/dropped
+  counts), closing a coverage-reporting gap (fetch lanes were previously off-book).
+- **A crashed fetch lane now degrades the run.** A fetch lane that throws is no longer
+  invisible; it counts as a dropped Fetch lane, so a run with crashed fetches surfaces as
+  `status: "degraded"` rather than silently `ok`.
+
+### 11.5 Hard `maxSources`
+
+- An **explicit user `maxSources` is now a hard fetch cap.** Presets retain their soft
+  high-relevance bypass (a `high`-relevance result can still fetch when slots run out),
+  but a user-supplied `maxSources` overrides the preset value and is enforced as a hard
+  ceiling with no soft bypass.
+
+### 11.6 Verifier local-source branch
+
+- The verifier no longer **default-refutes** claims sourced from local files. A local
+  file source (read directly via read tools, not fetched from the web) is treated as a
+  trustworthy primary source for its own claim text; the default-refute-on-uncertainty
+  posture applies to web-sourced claims, not to directly-read local sources.
+
+### 11.7 In-guest artifact secret masking
+
+- Before persistence, the guest masks common secret patterns
+  (AWS `AKIA…` access keys, `sk-`/`ghp_`/`xox` provider tokens, PEM blocks, `Bearer`
+  tokens) over the report markdown, `findings.full.json`, and `sources.json` artifacts.
+  This is defense-in-depth at the spill boundary; the controller-side redaction of the
+  inline result and status readback is unchanged.
+
+### 11.8 Background default + `meta.recommendBackground`
+
+- The workflow declares **`meta.recommendBackground: true`** (kernel enhancement below),
+  and deep-research runs now **default to background**. An explicit `background: false`
+  restores foreground execution (the deep-research command's E2E helper pins
+  `background: false` to keep its assertion path synchronous). This reflects the realistic
+  wall-clock of a thorough run (~97 lanes).
+
+### 11.9 `whenToUse` rescoping
+
+- `meta.whenToUse` is rescoped to **web topics**: it now describes when to reach for the
+  harness specifically for web research, clarifying the fit signal that `fitWarning`
+  complements. Still a single line ≤ 240 chars.
+
+### 11.10 Kernel enhancements (apply to every workflow, not just deep-research)
+
+These landed in `workflow-kernel/` and are documented in `docs/workflow-plugin.md`:
+
+- **`meta.recommendBackground`** (boolean) — a workflow may declare it to ask the kernel
+  to default its runs to background. Explicit `background: true` / `background: false`
+  on the `workflow_run` call still wins; `recommendBackground` only supplies the default
+  when `background` is omitted (and only when the wide/deep/long heuristic does not
+  already decide).
+- **Sticky cost-tracking warning.** When a lane reports token usage with `cost: 0`, the
+  run is flagged `costTrackingUnreliable: true` (sticky — it persists to durable state and
+  rehydrates on resume). It surfaces as **`costTrackingWarning`** (a human-readable string)
+  in `workflow_status` output in **both** the compact and full views, as a
+  **"Cost-ceiling caveat:"** line in the `workflow_run` approval preview (only when
+  `maxCost` is set), and as a terminal warning line. It is warning-only:
+  `checkBudgetBeforeLaunch` does **not** throw on it, so a cost-unreliable run still
+  launches; the caveat is the signal. The flag is advisory because a provider returning
+  zero-cost token accounting cannot be distinguished from a genuinely free tier by the
+  kernel alone.
+- **Important-lines-first `workflow_run` output.** Both the review-required and terminal
+  return paths now lift the human-readable lines (status, abortReason, summary, stats,
+  artifacts, "Result file:", the readback command, and trailers) **before** the raw
+  redacted JSON body, which is now last. A client that tail-truncates the message loses
+  only the JSON dump, not the result pointers. The lifted fields read only the redacted
+  projection (never the raw envelope).
+- **`workflow_status` compact/result meta is an allowlisted projection**
+  (`compactMetaProjection`: `name`, `description`, `whenToUse`, `category`, `profile`,
+  `phases`, `maxAgents`, `concurrency`, `argsSummary`). The full frontmatter/meta block
+  remains available on `detail: "full"`. Sensitive meta keys (`apiKey`, `prompt`,
+  `argsSchema`, `examples`, and nested keys) are **dropped** (set to `undefined`) from
+  compact/result — not redacted in place — so they do not appear at all in the compact or
+  result projection. External consumers that previously read those keys from compact must
+  switch to `detail: "full"`.
+- **`argsSummary`** (derived from `argsSchema`) now appears in the status meta projection,
+  giving compact/result readers a one-line view of the run's args shape without the full
+  schema.

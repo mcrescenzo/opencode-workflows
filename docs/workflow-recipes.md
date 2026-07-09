@@ -150,23 +150,28 @@ to cover every lane any nested workflow will launch. See `docs/workflow-plugin.m
 
 ### Read the result back
 
-After the run completes, read the final structured return value:
+A **foreground** `workflow_run` already returns the final structured value inline
+(here `groundedFindings`, `droppedUnsupportedClaims`, and the `note`) when it fits
+the inline cap, with credential-like keys redacted for display — **do not re-read
+it.** Reach for an explicit readback only when it is actually needed:
+
+- **Background runs** — the launch returns a `runId` immediately and no result; poll
+  `detail: "compact"` until terminal, then read the result once:
 
 ```jsonc
 workflow_status({ runId: "<runId>", detail: "result" })
 ```
 
-`detail: "result"` returns the workflow's `return` value — here `groundedFindings`,
-`droppedUnsupportedClaims`, and the `note` — with credential-like keys redacted for
-display. Foreground `workflow_run` includes the same redacted return value inline
-when it fits the inline cap; larger returns should be consumed through this
-status readback, which returns partial data plus `resultReadback.truncated` when
-the full readback is too large. `workflow_status` never mutates state. Treat
-`groundedFindings` as the
-answer and `droppedUnsupportedClaims` as an honesty ledger: if a slice landed
-there, the lane did not actually prove its claim, so the fix is another scoped
-lane (or stronger evidence), not a louder assertion. Use `detail: "compact"` to
-poll progress and `detail: "full"` only for diagnostics.
+- **Foreground runs whose response said the result was omitted for size** — when the
+  inline return exceeded the cap, the foreground response says so and points you at the
+  persisted result; only then call `detail: "result"`, which returns partial data plus
+  `resultReadback.truncated` when the full readback is itself too large.
+
+`workflow_status` never mutates state. Treat `groundedFindings` as the answer and
+`droppedUnsupportedClaims` as an honesty ledger: if a slice landed there, the lane did
+not actually prove its claim, so the fix is another scoped lane (or stronger evidence),
+not a louder assertion. Use `detail: "compact"` to poll progress and `detail: "full"`
+only for diagnostics.
 
 ### Failure handling
 
@@ -505,21 +510,25 @@ plugin configuration; primary-tree writes still stop at the independent
 
 ### Read the result back
 
-After the run completes, read the final structured output with
-`workflow_status`:
+A **foreground** `workflow_run` already returns the final structured output inline
+(here `groundedFindings`, `droppedUnsupportedClaims`, and the authority-tier note),
+with credential-like keys redacted for display — **do not re-read it.** Only call an
+explicit readback when it is actually needed:
 
 ```jsonc
 workflow_status({ runId: "<runId>", detail: "result" })
 ```
 
-`detail: "result"` returns the workflow's final return value (here:
-`groundedFindings`, `droppedUnsupportedClaims`, and the authority-tier note),
-with credential-like keys redacted for display. `workflow_status` never mutates
-state. Use `detail: "full"` only for diagnostics/apply internals. Treat
-`groundedFindings` as the answer and `droppedUnsupportedClaims` as an honesty
-ledger — if something important landed there, the lanes did not actually prove
-it, and the right move is another scoped lane (or a stronger tier), not a louder
-claim.
+- **Background runs** — the launch returns a `runId` and no result; poll
+  `detail: "compact"` until terminal, then read `detail: "result"` once.
+- **Foreground runs whose response said the result was omitted for size** — only then
+  fall back to `detail: "result"` for the persisted return.
+
+`workflow_status` never mutates state. Use `detail: "full"` only for
+diagnostics/apply internals. Treat `groundedFindings` as the answer and
+`droppedUnsupportedClaims` as an honesty ledger — if something important landed
+there, the lanes did not actually prove it, and the right move is another scoped
+lane (or a stronger tier), not a louder claim.
 
 ## The other starter templates
 

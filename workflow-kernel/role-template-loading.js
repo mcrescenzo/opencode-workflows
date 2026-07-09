@@ -8,7 +8,7 @@ import {
   ROLE_DIR,
   TEMPLATE_DIR,
 } from "./constants.js";
-import { extractTextFromError, hash, truncateText, redactValue } from "./text-json.js";
+import { extractTextFromError, hash, truncateText, redactValue, summarizeArgsSchema } from "./text-json.js";
 import { assertWriteWorkflowAllowed, resolveRunAuthority, authoritySummary, AD_HOC_AUTHORITY_PROFILE, VALID_TIERS } from "./authority-policy.js";
 import { normalizeLaneEffort } from "./lane-effort-policy.js";
 import { parseWorkflowSource, projectWorkflowDir, workflowFileName } from "./workflow-source.js";
@@ -454,27 +454,8 @@ function sanitizeArgsExamples(rawExamples) {
   return out;
 }
 
-// jbs3.10: render a one-line, human-readable summary of a workflow's declared meta.argsSchema so
-// `workflow_list` advertises the args contract (which keys are accepted, which are required) without
-// dumping the whole schema. Returns undefined when no usable object schema is declared.
-function summarizeArgsSchema(schema) {
-  if (!schema || typeof schema !== "object" || Array.isArray(schema)) return undefined;
-  const properties = schema.properties && typeof schema.properties === "object" && !Array.isArray(schema.properties)
-    ? schema.properties
-    : undefined;
-  const required = new Set(Array.isArray(schema.required) ? schema.required.filter((k) => typeof k === "string") : []);
-  if (!properties) {
-    // No property map (e.g. a bare type constraint); still surface the declared top-level type.
-    return typeof schema.type === "string" ? `type=${schema.type}` : "declared";
-  }
-  const fields = Object.keys(properties).slice(0, 16).map((key) => {
-    const propType = properties[key] && typeof properties[key].type === "string" ? properties[key].type : undefined;
-    const label = propType ? `${key}:${propType}` : key;
-    return required.has(key) ? `${label}*` : label;
-  });
-  if (fields.length === 0) return schema.additionalProperties === false ? "{} (no args)" : "declared";
-  return `{ ${fields.join(", ")} }${Object.keys(properties).length > fields.length ? " …" : ""} (*=required)`;
-}
+// jbs3.10: summarizeArgsSchema moved to text-json.js (leaf module) so run-store-status-format.js
+// can import it without introducing a role-template-loading → run-store-status re-export cycle.
 
 function renderRunExample(name, argsExample) {
   const parts = [`workflow_run name=${JSON.stringify(name)}`];

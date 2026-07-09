@@ -1174,6 +1174,8 @@ return true;`;
 
     assert.match(preview, /Max agents: 2/);
     assert.match(preview, /Budget ceilings: maxCost=1.5, maxTokens=12/);
+    // mnfx.2: the cost-ceiling caveat rides the preview whenever maxCost is set.
+    assert.match(preview, /Cost-ceiling caveat:/);
     assert.match(preview, /Authority profile: read-only-review/);
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
@@ -1422,6 +1424,8 @@ return await parallel(lanes);`;
     const preview = await tools.workflow_run.execute({ source }, context);
     assert.match(preview, /Concurrency: 4/);
     assert.match(preview, /Budget ceilings: maxCost=none, maxTokens=4/);
+    // mnfx.2: no cost-ceiling caveat when maxCost is not set.
+    assert.doesNotMatch(preview, /Cost-ceiling caveat:/);
 
     const match = preview.match(/approvalHash: ([a-f0-9]{64})/);
     assert.ok(match, `missing approvalHash in preview: ${preview}`);
@@ -3646,9 +3650,17 @@ return { marker: "large-inline-result", blob: "x".repeat(${__test.MAX_INLINE_RES
     const output = await runApproved(tools, context, source);
 
     assert.match(output, /Result omitted from workflow_run: redacted JSON is \d+ bytes, above inline cap \d+\./);
-    assert.match(output, /Read full\/partial result: workflow_status\(\{ runId: "[0-9a-f-]{36}", format: "json", detail: "result" \}\)/);
+    assert.match(output, /Read redacted result: workflow_status\(\{ runId: "[0-9a-f-]{36}", format: "json", detail: "result" \}\)/);
     assert.match(output, /Result file: /);
     assert.doesNotMatch(output, /x{1000}/);
+    // mnfx.3: truncation resilience — the omitted branch has no JSON body, so every load-bearing
+    // line trivially precedes it; still assert the readback line precedes the omission notice.
+    const omittedIdx = output.indexOf("Result omitted from workflow_run");
+    const fileIdx = output.indexOf("Result file:");
+    const readbackIdx = output.indexOf("Read redacted result:");
+    assert.ok(fileIdx !== -1 && readbackIdx !== -1 && omittedIdx !== -1);
+    assert.ok(fileIdx < omittedIdx, "Result file: must precede the omission notice");
+    assert.ok(readbackIdx < omittedIdx, "Read redacted result: must precede the omission notice");
 
     const status = JSON.parse(await tools.workflow_status.execute({ runId: runIdFrom(output), format: "json", detail: "result" }, context));
     assert.equal(status.result.output.marker, "large-inline-result");
@@ -3659,7 +3671,29 @@ return { marker: "large-inline-result", blob: "x".repeat(${__test.MAX_INLINE_RES
   }
 });
 
-test("ux.6: compact status redacts sensitive meta keys and bounds oversized meta/error strings", () => {
+// mnfx.3: the most load-bearing envelope fields (status/summary/stats/artifacts) are lifted into
+// short plain lines that PRECEDE the raw redacted-JSON body, so client-side display truncation
+// (which cuts the tail) can only ever cost the JSON dump — never the result pointer or readback.
+test("workflow_run lifts status/summary/stats/artifacts ahead of the redacted JSON body", async () => {
+  const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }));
+  try {
+    const source = `export const meta = { name: "important-lines-first" };
+return { status: "ok", summary: "hello", stats: { a: 1, b: 2 }, artifacts: { dir: "/tmp/x", files: ["r.md"] } };`;
+    const output = await runApproved(tools, context, source);
+
+    const jsonIdx = output.indexOf("Result (redacted JSON");
+    assert.ok(jsonIdx !== -1, "expected an inline JSON body for a small result");
+    for (const marker of ["Output status: ok", "Summary: hello", "Stats: a:1 b:2", "Artifacts: /tmp/x (r.md)", "Result file:", "Read redacted result:"]) {
+      const idx = output.indexOf(marker);
+      assert.ok(idx !== -1, `missing ${marker}`);
+      assert.ok(idx < jsonIdx, `${marker} must precede the JSON body`);
+    }
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("ux.6: compact status meta is an allowlisted projection; sensitive/free-form keys are dropped", () => {
   const oversized = "x".repeat(__test.MAX_STATUS_STRING_CHARS + 500);
   const entry = {
     id: "compact-redaction-run",
@@ -3671,32 +3705,34 @@ test("ux.6: compact status redacts sensitive meta keys and bounds oversized meta
       id: "compact-redaction-run",
       status: "completed",
       meta: {
-        name: "compact-redaction",
+        name: "sensitive-meta-workflow",
         apiKey: "COMPACT-SECRET-APIKEY-9000",
         authorization: "Bearer COMPACT-BEARER-9000",
         nested: { token: "COMPACT-SECRET-TOKEN-9000", password: "COMPACT-PW-9000", note: oversized },
         prompt: oversized,
+        argsSchema: { type: "object", properties: { question: { type: "string" }, depth: { type: "string" } }, required: ["question"] },
+        examples: [{ args: { question: "demo" } }],
       },
       error: oversized,
     },
   };
   const compact = __test.compactStatusForEntry(entry);
   const json = JSON.stringify(compact);
-  // Credential-like keys are redacted at top level and when nested.
-  assert.equal(compact.meta.apiKey, "[redacted]");
-  assert.equal(compact.meta.authorization, "[redacted]");
-  assert.equal(compact.meta.nested.token, "[redacted]");
-  assert.equal(compact.meta.nested.password, "[redacted]");
+  // Compact meta is an allowlisted projection: sensitive/free-form keys are DROPPED (not
+  // merely redacted); the full frontmatter remains on detail:"full" (see the 3741 test).
+  assert.equal(compact.meta.apiKey, undefined);
+  assert.equal(compact.meta.authorization, undefined);
+  assert.equal(compact.meta.nested, undefined);
+  assert.equal(compact.meta.prompt, undefined);
+  assert.equal(compact.meta.argsSchema, undefined);
+  assert.equal(compact.meta.examples, undefined);
+  assert.equal(compact.meta.name, "sensitive-meta-workflow"); // allowlisted key survives
+  assert.match(compact.meta.argsSummary ?? "", /\{ .*\*.*\}|declared|type=/); // one-line args summary when argsSchema declared
   // The raw secret values must never survive into the compact meta view.
   assert.ok(!json.includes("COMPACT-SECRET-APIKEY-9000"), "raw apiKey leaked into compact status");
   assert.ok(!json.includes("COMPACT-BEARER-9000"), "raw authorization leaked into compact status");
   assert.ok(!json.includes("COMPACT-SECRET-TOKEN-9000"), "raw nested token leaked into compact status");
   assert.ok(!json.includes("COMPACT-PW-9000"), "raw nested password leaked into compact status");
-  // Oversized non-sensitive strings are bounded by MAX_STATUS_STRING_CHARS.
-  assert.ok(compact.meta.nested.note.length <= __test.MAX_STATUS_STRING_CHARS, "oversized meta string not bounded");
-  assert.match(compact.meta.nested.note, /\[truncated \d+ chars\]/);
-  assert.ok(compact.meta.prompt.length <= __test.MAX_STATUS_STRING_CHARS, "oversized meta prompt not bounded");
-  assert.match(compact.meta.prompt, /\[truncated \d+ chars\]/);
   assert.ok(!json.includes(oversized), "unbounded oversized string leaked into compact status");
   // errorSummary is bounded too.
   assert.ok(compact.errorSummary.length <= __test.MAX_STATUS_STRING_CHARS, "oversized errorSummary not bounded");
@@ -3785,6 +3821,48 @@ test("ux.6: workflow_status detail=full redacts sensitive meta, bounds oversized
     for (const leak of ["FULL-RAW-TRANSCRIPT", "FULL-RAW-TOOL-OUTPUT", "FULL-RAW-LANE-RESULT"]) {
       assert.ok(!json.includes(leak), `raw evidence ${leak} leaked into full status`);
     }
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+// mnfx.2: a run with costTrackingUnreliable (sticky, set when a lane reports tokens with cost=0)
+// surfaces a costTrackingWarning in BOTH compact and full workflow_status views — but ONLY when a
+// maxCost ceiling is set (no ceiling → no false caveat). detail:"full" carries the caveat too,
+// since it surfaces cost/liveCost/totalCost most prominently.
+test("costTrackingWarning surfaces in compact and full status only when maxCost is set", async () => {
+  const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }));
+  try {
+    const runId = "cost-unreliable-run";
+    const root = __test.runRoot(context);
+    const dir = __test.runDirForRoot(root, runId);
+    await fs.mkdir(dir, { recursive: true });
+
+    async function statusFor(budgetCeilings) {
+      await __test.writeJsonAtomic(path.join(dir, "state.json"), {
+        id: runId,
+        status: "completed",
+        meta: { name: "cost-unreliable" },
+        budgetCeilings,
+        costTrackingUnreliable: true,
+        cost: 0,
+      });
+      const compact = JSON.parse(await tools.workflow_status.execute({ runId, format: "json", detail: "compact" }, context));
+      const full = JSON.parse(await tools.workflow_status.execute({ runId, format: "json", detail: "full" }, context));
+      return { compact, full };
+    }
+
+    // With a maxCost ceiling: both views carry the warning.
+    const withCeiling = await statusFor({ maxCost: 1 });
+    assert.equal(typeof withCeiling.compact.costTrackingWarning, "string");
+    assert.match(withCeiling.compact.costTrackingWarning, /cost=0/);
+    assert.equal(typeof withCeiling.full.costTrackingWarning, "string");
+    assert.match(withCeiling.full.costTrackingWarning, /cost=0/);
+
+    // Without a maxCost ceiling: no warning in either view (parity between compact and full).
+    const noCeiling = await statusFor({ maxTokens: 100 });
+    assert.equal(noCeiling.compact.costTrackingWarning, undefined);
+    assert.equal(noCeiling.full.costTrackingWarning, undefined);
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }
@@ -5135,6 +5213,36 @@ test("mfv9.6: wide/deep/long runs default to background while explicit and resum
     assert.doesNotMatch(resumePreview, /Background recommended/, "resumed runs cannot change background mode in-place");
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+// mfv9.7: meta.recommendBackground — an author-declared "this workflow runs wide/long" signal
+// defaults the run to background with a distinct workflow-declared reason line. Explicit
+// background:false (and resume-pinned background, already covered by mfv9.6) always wins.
+test("mfv9.7: meta.recommendBackground defaults the run to background; explicit background:false wins", async () => {
+  const source = `export const meta = { name: "bg-meta", description: "d", recommendBackground: true, maxAgents: 4, concurrency: 2 };
+return { ok: true };`;
+  // Preview with no background arg → defaulted on, workflow-declared reason line present.
+  {
+    const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }));
+    try {
+      const preview = await tools.workflow_run.execute({ source, format: "text" }, context);
+      assert.match(preview, /Background: true/);
+      assert.match(preview, /Background defaulted \(workflow-declared\)/);
+    } finally {
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+  }
+  // Explicit background:false overrides the meta recommendation.
+  {
+    const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }));
+    try {
+      const preview = await tools.workflow_run.execute({ source, background: false, format: "text" }, context);
+      assert.match(preview, /Background: false/);
+      assert.doesNotMatch(preview, /Background defaulted \(workflow-declared\)/);
+    } finally {
+      await fs.rm(directory, { recursive: true, force: true });
+    }
   }
 });
 

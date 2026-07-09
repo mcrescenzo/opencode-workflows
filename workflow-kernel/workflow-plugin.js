@@ -477,6 +477,13 @@ function workflowBackgroundDecision(meta = {}, sourcePath = "", args = {}, prior
       return { enabled: true, source: "drain-autonomous-local" };
     }
   }
+  // An author-declared "this workflow typically runs wide/long" signal. Distinct from
+  // meta.maxAgents (a ceiling, deliberately excluded from the sizing heuristic because bundled
+  // workflows over-provision it): recommendBackground is an intent, not a bound. Explicit
+  // args.background and resume pins above always win.
+  if (meta.recommendBackground === true) {
+    return { enabled: true, source: "meta-recommend" };
+  }
   const heuristic = backgroundHeuristic(sizing);
   if (heuristic.recommended) return { enabled: true, source: "heuristic", heuristic };
   return { enabled: false, source: "foreground-default", heuristic };
@@ -504,6 +511,12 @@ function backgroundRecommendation(approval) {
 }
 
 function backgroundDefaultLine(approval) {
+  if (approval?.backgroundDecision?.source === "meta-recommend") {
+    return [
+      "Background defaulted (workflow-declared): this workflow declares meta.recommendBackground — it is authored to fan out wide/long by design.",
+      "The run starts in background so the calling agent keeps a control channel for workflow_status, workflow_pause, and workflow_cancel.",
+    ].join(" ");
+  }
   if (approval?.backgroundDecision?.source !== "heuristic") return undefined;
   const heuristic = approval.backgroundDecision.heuristic ?? backgroundHeuristic(approval);
   return [
@@ -943,6 +956,9 @@ function approvalSummary(run) {
     `Lane timeout: ${preview.laneBudget.laneTimeoutMs}ms`,
     ...(preview.laneBudget.maxRuntimeMs !== null ? [`Run deadline (maxRuntimeMs, operability limit, not approval-bound): ${preview.laneBudget.maxRuntimeMs}ms`] : []),
     `Budget ceilings: maxCost=${preview.budgetCeilings.maxCost ?? "none"}, maxTokens=${preview.budgetCeilings.maxTokens ?? "none"}`,
+    ...(preview.budgetCeilings.maxCost !== null ? [
+      "Cost-ceiling caveat: maxCost enforcement depends on the provider reporting per-lane cost; an unpriced/custom/free provider may report cost=0 while tokens accrue, in which case maxCost will not stop the run — set maxTokens as a backstop.",
+    ] : []),
     `Debug capture: ${preview.debugCapture.enabled ? `enabled (${preview.debugCapture.source})` : "off"}`,
     `Background: ${preview.background.enabled}`,
     ...(preview.background.defaultReason ? [preview.background.defaultReason] : []),
@@ -1090,18 +1106,39 @@ function workflowResultReadbackLines(run) {
   ];
 }
 
+// Lift the most load-bearing envelope fields into short plain lines that survive client-side
+// display truncation (which cuts the tail). Duck-typed and fully defensive: workflow outputs
+// are author-defined (string/array/number are all legal), so absent fields are skipped.
+// Reads ONLY the redacted projection — lifting raw output would bypass secret redaction.
+function liftImportantResultLines(redacted) {
+  if (!redacted || typeof redacted !== "object" || Array.isArray(redacted)) return [];
+  const lines = [];
+  if (typeof redacted.status === "string") lines.push(`Output status: ${redacted.status}`);
+  if (redacted.abortReason != null) lines.push(`Abort reason: ${redacted.abortReason}`);
+  if (typeof redacted.summary === "string" && redacted.summary.trim()) {
+    lines.push(`Summary: ${truncateText(redacted.summary, MAX_STATUS_STRING_CHARS)}`);
+  }
+  if (redacted.stats && typeof redacted.stats === "object" && !Array.isArray(redacted.stats)) {
+    const statsLine = Object.entries(redacted.stats)
+      .filter(([, v]) => ["string", "number", "boolean"].includes(typeof v))
+      .slice(0, 24).map(([k, v]) => `${k}:${v}`).join(" ");
+    if (statsLine) lines.push(`Stats: ${statsLine}`);
+  }
+  const artifacts = redacted.artifacts;
+  if (artifacts && typeof artifacts === "object" && typeof artifacts.dir === "string") {
+    const files = Array.isArray(artifacts.files) ? artifacts.files.slice(0, 8).join(", ") : "";
+    lines.push(`Artifacts: ${artifacts.dir}${files ? ` (${files})` : ""}`);
+  }
+  return lines;
+}
+
 function workflowInlineResultLines(run, output) {
   const projection = inlineResultProjection(output);
-  if (projection.inline) {
-    return [
-      `Result (redacted JSON, ${projection.bytes} bytes):`,
-      projection.text,
-    ];
-  }
-  return [
-    `Result omitted from workflow_run: redacted JSON is ${projection.bytes} bytes, above inline cap ${projection.maxBytes}.`,
-    `Read full/partial result: ${workflowResultReadbackCommand(run.id)}`,
-  ];
+  const lifted = liftImportantResultLines(projection.result);
+  const body = projection.inline
+    ? [`Result (redacted JSON, ${projection.bytes} bytes):`, projection.text]
+    : [`Result omitted from workflow_run: redacted JSON is ${projection.bytes} bytes, above inline cap ${projection.maxBytes}.`];
+  return { lifted, body };
 }
 
 function workflowToastOptions(pluginContext) {
@@ -1410,13 +1447,15 @@ async function runWorkflowExecution(pluginContext, toolContext, run, body, args)
         await writeState(run);
         await maybeDeliverCompletionNotification(pluginContext, notification);
         await showWorkflowRunToast(pluginContext, run, "terminal");
+        const inline = workflowInlineResultLines(run, output);
         return [
           `Workflow ${run.id} review-required.`,
-          ...workflowInlineResultLines(run, output),
+          ...inline.lifted,
           `Result file: ${run.resultPath}`,
           ...workflowResultReadbackLines(run),
           result.reason ? `Reason: ${result.reason}` : undefined,
           result.culpritLane ? `Culprit lane: ${result.culpritLane}` : undefined,
+          ...inline.body,
         ].filter((line) => line !== undefined).join("\n");
       }
       if (result.patches?.length > 0) {
@@ -1473,13 +1512,18 @@ async function runWorkflowExecution(pluginContext, toolContext, run, body, args)
     await writeState(run);
     await maybeDeliverCompletionNotification(pluginContext, notification);
     await showWorkflowRunToast(pluginContext, run, "terminal");
+    const inline = workflowInlineResultLines(run, output);
     return [
       `Workflow ${run.id} ${run.status === "awaiting-diff-approval" ? "awaiting diff approval" : run.status === "failed-with-diff-plan" ? "failed with diff plan for review" : run.status === "apply-failed" ? "auto-apply failed" : run.status === "failed" ? "failed" : "completed"}.`,
-      ...workflowInlineResultLines(run, output),
+      ...inline.lifted,
       `Result file: ${run.resultPath}`,
       ...workflowResultReadbackLines(run),
       run.editPlan?.diffPlanHash ? `Diff plan hash: ${run.editPlan.diffPlanHash}` : undefined,
+      run.costTrackingUnreliable === true && Number.isFinite(run.budgetCeilings?.maxCost)
+        ? "Cost tracking warning: at least one lane reported tokens with cost=0 — maxCost may not have reliably bounded this run."
+        : undefined,
       drainFailed && typeof output === "object" && output ? `Drain status: ${output.status}` : undefined,
+      ...inline.body,
     ].filter((line) => line !== undefined).join("\n");
   } catch (error) {
     rejectWaitingAgents(run, error);

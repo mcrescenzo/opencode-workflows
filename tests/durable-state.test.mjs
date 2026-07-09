@@ -463,6 +463,7 @@ test("resume rehydrates worktree, integration, lane, and budget state", async ()
     editPlan: { sourceHash: "source-hash", patches: [{ path: "a.txt", content: "a" }] },
     integrationPlan: { sourceHash: "source-hash", lanes: [{ callId: "lane:1" }] },
     laneRecords: [{ callId: "lane:1", status: "completed" }],
+    costTrackingUnreliable: true,
   });
 
   assert.equal(run.startedAt, "2026-06-14T23:00:00.000Z");
@@ -488,6 +489,11 @@ test("resume rehydrates worktree, integration, lane, and budget state", async ()
   assert.equal(run.integrationWorktrees.length, 1);
   assert.equal(run.integrationPlan.lanes.length, 1);
   assert.equal(run.laneRecords.get("lane:1").status, "completed");
+  // mnfx.2: costTrackingUnreliable is sticky durable state — survives rehydrate so a resumed run
+  // keeps the dead-maxCost honesty caveat. And it is warning-only: checkBudgetBeforeLaunch must
+  // not throw merely because the flag is set (free/local providers legitimately report cost 0).
+  assert.equal(run.costTrackingUnreliable, true);
+  assert.doesNotThrow(() => __test.checkBudgetBeforeLaunch(run));
 });
 
 test("R9: resume does not double-count prior spend; ceiling reflects real spend", async () => {

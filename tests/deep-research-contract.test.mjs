@@ -18,6 +18,7 @@ test("bundled deep-research.js exists, parses, and declares the expected meta co
   assert.deepEqual(meta.phases, ["Scope", "Search", "Fetch", "Verify", "Synthesize"]);
   assert.equal(meta.maxAgents, 160);
   assert.equal(meta.concurrency, 8);
+  assert.equal(meta.recommendBackground, true);
   assert.equal(typeof meta.whenToUse, "string");
   assert.equal(meta.category, "research");
   assert.ok(Array.isArray(meta.examples) && meta.examples.length >= 2);

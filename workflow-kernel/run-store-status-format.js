@@ -23,7 +23,7 @@ import {
   MAX_RESULT_READ_FILE_BYTES,
   MAX_STATUS_STRING_CHARS,
 } from "./constants.js";
-import { extractTextFromError, redactValue, truncateText } from "./text-json.js";
+import { extractTextFromError, redactValue, summarizeArgsSchema, truncateText } from "./text-json.js";
 import { redactFreeTextSecrets } from "./free-text-redactor.js";
 import { resultReadbackProjection } from "./result-readback.js";
 import { encodeApplyBundle } from "./approval-hashing.js";
@@ -548,6 +548,23 @@ function operatorMetricsForState(state = {}) {
   };
 }
 
+// Compact/result status views carry an allowlisted meta projection. Status readbacks are
+// polled repeatedly; the wholesale frontmatter dump (argsSchema, examples, notes) dominated
+// their size. detail:"full" keeps the complete redacted meta for diagnostics.
+function compactMetaProjection(meta) {
+  const m = meta && typeof meta === "object" && !Array.isArray(meta) ? meta : {};
+  const projected = {};
+  for (const key of ["name", "description", "whenToUse", "category", "profile"]) {
+    if (typeof m[key] === "string") projected[key] = truncateText(redactFreeTextSecrets(m[key]), MAX_STATUS_STRING_CHARS);
+  }
+  if (Array.isArray(m.phases)) projected.phases = redactValue(m.phases);
+  if (Number.isInteger(m.maxAgents)) projected.maxAgents = m.maxAgents;
+  if (Number.isInteger(m.concurrency)) projected.concurrency = m.concurrency;
+  const argsSummary = summarizeArgsSchema(m.argsSchema);
+  if (argsSummary) projected.argsSummary = argsSummary;
+  return projected;
+}
+
 function compactStatusForEntry(entry) {
   if (entry.kind !== "valid") {
     return {
@@ -562,7 +579,7 @@ function compactStatusForEntry(entry) {
   const compact = {
     id: state.id,
     status: state.status,
-    meta: redactValue(state.meta ?? {}),
+    meta: compactMetaProjection(state.meta),
     declaredProfile: declaredProfileForState(state),
     effectiveAuthorityProfile,
     startedAt: state.startedAt ?? null,
@@ -612,6 +629,10 @@ function compactStatusForEntry(entry) {
     compact.salvageCandidates = entry.salvageCandidates;
   }
   if (state.status === "timed-out") compact.timeoutRecovery = timeoutResumeEligibilityForState(state);
+  if (state.costTrackingUnreliable === true && Number.isFinite(state.budgetCeilings?.maxCost)) {
+    compact.costTrackingWarning =
+      "At least one lane reported tokens with cost=0 (provider did not report per-lane cost); the maxCost ceiling may not reliably bound this run — use maxTokens as a backstop.";
+  }
   return compact;
 }
 
@@ -848,6 +869,9 @@ async function fullStatusForEntry(entry) {
     resultPath: state.resultPath,
     errorSummary: state.error ? truncateText(redactFreeTextSecrets(state.error), MAX_STATUS_STRING_CHARS) : undefined,
     timeoutRecovery: state.status === "timed-out" ? timeoutResumeEligibilityForState(state) : undefined,
+    costTrackingWarning: state.costTrackingUnreliable === true && Number.isFinite(state.budgetCeilings?.maxCost)
+      ? "At least one lane reported tokens with cost=0 (provider did not report per-lane cost); the maxCost ceiling may not reliably bound this run — use maxTokens as a backstop."
+      : undefined,
     nextActions: nextActionsForEntry(entry),
     root: entry.root,
     dir: entry.dir,
