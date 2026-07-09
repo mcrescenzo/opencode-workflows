@@ -67,7 +67,7 @@ and offer a retry — do NOT present unverified claims as findings.
 
 Write the report to `.deep-research/runs/<run-id>-report.md` in the project root,
 prefixed with a header: date, question, depth, model tiers, and the
-confirmed/refuted/unverified counts from `stats`. Create the directory if needed. When in
+confirmed/killed/unverified counts from `stats` (the envelope's top-level `refuted` array holds the refuted claims' details). Create the directory if needed. When in
 a git repository, ensure `.deep-research/` is listed in `.gitignore` (append it if
 missing). Write no other files.
 
