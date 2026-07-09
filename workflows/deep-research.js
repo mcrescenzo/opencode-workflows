@@ -39,6 +39,7 @@ const SCHEMA_VERSION = 1;
 let RT = args;
 if (typeof RT === "string") {
   const trimmed = RT.trim();
+  // Defense-in-depth: the kernel normally rejects malformed JSON-looking string args at plan time (workflow_run passthrough only forwards non-JSON-looking strings), so the catch branch is unreachable via workflow_run — kept for direct/nested invocation safety.
   if (trimmed.startsWith("{")) {
     try { RT = JSON.parse(trimmed); } catch { RT = { question: trimmed }; }
   } else {

@@ -43,6 +43,7 @@ and uses semantic versioning for published package releases.
 - Normalized JSON-string `args` now propagate to the guest and drain-mode resolution too
   (previously only the approval hash saw the normalized object, so the guest could see a raw
   string while the hash was computed over the parsed form).
+- Known one-time effect: runs persisted before this fix with JSON-string args will take a spurious "runtime args changed" cache miss on their first post-upgrade resume (cost-only; lanes re-run, correctness unaffected).
 
 ## [0.2.0] - 2026-07-08
 

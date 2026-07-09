@@ -2,9 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
-import WorkflowPlugin from "../workflow-kernel/workflow-plugin.js";
 import { parseWorkflowSource, resolveWorkflowSource } from "../workflow-kernel/workflow-source.js";
 import { BUNDLED_WORKFLOW_DIR } from "../workflow-kernel/constants.js";
 import { ajv } from "../workflow-kernel/structured-output.js";

@@ -53,7 +53,7 @@ search is unavailable). `args` may also be a plain question string.
 ### 4. Read back
 
 Poll `workflow_status({ runId, detail: "compact" })` while the run progresses. On
-completion, read `workflow_status({ runId, detail: "result" })`. The envelope's
+completion, read `workflow_status({ runId, detail: "result" })`. The workflow's envelope lives under the result's `output` field (e.g. `result.output.reportMarkdown`), not flat on the result. The envelope's
 `reportMarkdown` holds the rendered report; if it was dropped for size
 (`reportMarkdown: null` with `artifacts.ok: true`), read the full `report.md` from the
 run's artifacts directory (`artifacts.dir`).
