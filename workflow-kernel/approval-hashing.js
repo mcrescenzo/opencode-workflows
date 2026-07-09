@@ -64,3 +64,31 @@ export function approvalEnvelopeDiff(previous, fresh) {
   }
   return changed;
 }
+
+// tfil.4: applyBundle token. A single opaque string computed from the four review-binding hashes
+// (approvedSourceHash, baseCommit, diffPlanHash, domainMutationHash) so workflow_apply can be
+// invoked with one field instead of four error-prone copies. Pure presentation/transport: the
+// four hashes still transit (encoded) and are still compared server-side unchanged, so the
+// review-binding security property is fully preserved. The four explicit fields remain accepted
+// for backward compatibility.
+const APPLY_BUNDLE_PREFIX = "wfapply1.";
+
+export function encodeApplyBundle({ approvedSourceHash, baseCommit, diffPlanHash, domainMutationHash }) {
+  const json = JSON.stringify({ approvedSourceHash, baseCommit, diffPlanHash, domainMutationHash });
+  return APPLY_BUNDLE_PREFIX + Buffer.from(json, "utf8").toString("base64url");
+}
+
+export function decodeApplyBundle(bundle) {
+  if (typeof bundle !== "string" || !bundle.startsWith(APPLY_BUNDLE_PREFIX)) {
+    throw new Error('applyBundle must be a wfapply1.-prefixed opaque token from workflow_status detail:"full"');
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(Buffer.from(bundle.slice(APPLY_BUNDLE_PREFIX.length), "base64url").toString("utf8"));
+  } catch (error) {
+    throw new Error(`applyBundle could not be decoded: ${error.message}`);
+  }
+  if (!parsed || typeof parsed !== "object") throw new Error("applyBundle decoded to a non-object");
+  const { approvedSourceHash, baseCommit, diffPlanHash, domainMutationHash } = parsed;
+  return { approvedSourceHash, baseCommit, diffPlanHash, domainMutationHash };
+}

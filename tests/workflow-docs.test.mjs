@@ -52,7 +52,7 @@ test("workflow tool reference lists every registered workflow tool and approval 
   const source = await read("workflow-kernel/workflow-plugin.js");
   const doc = await read("docs/workflow-plugin.md");
   const tools = [...source.matchAll(/^\s+(workflow_\w+): tool\(/gm)].map((match) => match[1]).sort();
-  assert.equal(tools.length, 16, "expected the current workflow tool registry size");
+  assert.equal(tools.length, 17, "expected the current workflow tool registry size");
   assert.match(doc, /## Workflow Tool Reference/);
   for (const tool of tools) assert.ok(doc.includes(`\`${tool}\``), `tool reference missing ${tool}`);
   // Design C deleted the live-gate probe subsystem and its `approvalIntent: "probe"` vocabulary

@@ -26,6 +26,87 @@ export function literalValue(node) {
   throw new Error("Workflow meta may only contain JSON-compatible literals");
 }
 
+// tfil.1: minimal, permissive meta field validator. Validates TYPES/SHAPES of recognized
+// fields the kernel actually consumes WHEN they are present. It does NOT require any optional
+// field (name/description may be omitted), does NOT reject unknown keys (display/documentation
+// metadata passes through), and does NOT validate argsSchema internals (already AJV-compiled at
+// preview). meta.lanes ownership lives in tfil.8; this base validator only checks lanes is an
+// array when present so a non-array lanes fails here instead of confusing the tfil.8 renderer.
+//
+// metaDiagnostics() returns a non-throwing array (reused by the workflow_lint collector in
+// tfil.6); validateMeta() throws on the first diagnostic for the existing throw-based preview/
+// save path. The two stay in lockstep so a workflow that previews also lints identically.
+// maxAgents and concurrency allow 0: many read-only/review workflows declare maxAgents: 0 for
+// synchronous single-lane execution, and a meta.concurrency of 0 is falsy (falls back to the
+// default) so it is harmless. The runtime clamps concurrency to >= 1 regardless.
+const META_NON_NEGATIVE_INT_FIELDS = ["maxAgents", "concurrency", "maxTokens", "maxRuntimeMs", "guestDeadlineMs"];
+const META_STRING_FIELDS = [
+  "name", "description", "harness", "profile", "authorityProfile",
+  "childModel", "defaultChildModel", "category", "whenToUse", "notes",
+];
+const META_OBJECT_FIELDS = ["authority", "modelTiers", "argsSchema"];
+
+export function metaDiagnostics(meta) {
+  const diagnostics = [];
+  if (meta === null || meta === undefined) return diagnostics;
+  if (typeof meta !== "object" || Array.isArray(meta)) {
+    diagnostics.push({ field: "meta", message: "must be an object literal" });
+    return diagnostics;
+  }
+  const checkString = (field) => {
+    if (field in meta && typeof meta[field] !== "string") {
+      diagnostics.push({ field, message: `must be a string when present (got ${Array.isArray(meta[field]) ? "array" : typeof meta[field]})` });
+    }
+  };
+  for (const field of META_STRING_FIELDS) checkString(field);
+  for (const field of META_OBJECT_FIELDS) {
+    if (field in meta && (typeof meta[field] !== "object" || meta[field] === null || Array.isArray(meta[field]))) {
+      diagnostics.push({ field, message: `must be an object when present (got ${Array.isArray(meta[field]) ? "array" : meta[field] === null ? "null" : typeof meta[field]})` });
+    }
+  }
+  if ("phases" in meta) {
+    if (!Array.isArray(meta.phases) || meta.phases.some((item) => typeof item !== "string")) {
+      diagnostics.push({ field: "phases", message: "must be an array of strings when present" });
+    }
+  }
+  if ("examples" in meta) {
+    if (!Array.isArray(meta.examples)) {
+      diagnostics.push({ field: "examples", message: "must be an array when present" });
+    }
+  }
+  if ("lanes" in meta) {
+    if (!Array.isArray(meta.lanes)) {
+      diagnostics.push({ field: "lanes", message: "must be an array when present" });
+    }
+  }
+  for (const field of META_NON_NEGATIVE_INT_FIELDS) {
+    if (field in meta && (!Number.isInteger(meta[field]) || meta[field] < 0)) {
+      diagnostics.push({ field, message: `must be a non-negative integer when present (got ${meta[field]})` });
+    }
+  }
+  if ("maxCost" in meta && (typeof meta.maxCost !== "number" || !Number.isFinite(meta.maxCost) || meta.maxCost < 0)) {
+    diagnostics.push({ field: "maxCost", message: `must be a finite non-negative number when present (got ${meta.maxCost})` });
+  }
+  if ("recommendBackground" in meta && typeof meta.recommendBackground !== "boolean") {
+    diagnostics.push({ field: "recommendBackground", message: `must be a boolean when present (got ${typeof meta.recommendBackground})` });
+  }
+  if ("modelTiers" in meta && typeof meta.modelTiers === "object" && meta.modelTiers !== null && !Array.isArray(meta.modelTiers)) {
+    for (const tier of ["fast", "deep"]) {
+      if (tier in meta.modelTiers && typeof meta.modelTiers[tier] !== "string") {
+        diagnostics.push({ field: `modelTiers.${tier}`, message: `must be a string when present (got ${typeof meta.modelTiers[tier]})` });
+      }
+    }
+  }
+  return diagnostics;
+}
+
+export function validateMeta(meta) {
+  const diagnostics = metaDiagnostics(meta);
+  if (diagnostics.length > 0) {
+    throw new Error(`Invalid workflow meta: ${diagnostics.map((entry) => `${entry.field} ${entry.message}`).join("; ")}`);
+  }
+}
+
 function sourceLocationSuffix(nodeOrError) {
   const loc = nodeOrError?.loc?.start ?? nodeOrError?.loc;
   if (!loc || !Number.isInteger(loc.line) || !Number.isInteger(loc.column)) return "";
@@ -160,6 +241,168 @@ function splitPipelineStages(args) {
   return { stages: args, options: null };
 }
 
+// tfil.2: static lane-shape introspection. A read-only AST visitor (sibling to lintFanoutCallbacks)
+// that enumerates agent()/parallel()/pipeline() call sites and extracts per-call-site role/tier/
+// authority/schema presence from literal or const-bound opts. It produces a lane BLUEPRINT (shape),
+// never a roster or exact total: fan-out call sites (parallel/pipeline, or dynamic agent arrays)
+// are marked runtime-determined and their staticCount is advisory only. Dynamic/spread/conditional
+// option shapes render uncertain rather than asserting completeness — production workflows derive
+// lane counts from earlier agent outputs at runtime, so a static total would mislead.
+//
+// Each blueprint lane site carries a `shapes` array (one resolved agent-callback shape per
+// statically-enumerable callback; advisory, NOT a count guarantee) consumed by the tfil.7 renderer
+// and validated by tfil.8's meta.lanes subset check.
+
+function agentCalleeName(callee) {
+  if (callee?.type === "Identifier" && callee.name === "agent") return "agent";
+  if (callee?.type === "MemberExpression" && !callee.computed && callee.property?.name === "agent") return "agent";
+  return null;
+}
+
+function isAgentCall(node) {
+  return node?.type === "CallExpression" && agentCalleeName(node.callee) !== null;
+}
+
+function stringPropertyValue(optsNode, name) {
+  if (optsNode?.type !== "ObjectExpression") return null;
+  for (const prop of optsNode.properties ?? []) {
+    const key = propertyKeyName(prop);
+    if (key !== name) continue;
+    if (prop.value?.type === "Literal" && typeof prop.value.value === "string") return prop.value.value;
+    return null; // present but non-literal/dynamic
+  }
+  return null;
+}
+
+function booleanPropertyValue(optsNode, name) {
+  if (optsNode?.type !== "ObjectExpression") return null;
+  for (const prop of optsNode.properties ?? []) {
+    const key = propertyKeyName(prop);
+    if (key !== name) continue;
+    if (prop.value?.type === "Literal" && typeof prop.value.value === "boolean") return prop.value.value;
+    return null; // present but non-literal-boolean -> unknown
+  }
+  return null;
+}
+
+function hasOptsKey(optsNode, name) {
+  if (optsNode?.type !== "ObjectExpression") return false;
+  return (optsNode.properties ?? []).some((prop) => propertyKeyName(prop) === name);
+}
+
+// Resolve the agent() call's opts to a literal ObjectExpression when possible; returns null for
+// agent() with no args (defaults), a dynamic opts object, or a non-object arg.
+function agentOptsNode(agentCall, bindings) {
+  const arg = resolveExpression(agentCall.arguments?.[0], bindings);
+  if (arg && arg.type === "ObjectExpression") return arg;
+  return null;
+}
+
+function agentShapeFromOpts(optsNode) {
+  return {
+    role: stringPropertyValue(optsNode, "role"),
+    tier: stringPropertyValue(optsNode, "tier"),
+    readOnly: booleanPropertyValue(optsNode, "readOnly"),
+    edit: booleanPropertyValue(optsNode, "edit"),
+    worktreeEdit: booleanPropertyValue(optsNode, "worktreeEdit"),
+    integration: booleanPropertyValue(optsNode, "integration"),
+    schema: hasOptsKey(optsNode, "schema"),
+    optsResolved: true,
+  };
+}
+
+function emptyAgentShape() {
+  return { role: null, tier: null, readOnly: null, edit: null, worktreeEdit: null, integration: null, schema: false, optsResolved: false };
+}
+
+// Find agent() calls directly within a callback function body (does not descend into nested
+// parallel/pipeline, which would conflate fan-out levels).
+function agentCallsInScope(scopeNode) {
+  const calls = [];
+  if (!scopeNode) return calls;
+  visitAst(scopeNode, (node) => {
+    if (isAgentCall(node)) calls.push(node);
+  });
+  return calls;
+}
+
+function parallelCallbackSources(node, bindings) {
+  const { stages, options } = splitPipelineStages((node.arguments ?? []).slice(1));
+  return {
+    options,
+    sources: node.callee?.type === "Identifier" && node.callee.name === "parallel"
+      ? [node.arguments?.[0]]
+      : stages,
+    literalArray: node.callee?.type === "Identifier" && node.callee.name === "parallel"
+      ? node.arguments?.[0]?.type === "ArrayExpression"
+      : stages.some((stage) => stage?.type === "ArrowFunctionExpression" || stage?.type === "FunctionExpression"),
+  };
+}
+
+export function laneBlueprint(source) {
+  const ast = typeof source === "string" ? parseWorkflowAst(source, "blueprint") : source;
+  const bindings = collectSimpleBindings(ast);
+  const sites = [];
+  const consumedAgentNodes = new Set();
+
+  // Pass 1: parallel()/pipeline() fan-out sites. Resolve their callbacks' agent() calls into
+  // advisory per-callback shapes and record the consumed agent nodes so pass 2 does not re-count
+  // them as direct lanes.
+  visitAst(ast, (node) => {
+    if (node.type !== "CallExpression") return;
+    const helper = fanoutCalleeName(node.callee);
+    if (!helper) return;
+    const { sources, literalArray } = parallelCallbackSources(node, bindings);
+    const callbacks = (sources ?? []).flatMap((src) => fanoutCallbacksFromExpression(src, bindings));
+    const shapes = [];
+    let certain = true;
+    for (const entry of callbacks) {
+      const agentCalls = agentCallsInScope(entry.node);
+      if (agentCalls.length === 0) { certain = false; continue; }
+      for (const ac of agentCalls) {
+        consumedAgentNodes.add(ac);
+        const optsNode = agentOptsNode(ac, bindings);
+        shapes.push(optsNode ? agentShapeFromOpts(optsNode) : emptyAgentShape());
+      }
+    }
+    if (callbacks.length === 0) certain = false;
+    // Consume EVERY agent() call within this fan-out subtree so pass 2 does not re-emit them as
+    // direct lanes — even when the callbacks could not be statically resolved into shapes (e.g.
+    // a items.map(...) fan-out), the nested agent calls belong to this site, not the top level.
+    for (const ac of agentCallsInScope(node)) consumedAgentNodes.add(ac);
+    sites.push({
+      _start: node.start ?? 0,
+      kind: helper,
+      fanOut: true,
+      staticCount: callbacks.length > 0 && literalArray ? callbacks.length : null,
+      certain,
+      shapes,
+    });
+  });
+
+  // Pass 2: direct agent() calls not already attributed to a fan-out site.
+  visitAst(ast, (node) => {
+    if (!isAgentCall(node)) return;
+    if (consumedAgentNodes.has(node)) return;
+    const optsNode = agentOptsNode(node, bindings);
+    sites.push({
+      _start: node.start ?? 0,
+      kind: "agent",
+      fanOut: false,
+      staticCount: null,
+      certain: true,
+      shapes: [optsNode ? agentShapeFromOpts(optsNode) : emptyAgentShape()],
+    });
+  });
+
+  sites.sort((a, b) => a._start - b._start);
+  const lanes = sites.map((site, index) => {
+    const { _start, ...rest } = site;
+    return { label: `lane-${index + 1}`, ...rest };
+  });
+  return { lanes };
+}
+
 function lintFanoutCallbacks(ast) {
   const bindings = collectSimpleBindings(ast);
   visitAst(ast, (node) => {
@@ -248,7 +491,229 @@ export function parseWorkflowSource(source) {
   }
 
   const body = removeStart >= 0 ? source.slice(0, removeStart) + source.slice(removeEnd) : source;
+  // tfil.1: permissive meta field validation runs at every parse (preview and save) so a
+  // wrong-typed recognized field fails closed before approval, but unknown keys and omitted
+  // optional fields continue to parse (preserving existing workflows).
+  validateMeta(meta);
   return { meta, body };
+}
+
+// tfil.6: non-throwing multi-diagnostic collector. Mirrors the throw-based parseWorkflowSource
+// checks but returns ALL diagnostics at once instead of failing on the first, and adds NEW static
+// checks not present in the throw path: top-level `return` presence and agent() call-site arity.
+// It also surfaces the tfil.1 meta-schema diagnostics. It does NOT execute the workflow; a clean
+// lint does NOT prove the workflow runs (QuickJS runtime success cannot be shown statically).
+function locLine(node) {
+  const loc = node?.loc?.start;
+  if (!loc || !Number.isInteger(loc.line)) return undefined;
+  return loc.line;
+}
+
+function collectFanoutArityDiagnostics(ast, diagnostics) {
+  const bindings = collectSimpleBindings(ast);
+  visitAst(ast, (node) => {
+    if (node.type !== "CallExpression") return;
+    const helper = fanoutCalleeName(node.callee);
+    if (!helper) return;
+    if (helper === "parallel") {
+      const [thunks, options] = node.arguments ?? [];
+      if (fanoutOptionsOptOut(options)) return;
+      const bad = fanoutCallbacksFromExpression(thunks, bindings).filter((entry) => functionRuntimeArity(entry.node) === 0);
+      for (const entry of bad) {
+        diagnostics.push({
+          rule: "fanout-callback-arity",
+          severity: "error",
+          line: locLine(entry.node),
+          message: `parallel() callback at index ${entry.index} declares 0 parameters. Declare a scope parameter, e.g. (api) => api.agent(...), or pass { sequential: true }.`,
+        });
+      }
+      return;
+    }
+    const { stages, options } = splitPipelineStages((node.arguments ?? []).slice(1));
+    if (fanoutOptionsOptOut(options)) return;
+    for (let index = 0; index < stages.length; index += 1) {
+      for (const entry of fanoutCallbacksFromExpression(stages[index], bindings)) {
+        if (functionRuntimeArity(entry.node) === 0) {
+          diagnostics.push({
+            rule: "fanout-callback-arity",
+            severity: "error",
+            line: locLine(entry.node),
+            message: `pipeline() callback at stage ${index} declares 0 parameters. Declare a scope/context parameter, e.g. (item, context) => context.agent(...), or pass { sequential: true }.`,
+          });
+        }
+      }
+    }
+  });
+}
+
+// agent(prompt, opts = {}): valid call-site arity is 1 or 2. agent() with no prompt, or with too
+// many positional args, is a structural mistake the runtime would surface cryptically.
+function collectAgentArityDiagnostics(ast, diagnostics) {
+  visitAst(ast, (node) => {
+    if (!isAgentCall(node)) return;
+    const argCount = (node.arguments ?? []).length;
+    if (argCount === 0) {
+      diagnostics.push({ rule: "agent-arity", severity: "error", line: locLine(node), message: "agent() called with no arguments; it requires a prompt/role (and optional opts). Use agent(\"role\", { ... }) or agent({ role: \"...\" })." });
+    } else if (argCount > 2) {
+      diagnostics.push({ rule: "agent-arity", severity: "error", line: locLine(node), message: `agent() called with ${argCount} arguments; it accepts at most (prompt, opts).` });
+    }
+  });
+}
+
+export function collectDiagnostics(source) {
+  const diagnostics = [];
+  let ast;
+  try {
+    ast = parseWorkflowAst(source, "lint");
+  } catch (error) {
+    diagnostics.push({ rule: "parse", severity: "error", message: error.message });
+    return { diagnostics, ok: false, meta: null };
+  }
+  let meta = {};
+  for (const node of ast.body) {
+    if (node.type === "ImportDeclaration") {
+      diagnostics.push({ rule: "no-imports", severity: "error", line: locLine(node), message: "Workflow scripts may not import modules." });
+    } else if (node.type === "ExportDefaultDeclaration" || node.type === "ExportAllDeclaration") {
+      diagnostics.push({ rule: "exports", severity: "error", line: locLine(node), message: "Workflow scripts may only `export const meta = {...}`; do not use `export default` or `export *`." });
+    } else if (node.type === "ExportNamedDeclaration") {
+      const declarations = node.declaration?.declarations ?? [];
+      const metaDecl = declarations.find((decl) => decl.id?.name === "meta");
+      if (!metaDecl) {
+        diagnostics.push({ rule: "exports", severity: "error", line: locLine(node), message: "Only `export const meta = {...}` is allowed." });
+      } else {
+        const stray = declarations.filter((decl) => decl !== metaDecl);
+        if (stray.length > 0) {
+          diagnostics.push({ rule: "exports", severity: "error", line: locLine(node), message: `Workflow scripts may only export meta; rejecting additional exports: ${stray.map((d) => d.id?.name ?? "(complex)").join(", ")}.` });
+        }
+        try {
+          meta = literalValue(metaDecl.init);
+        } catch (error) {
+          diagnostics.push({ rule: "meta-literal", severity: "error", line: locLine(metaDecl.init ?? metaDecl), message: `Workflow meta must be a static JSON-compatible object literal: ${error.message}` });
+        }
+      }
+    }
+  }
+  // tfil.1 meta-schema diagnostics (non-throwing).
+  for (const d of metaDiagnostics(meta)) {
+    diagnostics.push({ rule: "meta-schema", severity: "error", field: d.field, message: `meta.${d.field} ${d.message}.` });
+  }
+  // NEW: top-level return presence.
+  const hasTopLevelReturn = ast.body.some((node) => node.type === "ReturnStatement");
+  if (!hasTopLevelReturn) {
+    diagnostics.push({ rule: "top-level-return", severity: "error", message: "Workflow body must end in a top-level `return` statement (the workflow result). A body without return yields undefined." });
+  }
+  // Fanout callback arity (non-throwing mirror of lintFanoutCallbacks).
+  collectFanoutArityDiagnostics(ast, diagnostics);
+  // NEW: agent() call-site arity.
+  collectAgentArityDiagnostics(ast, diagnostics);
+  return { diagnostics, ok: diagnostics.length === 0, meta };
+}
+
+// tfil.8: optional meta.lanes declaration validation + merge. Authors may declare human-curated
+// lane descriptions that OVERRIDE the preview rendering when present. Safety decisions always use
+// resolved runtime authority / introspected blueprint facts, never author prose. Structural
+// validation rejects: missing roles, exact fan-out counts, and authority/tier/schema escalation
+// beyond the introspected call-site facts. Absent or partial meta.lanes remains valid. Display-only.
+
+function matchDeclarationToLane(decl, index, lanes) {
+  if (!decl || typeof decl !== "object") return null;
+  if (typeof decl.id === "string") return lanes.find((lane) => lane.label === decl.id) ?? null;
+  if (typeof decl.label === "string") {
+    const byLabel = lanes.find((lane) => lane.label === decl.label);
+    if (byLabel) return byLabel;
+  }
+  return lanes[index] ?? null;
+}
+
+function laneAuthorityBounds(lane) {
+  const shapes = lane.shapes ?? [];
+  const resolved = shapes.filter((s) => s.optsResolved);
+  const hasUnresolved = shapes.some((s) => !s.optsResolved);
+  // For authority flags: among resolved shapes, a flag is "true" if any call site explicitly sets
+  // it true. If none do but an unresolved shape exists, the bound is unknown (null); otherwise the
+  // call sites definitively do NOT grant that authority (false) — an absent edit flag means no edit.
+  const flag = (key) => {
+    if (resolved.length === 0) return hasUnresolved ? null : false;
+    if (resolved.some((s) => s[key] === true)) return true;
+    return hasUnresolved ? null : false;
+  };
+  const knownTiers = [...new Set(resolved.map((s) => s.tier).filter(Boolean))];
+  const tierUnknown = hasUnresolved || resolved.some((s) => s.tier === null);
+  const schemaTrue = resolved.some((s) => s.schema);
+  return {
+    edit: flag("edit"),
+    worktreeEdit: flag("worktreeEdit"),
+    integration: flag("integration"),
+    schema: schemaTrue ? true : (hasUnresolved ? null : (resolved.length === 0 ? null : false)),
+    knownTiers,
+    tierUnknown,
+  };
+}
+
+export function validateMetaLanes(declarations, blueprint, knownRoles = null) {
+  const diagnostics = [];
+  if (!Array.isArray(declarations)) return diagnostics;
+  const lanes = (blueprint ?? { lanes: [] }).lanes ?? [];
+  declarations.forEach((decl, index) => {
+    if (!decl || typeof decl !== "object") {
+      diagnostics.push({ declaration: index, message: "lane declaration must be an object" });
+      return;
+    }
+    const lane = matchDeclarationToLane(decl, index, lanes);
+    if (!lane) {
+      diagnostics.push({ declaration: index, message: "no matching blueprint lane (more declarations than detected lanes)" });
+      return;
+    }
+    if (decl.role != null) {
+      if (typeof decl.role !== "string") {
+        diagnostics.push({ declaration: index, message: "role must be a string" });
+      } else if (knownRoles && !knownRoles.has(decl.role)) {
+        diagnostics.push({ declaration: index, message: `references missing role "${decl.role}"` });
+      }
+    }
+    if ("count" in decl) {
+      diagnostics.push({ declaration: index, message: "lane declarations must not claim exact fan-out counts (remove `count`); describe the call-site shape, not a runtime total" });
+    }
+    if (decl.tier != null && !["fast", "deep"].includes(decl.tier)) {
+      diagnostics.push({ declaration: index, message: `tier must be "fast" or "deep" (got ${decl.tier})` });
+    }
+    const bounds = laneAuthorityBounds(lane);
+    const overclaim = (declVal, bound, name) => {
+      if (declVal === true && bound === false) {
+        diagnostics.push({ declaration: index, message: `escalates beyond introspected call-site authority: ${name}:true but no detected lane declares ${name}` });
+      }
+    };
+    overclaim(decl.edit, bounds.edit, "edit");
+    overclaim(decl.worktreeEdit, bounds.worktreeEdit, "worktreeEdit");
+    overclaim(decl.integration, bounds.integration, "integration");
+    overclaim(decl.schema, bounds.schema, "schema");
+    if (decl.tier && bounds.knownTiers.length > 0 && !bounds.tierUnknown && !bounds.knownTiers.includes(decl.tier)) {
+      diagnostics.push({ declaration: index, message: `tier "${decl.tier}" does not match detected lane tier(s): ${bounds.knownTiers.join(", ")}` });
+    }
+  });
+  return diagnostics;
+}
+
+// Merge human-curated lane declarations into the blueprint for richer preview rendering. Each
+// matched lane gains a `declaration` field with its display fields. Unmatched/partial declarations
+// are ignored for rendering (the introspected shape still renders). Display-only.
+export function mergeLaneDeclarations(blueprint, declarations) {
+  const lanes = (blueprint ?? { lanes: [] }).lanes ?? [];
+  if (!Array.isArray(declarations) || declarations.length === 0) return blueprint;
+  return {
+    ...blueprint,
+    lanes: lanes.map((lane, index) => {
+      const decl = matchDeclarationToLane(declarations[index] ?? {}, index, lanes) === lane
+        ? declarations[index]
+        : declarations.find((d) => matchDeclarationToLane(d, index, lanes) === lane);
+      if (!decl) return lane;
+      const declaration = {};
+      for (const key of ["label", "title", "description", "role", "tier"]) {
+        if (typeof decl[key] === "string") declaration[key] = decl[key];
+      }
+      return Object.keys(declaration).length > 0 ? { ...lane, declaration } : lane;
+    }),
+  };
 }
 
 function propertyKeyName(prop) {

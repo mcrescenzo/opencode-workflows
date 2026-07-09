@@ -73,6 +73,8 @@ import {
   approvalSnapshotList,
   approvalHash,
   computeDiffPlanHash,
+  decodeApplyBundle,
+  encodeApplyBundle,
 } from "./approval-hashing.js";
 import {
   clearPendingApprovals,
@@ -155,7 +157,12 @@ import {
   hasExplicitWorkflowSource,
   isTrustedWorkflowPath,
   parseWorkflowSource,
+  resolveWorkflowSource,
   resolveWorkflowSourceForStart,
+  laneBlueprint,
+  validateMetaLanes,
+  mergeLaneDeclarations,
+  collectDiagnostics,
 } from "./workflow-source.js";
 import {
   listRoles,
@@ -163,6 +170,7 @@ import {
   listWorkflows,
   saveTemplate,
   saveWorkflow,
+  knownRoleNames,
 } from "./role-template-loading.js";
 import { readJsonFile } from "./run-store-status.js";
 import { ajv, compileSchemaWithIdentity, validateStructuredResult } from "./structured-output.js";
@@ -533,6 +541,64 @@ function mutationDomainSummary(run) {
   return "none declared";
 }
 
+// tfil.3: consequence translation. A pure function translating ALREADY-RESOLVED envelope fields
+// into consequence statements, scoped STRICTLY to facts the envelope actually bounds (cost/token
+// ceilings, agent-count ceiling, authority class, isolation, mutation-domain, apply-gate presence).
+// It makes NO per-file / per-target / runtime-cost / lane-execution-count claims — those are not
+// knowable at preview. Consumed by the tfil.7 preview renderer; display-only.
+function applyGateClass(run) {
+  if (run.meta?.harness === "drain" && run.authority?.profile === "drain-autonomous-local") return "in-run-apply";
+  if (run.authority?.edit || run.authority?.worktreeEdit || run.authority?.integration) return "apply-gated";
+  return "read-only";
+}
+
+function authorityClassText(run) {
+  const a = run.authority ?? {};
+  if (run.meta?.harness === "drain" && a.profile === "drain-autonomous-local") return "autonomous-local drain (full host-owned lane authority)";
+  if (a.integration) return "integration (worktree-isolated commits, integration-tested)";
+  if (a.worktreeEdit) return "edit (worktree-isolated writes)";
+  if (a.edit) return "edit (primary-tree writes)";
+  if (a.shell || a.network || (a.mcp && Object.keys(a.mcp ?? {}).length > 0)) return "inspect (shell/network/mcp read access)";
+  return "read-only (no side effects requested)";
+}
+
+function applyGateText(applyGate) {
+  if (applyGate === "in-run-apply") {
+    return "Apply gate: a successful run applies its verified diff plan in-run, so accepted changes land automatically (no separate workflow_apply step). Failed drains keep a diff plan for review.";
+  }
+  if (applyGate === "apply-gated") {
+    return "Apply gate: this workflow may stage changes, but they require explicit workflow_apply approval before landing in the primary tree.";
+  }
+  return "Apply gate: read-only — it will not write to the primary tree and there is no apply step.";
+}
+
+function consequenceStatements(run) {
+  const budgets = run.budgetCeilings ?? {};
+  const maxAgents = Number.isInteger(run.maxAgents) ? run.maxAgents : null;
+  const applyGate = applyGateClass(run);
+  const statements = [];
+  statements.push(
+    Number.isFinite(budgets.maxCost)
+      ? `Cost ceiling: up to $${budgets.maxCost} (live spend may be lower; tracking is best-effort).`
+      : "Cost ceiling: none declared.",
+  );
+  statements.push(
+    Number.isInteger(budgets.maxTokens)
+      ? `Token ceiling: up to ${budgets.maxTokens} tokens.`
+      : "Token ceiling: none declared.",
+  );
+  statements.push(
+    maxAgents !== null
+      ? `Concurrency ceiling: up to ${maxAgents} agent lane${maxAgents === 1 ? "" : "s"} may run.`
+      : "Concurrency ceiling: unknown.",
+  );
+  statements.push(`Authority: ${authorityClassText(run)}.`);
+  statements.push(`Isolation: ${authorityIsolationSummary(run.authority ?? {})}.`);
+  statements.push(`Mutation domain: ${mutationDomainSummary(run)}.`);
+  statements.push(applyGateText(applyGate));
+  return { statements, applyGate };
+}
+
 function isRunAborted(run, toolContext) {
   return run.abortController.signal.aborted || (!run.ignoreToolAbort && toolContext.abort?.aborted);
 }
@@ -656,6 +722,79 @@ function sourcePreviewMetadata(source, sourcePath, args = {}) {
   return metadata;
 }
 
+// tfil.7: human-first plan rendering generated from the lane blueprint (tfil.2) + consequence
+// translation (tfil.3). Pure functions; display-only. The summary MUST stay out of
+// approvalEnvelope() (approval-hashing.js) so it cannot re-key approvalHash — it is computed only
+// for the preview envelope and the approvalSummary text, never for the hash.
+
+function describeShape(shape) {
+  const parts = [shape.role || "agent"];
+  if (shape.tier) parts.push(shape.tier);
+  const auth = [];
+  if (shape.readOnly) auth.push("read-only");
+  if (shape.edit) auth.push("edit");
+  if (shape.worktreeEdit) auth.push("worktree-edit");
+  if (shape.integration) auth.push("integration");
+  if (shape.schema) auth.push("schema");
+  if (auth.length) parts.push(auth.join("/"));
+  if (!shape.optsResolved) parts.push("opts unknown");
+  return parts.join(", ");
+}
+
+function describeLaneSite(lane) {
+  const shapes = lane.shapes ?? [];
+  const decl = lane.declaration;
+  // tfil.8: prefer the human-curated declaration's display fields when present (override-when-present).
+  const shapesText = shapes.length ? shapes.map(describeShape).join("; ") : "shape unknown (dynamic)";
+  if (lane.fanOut) {
+    const count = lane.staticCount !== null ? `~${lane.staticCount} (runtime-determined)` : "runtime-determined count";
+    const certainty = lane.certain ? "" : " — exact lanes uncertain";
+    const base = `fan-out (${lane.kind}): ${count} lanes — ${shapesText}${certainty}`;
+    if (decl?.description) return `${base}\n      ${decl.description}`;
+    return base;
+  }
+  const shapeLine = shapes.length === 1 ? describeShape(shapes[0]) : "agent (no static opts)";
+  if (decl?.title || decl?.description) {
+    return `${shapeLine}${decl?.title ? ` — ${decl.title}` : ""}${decl?.description ? `\n      ${decl.description}` : ""}`;
+  }
+  return shapeLine;
+}
+
+function lanePlanLines(blueprint) {
+  const lanes = (blueprint ?? { lanes: [] }).lanes ?? [];
+  if (lanes.length === 0) return ["No agent() lanes detected statically (the body may be pure computation or build lanes dynamically)."];
+  return lanes.map((lane) => `  - ${lane.label}: ${describeLaneSite(lane)}`);
+}
+
+function plainEnglishSummaryText(run) {
+  const lanes = (run.laneBlueprint ?? { lanes: [] }).lanes ?? [];
+  const cons = consequenceStatements(run);
+  const name = run.meta?.name || "this workflow";
+  const authorityClass = authorityClassText(run);
+  const fixedCount = lanes.filter((l) => !l.fanOut).length;
+  const fanOutCount = lanes.filter((l) => l.fanOut).length;
+  const laneParts = [];
+  if (fixedCount > 0) laneParts.push(`${fixedCount} fixed lane${fixedCount === 1 ? "" : "s"}`);
+  if (fanOutCount > 0) laneParts.push(`${fanOutCount} fan-out site${fanOutCount === 1 ? "" : "s"} (runtime-determined counts)`);
+  const laneText = laneParts.length > 0 ? laneParts.join(" and ") : "no statically-detected agent lanes";
+  const roleText = lanes.flatMap((l) => (l.shapes ?? []).map((s) => s.role).filter(Boolean));
+  const uniqueRoles = [...new Set(roleText)];
+  const maxAgents = Number.isInteger(run.maxAgents) ? run.maxAgents : null;
+  const budget = run.budgetCeilings ?? {};
+  const budgetParts = [];
+  if (Number.isFinite(budget.maxCost)) budgetParts.push(`a $${budget.maxCost} cost ceiling`);
+  if (Number.isInteger(budget.maxTokens)) budgetParts.push(`a ${budget.maxTokens}-token ceiling`);
+  const budgetText = budgetParts.length ? `, bounded by ${budgetParts.join(" and ")}` : "";
+  const agentText = maxAgents !== null ? ` up to ${maxAgents} concurrent agent${maxAgents === 1 ? "" : "s"}` : "";
+  const roleClause = uniqueRoles.length > 0 && uniqueRoles.length <= 6 ? ` (${uniqueRoles.join(", ")})` : "";
+  const applyClause = cons.applyGate === "read-only"
+    ? " It does not write to the primary tree (read-only; no apply step)."
+    : cons.applyGate === "in-run-apply"
+      ? " A successful run applies its diff plan automatically (in-run apply)."
+      : " Staged changes require explicit workflow_apply approval before landing.";
+  return `${name} will run ${laneText}${roleClause}.${agentText ? ` It may use${agentText}.` : ""}${budgetText}.${applyClause}`;
+}
+
 function approvalPreviewEnvelope(run) {
   const phases = Array.isArray(run.meta.phases) ? run.meta.phases.join(", ") : "not declared";
   const phaseList = Array.isArray(run.meta.phases) ? [...run.meta.phases] : [];
@@ -675,6 +814,9 @@ function approvalPreviewEnvelope(run) {
       phases: phaseList,
       phasesText: phases,
     },
+    // tfil.7: narrative summary generated from blueprint + consequences. Display-only; NOT in
+    // approvalEnvelope() so it cannot re-key approvalHash.
+    plainEnglishSummary: plainEnglishSummaryText(run),
     source: {
       path: run.sourcePath,
       sourceHash: run.sourceHash,
@@ -737,6 +879,13 @@ function approvalPreviewEnvelope(run) {
     nestedSnapshots,
     nestedSnapshotText: nested,
     nestedBudgetNotes: nestedBudgetNotes(run),
+    // tfil.2: per-lane blueprint (shape only). fan-out sites carry runtime-determined markers and
+    // never claim an exact total; dynamic/unresolvable opts render uncertain. Display-only.
+    laneBlueprint: run.laneBlueprint ?? { lanes: [] },
+    // tfil.3: consequence statements derived from resolved envelope-bounded facts only (cost/token
+    // ceilings, agent-count ceiling, authority class, isolation, mutation domain, apply gate).
+    // Display-only; NOT part of approvalEnvelope() so it cannot re-key approvalHash.
+    consequences: consequenceStatements(run),
     capabilities: {
       childSession: run.capabilities.childSession,
       worktree: run.capabilities.worktree,
@@ -778,6 +927,12 @@ function approvalSummary(run) {
   // label is preserved verbatim so order-independent regex assertions over the preview still match.
   return [
     `Workflow approval required for ${preview.workflow.name}.`,
+    // tfil.7: the "What this workflow will do" block leads, generated from the lane blueprint and
+    // consequence translation so a weak model can narrate the plan without re-reading raw source.
+    "What this workflow will do:",
+    ...lanePlanLines(preview.laneBlueprint),
+    ...preview.consequences.statements,
+    `Summary: ${preview.plainEnglishSummary}`,
     `Description: ${preview.workflow.description}`,
     `Phases: ${preview.workflow.phasesText}`,
     `Runtime args preview: ${preview.runtimeArgsPreview}`,
@@ -881,7 +1036,7 @@ function workflowAutoApproval(pluginContext, args, approval) {
   return { tier: autoApprove.tier, ceiling: autoApprove.effectiveCeiling };
 }
 
-function applyApprovalMismatchError({ runId, reason, field, supplied, expected, state, plan, actualPlanHash, currentDomainHash }) {
+function applyApprovalMismatchError({ runId, reason, field, supplied, expected, state, plan, actualPlanHash, currentDomainHash, allMismatches }) {
   const mismatchSummary = reason === "staged_domain_mutations_changed"
     ? "staged domain mutations changed after diff approval"
     : `${field} mismatch`;
@@ -892,6 +1047,14 @@ function applyApprovalMismatchError({ runId, reason, field, supplied, expected, 
     baseCommit: plan?.baseCommit ?? null,
     diffPlanHash: actualPlanHash ?? plan?.diffPlanHash ?? null,
     domainMutationHash: currentDomainHash ?? plan?.domainMutationHash ?? null,
+    ...(freshApplyBundleForApply(state, plan, actualPlanHash, currentDomainHash)
+      ? { applyBundle: encodeApplyBundle({
+          approvedSourceHash: state?.sourceHash ?? "",
+          baseCommit: plan?.baseCommit ?? "",
+          diffPlanHash: actualPlanHash ?? plan?.diffPlanHash ?? "",
+          domainMutationHash: currentDomainHash ?? plan?.domainMutationHash ?? "",
+        }) }
+      : {}),
   };
   return new Error(JSON.stringify({
     type: "workflow_apply_approval_mismatch",
@@ -899,12 +1062,21 @@ function applyApprovalMismatchError({ runId, reason, field, supplied, expected, 
     executed: false,
     reason,
     field,
-    message: `${mismatchSummary}. Re-read workflow_status with detail:"full" for the run and retry with the fresh hash fields if the diff plan is still acceptable.`,
+    message: `${mismatchSummary}. Re-read workflow_status with detail:"full" for the run and retry with the fresh hash fields (or applyBundle) if the diff plan is still acceptable.`,
     supplied,
     expected,
+    // tfil.5: every drifted apply-approval dimension is reported at once (not just the first), so a
+    // caller can retry in one round-trip. The primary `reason`/`field`/`supplied`/`expected` above
+    // retain the first/worst dimension for ordering signal.
+    allMismatches: allMismatches ?? [{ field, reason, supplied, expected }],
     freshStatusCommand: `workflow_status({ runId: "${runId}", format: "json", detail: "full" })`,
     freshApplyApproval,
   }, null, 2));
+}
+
+// tfil.4 helper: a fresh applyBundle is only useful when all four constituent hashes are known.
+function freshApplyBundleForApply(state, plan, actualPlanHash, currentDomainHash) {
+  return Boolean(state?.sourceHash && plan?.baseCommit && (actualPlanHash ?? plan?.diffPlanHash) && (currentDomainHash ?? plan?.domainMutationHash));
 }
 
 function workflowResultReadbackCommand(runId) {
@@ -1675,7 +1847,26 @@ function assertWorkflowArgsMatchSchema(meta, runtimeArgs) {
   if (validate(runtimeArgs ?? null)) return;
   throw new Error(
     `Workflow args do not match meta.argsSchema:\n${ajv.errorsText(validate.errors, { separator: "\n", dataVar: "args" })}`,
-  );
+   );
+}
+
+// tfil.8: compute the lane blueprint, then if meta.lanes is declared, validate it against the
+// blueprint (rejecting missing roles, exact fan-out counts, and authority/tier/schema escalation)
+// and merge the human-curated declarations in for richer preview rendering. The declaration is
+// display-only; safety decisions always use resolved runtime authority / blueprint facts.
+async function resolveLaneBlueprintWithDeclarations(pluginContext, source, meta) {
+  const blueprint = laneBlueprint(source);
+  const declarations = Array.isArray(meta?.lanes) ? meta.lanes : null;
+  if (!declarations) return blueprint;
+  let knownRoles = null;
+  try {
+    knownRoles = await knownRoleNames(pluginContext?.__workflowRoleDir);
+  } catch { /* best-effort: skip role-existence checks */ }
+  const laneDiagnostics = validateMetaLanes(declarations, blueprint, knownRoles);
+  if (laneDiagnostics.length > 0) {
+    throw new Error(`Invalid meta.lanes: ${laneDiagnostics.map((d) => `[declaration ${d.declaration}] ${d.message}`).join("; ")}`);
+  }
+  return mergeLaneDeclarations(blueprint, declarations);
 }
 
 async function planWorkflowEnvelope(pluginContext, toolContext, args) {
@@ -1881,6 +2072,10 @@ async function planWorkflowEnvelope(pluginContext, toolContext, args) {
       capabilities: adapter.capabilities,
       nestedSnapshots,
       autoApprove,
+      // tfil.2/tfil.8: static lane blueprint (shape only, never a runtime count), enriched with the
+      // optional human-curated meta.lanes declaration when present. Display-only: it is NOT part of
+      // approvalEnvelope() (which uses an explicit field list), so it cannot re-key approvalHash.
+      laneBlueprint: await resolveLaneBlueprintWithDeclarations(pluginContext, source, meta),
     },
   };
 }
@@ -2526,9 +2721,51 @@ async function salvageRun(pluginContext, context, args) {
   return JSON.stringify({ mode: "approve", runId, approvalHash: computedHash, salvaged, skipped }, null, 2);
 }
 
+// tfil.6: workflow_lint handler. Read-only structural lint that resolves a workflow source (inline
+// source/name/scriptPath) and runs collectDiagnostics without executing anything. A clean lint does
+// not prove the workflow runs at runtime (QuickJS success cannot be shown statically).
+async function lintWorkflow(pluginContext, context, args) {
+  if (!hasExplicitWorkflowSource(args)) {
+    throw new Error('workflow_lint requires source, name, or scriptPath.');
+  }
+  const extWfDirs = pluginContext?.workflowExtensionRegistry?.assetDirs()?.workflows ?? [];
+  const { source, sourcePath } = await resolveWorkflowSource(context, args, extWfDirs);
+  const result = collectDiagnostics(source);
+  if (args.format === "json") {
+    return JSON.stringify({ sourcePath, ok: result.ok, diagnostics: result.diagnostics }, null, 2);
+  }
+  const lines = [
+    result.ok ? `Workflow lint: clean (${sourcePath}).` : `Workflow lint: ${result.diagnostics.length} issue(s) (${sourcePath}).`,
+    ...result.diagnostics.map((d) => `  [${d.severity}] ${d.rule}${d.line ? ` (line ${d.line})` : ""}: ${d.message}`),
+    "",
+    "Note: a clean lint does NOT prove this workflow runs — QuickJS runtime success cannot be shown statically.",
+  ];
+  return lines.join("\n");
+}
+
 async function applyWorkflow(pluginContext, context, args) {
   assertWriteWorkflowAllowed(context, "workflow_apply");
   if (args.approvalIntent !== "apply") throw new Error('workflow_apply requires approvalIntent: "apply"');
+  // tfil.4: a single opaque applyBundle (from workflow_status detail:"full") expands server-side
+  // into the four review-binding hashes. The four explicit fields remain accepted and override
+  // individual bundle dimensions when both are supplied, preserving full backward compatibility.
+  // The security property is unchanged: the four hashes still transit and are still compared below.
+  if (typeof args.applyBundle === "string" && args.applyBundle.length > 0) {
+    const decoded = decodeApplyBundle(args.applyBundle);
+    args = {
+      ...args,
+      approvedSourceHash: args.approvedSourceHash ?? decoded.approvedSourceHash,
+      baseCommit: args.baseCommit ?? decoded.baseCommit,
+      diffPlanHash: args.diffPlanHash ?? decoded.diffPlanHash,
+      domainMutationHash: args.domainMutationHash ?? decoded.domainMutationHash,
+    };
+  }
+  if (typeof args.approvedSourceHash !== "string" || typeof args.baseCommit !== "string"
+    || typeof args.diffPlanHash !== "string" || typeof args.domainMutationHash !== "string") {
+    throw new Error(
+      'workflow_apply requires either applyBundle or all four of approvedSourceHash/baseCommit/diffPlanHash/domainMutationHash (copy them from workflow_status detail:"full").',
+    );
+  }
   const entry = await readRunById(context, args.runId);
   if (entry.kind !== "valid") throw new Error(`Cannot apply invalid run ${args.runId}: ${entry.status}`);
   const releaseApplyLock = await acquireWorkflowLock(lockPathForRun(entry.dir, "apply"), { operation: "apply", runId: args.runId });
@@ -2558,67 +2795,42 @@ async function applyWorkflow(pluginContext, context, args) {
   if (state.status !== "applied" && state.status !== "awaiting-diff-approval" && state.status !== "apply-failed" && state.status !== "failed-with-diff-plan" && !isInterruptedRecovery) {
     throw new Error(`Workflow ${args.runId} is not awaiting diff approval; status=${state.status}`);
   }
-  if (state.sourceHash !== args.approvedSourceHash) {
-    throw applyApprovalMismatchError({
-      runId: args.runId,
-      reason: "approved_source_hash_mismatch",
-      field: "approvedSourceHash",
-      supplied: args.approvedSourceHash,
-      expected: state.sourceHash ?? null,
-      state,
-    });
-  }
+  // tfil.5: collect ALL drifted apply-approval dimensions before throwing so the caller can retry in
+  // one round-trip. The primary (first/worst) dimension drives `reason`/`field`; allMismatches names
+  // every drifted caller-supplied hash plus the server-derived staged-domain mutation drift.
   const plan = JSON.parse(await fs.readFile(path.join(entry.dir, "diff-plan.json"), "utf8"));
   const actualPlanHash = computeDiffPlanHash(plan);
+  const currentDomainManifest = await domainMutationApprovalManifestForRun(entry.dir);
+  const currentDomainHash = computeDomainMutationHash(currentDomainManifest);
+  const mismatches = [];
+  if (state.sourceHash !== args.approvedSourceHash) {
+    mismatches.push({ field: "approvedSourceHash", reason: "approved_source_hash_mismatch", supplied: args.approvedSourceHash, expected: state.sourceHash ?? null });
+  }
   if (actualPlanHash !== args.diffPlanHash) {
-    throw applyApprovalMismatchError({
-      runId: args.runId,
-      reason: "diff_plan_hash_mismatch",
-      field: "diffPlanHash",
-      supplied: args.diffPlanHash,
-      expected: actualPlanHash,
-      state,
-      plan,
-      actualPlanHash,
-    });
+    mismatches.push({ field: "diffPlanHash", reason: "diff_plan_hash_mismatch", supplied: args.diffPlanHash, expected: actualPlanHash });
   }
   if (plan.baseCommit !== args.baseCommit) {
-    throw applyApprovalMismatchError({
-      runId: args.runId,
-      reason: "base_commit_mismatch",
-      field: "baseCommit",
-      supplied: args.baseCommit,
-      expected: plan.baseCommit ?? null,
-      state,
-      plan,
-      actualPlanHash,
-    });
+    mismatches.push({ field: "baseCommit", reason: "base_commit_mismatch", supplied: args.baseCommit, expected: plan.baseCommit ?? null });
   }
   if (plan.domainMutationHash !== args.domainMutationHash) {
-    throw applyApprovalMismatchError({
-      runId: args.runId,
-      reason: "domain_mutation_hash_mismatch",
-      field: "domainMutationHash",
-      supplied: args.domainMutationHash,
-      expected: plan.domainMutationHash ?? null,
-      state,
-      plan,
-      actualPlanHash,
-    });
+    mismatches.push({ field: "domainMutationHash", reason: "domain_mutation_hash_mismatch", supplied: args.domainMutationHash, expected: plan.domainMutationHash ?? null });
   }
-   const currentDomainManifest = await domainMutationApprovalManifestForRun(entry.dir);
-  const currentDomainHash = computeDomainMutationHash(currentDomainManifest);
   if (currentDomainHash !== plan.domainMutationHash) {
+    mismatches.push({ field: "domainMutationHash", reason: "staged_domain_mutations_changed", supplied: args.domainMutationHash, expected: currentDomainHash });
+  }
+  if (mismatches.length > 0) {
+    const primary = mismatches[0];
     throw applyApprovalMismatchError({
       runId: args.runId,
-      reason: "staged_domain_mutations_changed",
-      field: "domainMutationHash",
-      supplied: args.domainMutationHash,
-      expected: currentDomainHash,
+      reason: primary.reason,
+      field: primary.field,
+      supplied: primary.supplied,
+      expected: primary.expected,
       state,
       plan,
       actualPlanHash,
       currentDomainHash,
+      allMismatches: mismatches,
     });
   }
   // Primary-tree cleanliness is enforced by assertGitCleanAtBase(root, plan.baseCommit) on the
@@ -2940,13 +3152,14 @@ async function WorkflowPlugin(pluginContext, options) {
       },
     }),
     workflow_apply: tool({
-      description: "Apply an awaiting workflow diff plan to the primary tree after explicit hash-gated approval. Use hash fields copied from a prior workflow_status({detail:\"full\"}) for the same run — workflow_run's own terminal message surfaces only the diff plan hash, not the full apply hash set; stale or missing hashes fail closed with a structured workflow_apply_approval_mismatch payload.",
+      description: "Apply an awaiting workflow diff plan to the primary tree after explicit hash-gated approval. Provide a single applyBundle (copied from workflow_status detail:\"full\" editPlan.applyBundle) OR the four individual hash fields. workflow_run's own terminal message surfaces only the diff plan hash, not the full apply hash set; stale or missing hashes fail closed with a structured workflow_apply_approval_mismatch payload.",
       args: {
         runId: tool.schema.string().describe("Run id currently in awaiting-diff-approval, apply-failed, failed-with-diff-plan, applied, or an interrupted recovery state."),
-        approvedSourceHash: tool.schema.string().describe("Exact sourceHash copied from workflow_status detail:\"full\" for this run; proves the workflow source that produced the diff plan."),
-        baseCommit: tool.schema.string().describe("Exact editPlan.baseCommit from workflow_status detail:\"full\"; primary HEAD must still match before patch writes."),
-        diffPlanHash: tool.schema.string().describe("Exact editPlan.diffPlanHash from workflow_status detail:\"full\"; covers the normalized patch plan and staged domain manifest."),
-        domainMutationHash: tool.schema.string().describe("Exact editPlan.domainMutationHash from workflow_status detail:\"full\"; fails if staged domain mutations changed after diff approval."),
+        applyBundle: tool.schema.string().optional().describe("Single opaque token from workflow_status detail:\"full\" editPlan.applyBundle; expands server-side into the four review-binding hashes. Alternative to copying the four fields individually."),
+        approvedSourceHash: tool.schema.string().optional().describe("Exact sourceHash copied from workflow_status detail:\"full\" for this run; proves the workflow source that produced the diff plan. Overrides the applyBundle dimension when both are supplied."),
+        baseCommit: tool.schema.string().optional().describe("Exact editPlan.baseCommit from workflow_status detail:\"full\"; primary HEAD must still match before patch writes. Overrides the applyBundle dimension when both are supplied."),
+        diffPlanHash: tool.schema.string().optional().describe("Exact editPlan.diffPlanHash from workflow_status detail:\"full\"; covers the normalized patch plan and staged domain manifest. Overrides the applyBundle dimension when both are supplied."),
+        domainMutationHash: tool.schema.string().optional().describe("Exact editPlan.domainMutationHash from workflow_status detail:\"full\"; fails if staged domain mutations changed after diff approval. Overrides the applyBundle dimension when both are supplied."),
         approvalIntent: tool.schema.literal("apply").describe("Must be the literal string \"apply\" to show this call is an explicit apply approval."),
       },
       async execute(args, context) {
@@ -3002,6 +3215,18 @@ async function WorkflowPlugin(pluginContext, options) {
         return await listTemplates(args);
       },
     }),
+    workflow_lint: tool({
+      description: "Read-only structural lint of a workflow source (NO execution). Returns ALL diagnostics at once: parse errors, imports, exports, meta schema, top-level return presence, fanout-callback arity, and agent() call-site arity. A clean lint does NOT prove the workflow runs — QuickJS runtime success cannot be shown statically. Iterate against this before paying for a real workflow_run preview.",
+      args: {
+        source: tool.schema.string().optional().describe("Inline workflow source to lint."),
+        name: tool.schema.string().optional().describe("Saved workflow name to lint (resolved project > global > extension > bundled)."),
+        scriptPath: tool.schema.string().optional().describe("Path to a workflow file to lint."),
+        format: tool.schema.enum(["summary", "json"]).optional().describe("summary (default) for human-readable diagnostics; json for a structured result."),
+      },
+      async execute(args, context) {
+        return await lintWorkflow(pluginContext, context, args);
+      },
+    }),
     workflow_template_save: tool({
       description: "Save a shipped starter workflow template to project or global workflows.",
       args: {
@@ -3055,6 +3280,8 @@ WorkflowPlugin.__test = {
   isLaneIntegrable,
   backgroundRecommendation,
   assertResumableState,
+  consequenceStatements,
+  applyGateClass,
 };
 
 export {

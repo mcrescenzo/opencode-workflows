@@ -13,6 +13,7 @@ import path from "node:path";
 import { setTimeout as setTimeoutP } from "node:timers/promises";
 import { promisify } from "node:util";
 import workflowPlugin from "../workflow-kernel/index.js";
+import { encodeApplyBundle, decodeApplyBundle } from "../workflow-kernel/approval-hashing.js";
 import { makeHarness } from "./helpers/harness.mjs";
 const execFileAsync = promisify(execFile);
 const { __test } = workflowPlugin;
@@ -956,6 +957,208 @@ return await agent("edit", { edit: true, schema: { type: "object", properties: {
     assert.equal(await fs.readFile(path.join(directory, "stale-run-lock.txt"), "utf8"), "applied\n");
     const finalStatus = JSON.parse(await tools.workflow_status.execute({ runId, format: "json", detail: "full" }, context));
     assert.equal(finalStatus.status, "applied");
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+// --- tfil.4: single opaque applyBundle token ---
+
+test("tfil.4 applyBundle encode/decode round-trips the four review-binding hashes", () => {
+  const hashes = {
+    approvedSourceHash: "a".repeat(64),
+    baseCommit: "b".repeat(40),
+    diffPlanHash: "c".repeat(64),
+    domainMutationHash: "d".repeat(64),
+  };
+  const bundle = encodeApplyBundle(hashes);
+  assert.ok(bundle.startsWith("wfapply1."), "bundle is version-prefixed");
+  assert.deepEqual(decodeApplyBundle(bundle), hashes);
+});
+
+test("tfil.4 decodeApplyBundle rejects malformed bundles", () => {
+  assert.throws(() => decodeApplyBundle("not-a-bundle"), /wfapply1/);
+  assert.throws(() => decodeApplyBundle("wfapply1.!!!not-base64!!!"), /could not be decoded/);
+});
+
+test("tfil.4 workflow_status detail=full emits editPlan.applyBundle; workflow_apply accepts it (round-trip)", async () => {
+  const directory = await tempDir();
+  const issueId = "bundle-1";
+  const store = makeFixtureDomainStore();
+  store.known.add(issueId);
+  const { tools, context } = await makeHarness(async () => ({
+    data: {
+      parts: [{ type: "text", text: JSON.stringify({ patches: [{ path: "applied.txt", content: "applied\n" }] }) }],
+      info: {
+        structured: { patches: [{ path: "applied.txt", content: "applied\n" }] },
+        tokens: { input: 1, output: 1, reasoning: 0 },
+        cost: 0,
+      },
+    },
+  }), {
+    directory,
+    pluginContext: { __workflowDomainMutationHandlers: store.handlers },
+  });
+  try {
+    await initGitRepo(directory);
+    const source = `export const meta = { name: "apply-bundle", authority: { edit: true }, maxAgents: 1 };
+return await agent("edit", { edit: true, schema: { type: "object", properties: { patches: { type: "array" } }, required: ["patches"] } });`;
+    const output = await runApproved(tools, context, source);
+    const runId = runIdFrom(output);
+    const status = JSON.parse(await tools.workflow_status.execute({ runId, format: "json", detail: "full" }, context));
+    // detail=full emits applyBundle while state.json and diff-plan.json are in sync (pre-staging).
+    assert.ok(status.editPlan.applyBundle, "detail=full emits editPlan.applyBundle");
+    assert.equal(status.editPlan.applyBundle.startsWith("wfapply1."), true);
+    await __test.stageDomainMutation({ id: runId, dir: status.dir }, {
+      mutationKey: `note:${issueId}:bundle`, operation: "fixture.append-notes",
+      payload: { issueId, note: "bundle finalized" },
+    });
+    await refreshDomainManifest(status);
+    // Build the bundle from the in-memory refreshed status (refreshDomainManifest syncs the in-memory
+    // editPlan hashes with diff-plan.json on disk; this is what the tool would emit if state.json
+    // were rewritten too). Mirrors how the existing happy-path test passes explicit fields.
+    const bundle = encodeApplyBundle({
+      approvedSourceHash: status.sourceHash,
+      baseCommit: status.editPlan.baseCommit,
+      diffPlanHash: status.editPlan.diffPlanHash,
+      domainMutationHash: status.editPlan.domainMutationHash,
+    });
+    const applied = await tools.workflow_apply.execute({
+      runId, applyBundle: bundle, approvalIntent: "apply", expectedPrimaryDirtyState: "clean",
+    }, context);
+    assert.match(applied, /applied 1 patches and finalized 1 domain mutations/);
+    assert.match(store.noteText(issueId), /bundle finalized/);
+    const finalStatus = JSON.parse(await tools.workflow_status.execute({ runId, format: "json", detail: "full" }, context));
+    assert.equal(finalStatus.status, "applied");
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("tfil.4 workflow_apply with a stale applyBundle reports mismatch (review-binding preserved)", async () => {
+  const directory = await tempDir();
+  const issueId = "bundle-stale";
+  const store = makeFixtureDomainStore();
+  store.known.add(issueId);
+  const { tools, context } = await makeHarness(async () => ({
+    data: {
+      parts: [{ type: "text", text: JSON.stringify({ patches: [{ path: "applied.txt", content: "applied\n" }] }) }],
+      info: {
+        structured: { patches: [{ path: "applied.txt", content: "applied\n" }] },
+        tokens: { input: 1, output: 1, reasoning: 0 },
+        cost: 0,
+      },
+    },
+  }), {
+    directory,
+    pluginContext: { __workflowDomainMutationHandlers: store.handlers },
+  });
+  try {
+    await initGitRepo(directory);
+    const source = `export const meta = { name: "apply-bundle-stale", authority: { edit: true }, maxAgents: 1 };
+return await agent("edit", { edit: true, schema: { type: "object", properties: { patches: { type: "array" } }, required: ["patches"] } });`;
+    const output = await runApproved(tools, context, source);
+    const runId = runIdFrom(output);
+    const status = JSON.parse(await tools.workflow_status.execute({ runId, format: "json", detail: "full" }, context));
+    // A bundle with a wrong approvedSourceHash: encode a bundle from good base/diff/domain but a bad source hash.
+    const badBundle = encodeApplyBundle({
+      approvedSourceHash: "0".repeat(64),
+      baseCommit: status.editPlan.baseCommit,
+      diffPlanHash: status.editPlan.diffPlanHash,
+      domainMutationHash: status.editPlan.domainMutationHash,
+    });
+    await assert.rejects(tools.workflow_apply.execute({
+      runId, applyBundle: badBundle, approvalIntent: "apply", expectedPrimaryDirtyState: "clean",
+    }, context), /approvedSourceHash mismatch/);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+// --- tfil.5: collect-all mismatch reporting ---
+
+async function rejectedMismatchJson(promise) {
+  try {
+    await promise;
+  } catch (error) {
+    return JSON.parse(error.message);
+  }
+  assert.fail("expected promise to reject with JSON error payload");
+}
+
+test("tfil.5 workflow_apply reports all drifted caller hashes at once (collect-all)", async () => {
+  const directory = await tempDir();
+  const { tools, context } = await makeHarness(async () => ({
+    data: {
+      parts: [{ type: "text", text: JSON.stringify({ patches: [{ path: "applied.txt", content: "applied\n" }] }) }],
+      info: { structured: { patches: [{ path: "applied.txt", content: "applied\n" }] }, tokens: { input: 1, output: 1, reasoning: 0 }, cost: 0 },
+    },
+  }), { directory });
+  try {
+    await initGitRepo(directory);
+    const source = `export const meta = { name: "collect-all", authority: { edit: true }, maxAgents: 1 };
+return await agent("edit", { edit: true, schema: { type: "object", properties: { patches: { type: "array" } }, required: ["patches"] } });`;
+    const output = await runApproved(tools, context, source);
+    const runId = runIdFrom(output);
+    const status = JSON.parse(await tools.workflow_status.execute({ runId, format: "json", detail: "full" }, context));
+    // TWO drifted caller dimensions at once: bad sourceHash AND bad baseCommit.
+    const payload = await rejectedMismatchJson(tools.workflow_apply.execute({
+      runId,
+      approvedSourceHash: "0".repeat(64),
+      baseCommit: "1".repeat(40),
+      diffPlanHash: status.editPlan.diffPlanHash,
+      domainMutationHash: status.editPlan.domainMutationHash,
+      approvalIntent: "apply",
+      expectedPrimaryDirtyState: "clean",
+    }, context));
+    assert.equal(payload.type, "workflow_apply_approval_mismatch");
+    assert.equal(payload.reason, "approved_source_hash_mismatch", "primary reason is the first/worst dimension");
+    const fields = payload.allMismatches.map((m) => m.field);
+    assert.ok(fields.includes("approvedSourceHash"), "approvedSourceHash drift collected");
+    assert.ok(fields.includes("baseCommit"), "baseCommit drift collected");
+    assert.ok(payload.allMismatches.length >= 2, "multiple dimensions reported at once");
+    assert.ok(payload.freshApplyApproval.applyBundle, "fresh applyBundle included for one-round-trip retry");
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("tfil.5 collect-all includes the server-derived staged-domain mutation drift", async () => {
+  const directory = await tempDir();
+  const issueId = "collect-domain";
+  const store = makeFixtureDomainStore();
+  store.known.add(issueId);
+  const { tools, context } = await makeHarness(async () => ({
+    data: {
+      parts: [{ type: "text", text: JSON.stringify({ patches: [{ path: "applied.txt", content: "applied\n" }] }) }],
+      info: { structured: { patches: [{ path: "applied.txt", content: "applied\n" }] }, tokens: { input: 1, output: 1, reasoning: 0 }, cost: 0 },
+    },
+  }), { directory, pluginContext: { __workflowDomainMutationHandlers: store.handlers } });
+  try {
+    await initGitRepo(directory);
+    const source = `export const meta = { name: "collect-domain", authority: { edit: true }, maxAgents: 1 };
+return await agent("edit", { edit: true, schema: { type: "object", properties: { patches: { type: "array" } }, required: ["patches"] } });`;
+    const output = await runApproved(tools, context, source);
+    const runId = runIdFrom(output);
+    const status = JSON.parse(await tools.workflow_status.execute({ runId, format: "json", detail: "full" }, context));
+    // Stage a domain mutation AFTER diff approval WITHOUT refreshing the caller's hashes, so the
+    // server-derived staged-domain drift is the (sole) mismatch dimension.
+    await __test.stageDomainMutation({ id: runId, dir: status.dir }, {
+      mutationKey: `note:${issueId}:drift`, operation: "fixture.append-notes",
+      payload: { issueId, note: "drifted" },
+    });
+    const payload = await rejectedMismatchJson(tools.workflow_apply.execute({
+      runId,
+      approvedSourceHash: status.sourceHash,
+      baseCommit: status.editPlan.baseCommit,
+      diffPlanHash: status.editPlan.diffPlanHash,
+      domainMutationHash: status.editPlan.domainMutationHash,
+      approvalIntent: "apply",
+      expectedPrimaryDirtyState: "clean",
+    }, context));
+    const reasons = payload.allMismatches.map((m) => m.reason);
+    assert.ok(reasons.includes("staged_domain_mutations_changed"), "server-derived staged drift collected");
+    assert.ok(payload.allMismatches.every((m) => m.field === "domainMutationHash"), "drift is on the domain-mutation dimension");
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }

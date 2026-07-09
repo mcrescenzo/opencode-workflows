@@ -36,3 +36,4 @@ package-lock.json
 .cleanup-map.mjs
 .rt.mjs
 .repo-review/
+.deep-research/

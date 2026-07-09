@@ -113,6 +113,7 @@ export const WORKFLOW_INSPECT_TOOLS = [
   "workflow_list",
   "workflow_roles",
   "workflow_templates",
+  "workflow_lint",
 ];
 export const WORKFLOW_MUTATING_TOOLS = [
   "workflow_run",

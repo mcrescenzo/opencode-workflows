@@ -26,6 +26,7 @@ import {
 import { extractTextFromError, redactValue, truncateText } from "./text-json.js";
 import { redactFreeTextSecrets } from "./free-text-redactor.js";
 import { resultReadbackProjection } from "./result-readback.js";
+import { encodeApplyBundle } from "./approval-hashing.js";
 import { WorkflowAuthorityError } from "./errors.js";
 import { addTokens, zeroTokens } from "./budget-accounting.js";
 import { AD_HOC_AUTHORITY_PROFILE, assertWriteWorkflowAllowed } from "./authority-policy.js";
@@ -231,7 +232,7 @@ function nextActionsForEntry(entry) {
     case "failed-with-diff-plan": {
       actions.push(`workflow_status runId=${id} detail=full — review the proposed diff plan and its approval hashes.`);
       if (hasApplyableDiffPlan(state)) {
-        actions.push(`workflow_apply runId=${id} approvalIntent=apply <approvedSourceHash/baseCommit/diffPlanHash/domainMutationHash from detail=full> — apply after review.`);
+        actions.push(`workflow_apply runId=${id} approvalIntent=apply applyBundle=<applyBundle from detail=full> — apply after review (or the four individual hashes).`);
       } else {
         actions.push("No applyable diff plan hashes are present; inspect detail=full before choosing a recovery path.");
       }
@@ -854,6 +855,18 @@ async function fullStatusForEntry(entry) {
   if (state.editPlan) {
     redacted.editWorktrees = state.editWorktrees;
     redacted.editPlan = { ...state.editPlan, patches: undefined };
+    // tfil.4: emit a single opaque applyBundle (encoded from the four review-binding hashes) so a
+    // caller can workflow_apply with one field. Only present when the four hashes are all known.
+    const bundleHashes = {
+      approvedSourceHash: state.sourceHash,
+      baseCommit: state.editPlan.baseCommit,
+      diffPlanHash: state.editPlan.diffPlanHash,
+      domainMutationHash: state.editPlan.domainMutationHash,
+    };
+    if (nonEmptyString(bundleHashes.approvedSourceHash) && nonEmptyString(bundleHashes.baseCommit)
+      && nonEmptyString(bundleHashes.diffPlanHash) && nonEmptyString(bundleHashes.domainMutationHash)) {
+      redacted.editPlan.applyBundle = encodeApplyBundle(bundleHashes);
+    }
   }
   if (state.integrationPlan) {
     redacted.integrationWorktrees = state.integrationWorktrees;

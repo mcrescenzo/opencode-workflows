@@ -28,6 +28,7 @@ summary, and this file is the deeper architecture note.
 | `workflow_roles` | Read-only. | None. | This is the role prompt/hash/defaults readback surface. |
 | `workflow_models` | Read-only. | None. | This is the model availability readback surface. |
 | `workflow_templates` | Read-only; source retrieval is explicit. | None. | This is the shipped-template readback surface. |
+| `workflow_lint` | Read-only; NO execution. | None. | Structural lint surface: returns all diagnostics (parse, imports, exports, meta schema, top-level return, fanout-callback arity, agent() arity). A clean lint does NOT prove the workflow runs. |
 | `workflow_template_save` | Writes saved workflow source from a shipped template. | No approval hash; write-permission gated. | `workflow_list({ format: "json" })`. |
 
 ### Workflow meta fields

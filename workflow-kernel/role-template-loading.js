@@ -592,7 +592,24 @@ async function listWorkflows(context, args = {}, sessionModel = null, extensionW
       if (inv.notes) lines.push(`  notes: ${truncateText(inv.notes, 160)}`);
     }
     return lines.join("\n");
-  }).join("\n");
+   }).join("\n");
+}
+
+// tfil.8 helper: the set of known role names (DEFAULT_ROLES + roles.json defaults + .md files in
+// the role dir). Used by meta.lanes validation to reject declarations referencing a missing role.
+// Best-effort: returns DEFAULT_ROLES names if the dir/manifest cannot be read.
+async function knownRoleNames(roleDir = ROLE_DIR) {
+  const names = new Set(Object.keys(DEFAULT_ROLES));
+  try {
+    const defaults = await loadRoleDefaultsManifest(roleDir);
+    for (const name of Object.keys(defaults)) names.add(name);
+  } catch { /* best-effort */ }
+  try {
+    for (const dirent of await fs.readdir(roleDir, { withFileTypes: true })) {
+      if (dirent.isFile() && dirent.name.endsWith(".md")) names.add(dirent.name.replace(/\.md$/, ""));
+    }
+  } catch { /* best-effort */ }
+  return names;
 }
 
 export {
@@ -616,4 +633,5 @@ export {
   saveTemplate,
   saveWorkflow,
   listWorkflows,
+  knownRoleNames,
 };
