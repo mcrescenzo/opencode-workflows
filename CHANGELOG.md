@@ -7,7 +7,18 @@ and uses semantic versioning for published package releases.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-09
+
 ### Added
+- **First bundled workflow: `deep-research`** — deep multi-source web research with
+  adversarial claim verification (Scope → Search → Fetch → Verify → Synthesize), depth
+  presets (`quick`/`normal`/`thorough`), seed-URL fallback, lane-coverage telemetry,
+  artifact spill, and an honest failure taxonomy (websearch-unavailable, verifiers-failed,
+  synthesis salvage). Ships with the `/deep-research` command (clarify → tier models →
+  approve → persist report). This deliberately reverses 0.2.0's zero-bundled stance for
+  exactly one flagship exemplar; the bundled tier remains otherwise empty.
+- `meta.whenToUse` — an author-owned, one-line discovery hint surfaced by `workflow_list`
+  (Claude Code parity), alongside `category`/`examples`/`notes`.
 - Approve-by-reference: a `workflow_run` approve call for an inline-source preview may present
   only `approve: true` + `approvalHash`; the previewed source bytes are reused from a bounded
   module-level pending store (cleared on dispose/restart). Eliminates the byte-identical
@@ -16,6 +27,9 @@ and uses semantic versioning for published package releases.
   hash's recorded preview) and an inline re-transmission-drift `hint`.
 
 ### Changed
+- Plain-string `workflow_run` args that do not look like JSON now pass through to the guest
+  verbatim (gated by `meta.argsSchema`); JSON-looking strings still normalize to the object
+  they encode, preserving the 0.2.x approval-hash drift fix.
 - The live child-system smoke is demoted from a required public-release gate
   to a recommended, opt-in strict check: `release:system-smoke-required`
   keeps its fail-closed behavior, but the automated release workflow gates on
@@ -26,6 +40,9 @@ and uses semantic versioning for published package releases.
   to one snapshot in the hash (they dedup by hash instead of the shared `"<inline>"` path).
 - A JSON-string `args` bag is decoded and normalized for every workflow (previously drain-only),
   so string and object emissions of the same payload hash to the same `approvalHash`.
+- Normalized JSON-string `args` now propagate to the guest and drain-mode resolution too
+  (previously only the approval hash saw the normalized object, so the guest could see a raw
+  string while the hash was computed over the parsed form).
 
 ## [0.2.0] - 2026-07-08
 

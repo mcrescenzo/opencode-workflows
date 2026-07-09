@@ -205,8 +205,8 @@ what to do:
 
 Once this slice runs clean — preview matches, lanes return evidence, and
 `detail: "result"` reads back what you expect — widen it: add slices (raise
-`maxAgents`), introduce model tiers, or graduate to the deep-research recipe
-below.
+`maxAgents`), introduce model tiers, or graduate to the repo-deep-research
+recipe below.
 
 ## Recipe: generic read-only deep research
 
@@ -258,9 +258,14 @@ This source defaults to the safest tier and only adds an external-docs lane when
 the caller opts in **and** the run is launched with network authority. Save it as
 a named workflow or pass it inline as `source`.
 
+> Naming note: the plugin now bundles a *web* research workflow named
+> `deep-research` (see README). This recipe is the repo-local variant —
+> save it under a different name, e.g. `repo-deep-research` (used throughout
+> this walkthrough).
+
 ```js
 export const meta = {
-  name: "deep-research",
+  name: "repo-deep-research",
   description:
     "Read-only deep research. Scoped parallel inventory lanes return claim+evidence; synthesis is pure JS. No edits, no Beads mutation.",
   profile: "read-only-review",
@@ -460,7 +465,7 @@ the approval summary — it never launches lanes and never probes:
 ```jsonc
 // 1) Preview: inspect authority, model plan, maxAgents, concurrency, sourceHash.
 workflow_run({
-  name: "deep-research",
+  name: "repo-deep-research",
   args: { question: "...", areas: ["..."], allowExternalDocs: false },
   profile: "read-only-review",
   maxAgents: 6,
@@ -476,7 +481,7 @@ Read the returned `approvalHash`, the authority line (confirm
 ```jsonc
 // 2) Approve: same args, plus approve:true and the approvalHash from step 1.
 workflow_run({
-  name: "deep-research",
+  name: "repo-deep-research",
   args: { question: "...", areas: ["..."], allowExternalDocs: false },
   profile: "read-only-review",
   maxAgents: 6,

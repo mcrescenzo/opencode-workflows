@@ -43,6 +43,9 @@ those jobs a structure:
   drains.
 - Starter templates (`first-run-slice`, `scoped-parallel`, `edit-review`) to
   copy and adapt.
+- One bundled flagship workflow — `deep-research` — plus its `/deep-research`
+  command: deep multi-source web research with adversarial fact-checking. It
+  doubles as the living gold-standard example of every convention below.
 - Three bundled skills: `opencode-workflow-authoring`, `workflow-model-tiering`,
   and `workflow-plan-review`.
 - A trusted-extension seam so operators can contribute their own workflows,
@@ -50,9 +53,10 @@ those jobs a structure:
 
 ## What it is *not*
 
-- **It ships zero workflows and zero commands.** This is an engine, not a pack
-  of ready-made automations. You write your own workflow (or install a trusted
-  extension that contributes one) and run it with `workflow_run`.
+- **It is an engine, not a pack of automations.** It ships exactly one bundled
+  workflow (`deep-research`, with its `/deep-research` command) as the flagship
+  exemplar; everything else you write yourself (or install via a trusted
+  extension) and run with `workflow_run`.
 - It is **not a daemon.** Background runs live inside the OpenCode process and
   stop if that process exits; use `workflow_reconcile` to recover stale runs.
 - It does **not** silently write to your working tree. Normal edit runs stop at
@@ -79,6 +83,26 @@ Register it in `opencode.json` (the singular `plugin` array key):
 ```
 
 Restart OpenCode after changing plugin config.
+
+## Bundled workflow: deep-research
+
+Deep multi-source research with adversarial fact-checking: Scope → parallel web
+search per angle → URL-dedup + fetch budget → falsifiable-claim extraction →
+per-claim adversarial vote panels (3 votes at `thorough`; verifier infrastructure
+errors are reported as *unverified*, never as refutations) → cited synthesis.
+
+```
+workflow_run({ name: "deep-research", args: "is fish oil effective for ADHD?" })
+```
+
+Or with options: `args: { question, depth: "quick" | "normal" | "thorough",
+maxSources, seedUrls }`. Depth `thorough` (default) is full 3-vote verification.
+
+The run asks for **network authority** (`websearch`/`webfetch`) at its one-time
+approval — search, fetch, and verify lanes use the web; scope and synthesize
+lanes narrow themselves to read-only. No shell, no MCP, no edits. The
+`/deep-research` command wraps the full flow: clarify → model tiers → approval →
+report persisted to `.deep-research/runs/`.
 
 ## Quick start
 

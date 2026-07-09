@@ -233,9 +233,9 @@ after source/base/diff/domain hashes and Git state are checked. The one path
 that can finalize in-run after its launch approval is a successful non-dry
 drain workflow from a trusted source: a host-configured extension workflow
 directory whose registered drain adapter declares `supportsAutoApply: true`.
-The plugin ships zero bundled workflows, so project- and global-saved
-workflows always stop at `awaiting-diff-approval` and finalize through
-`workflow_apply`.
+The plugin ships one bundled workflow (`deep-research`), which is read-only and
+stages no writes. Project- and global-saved workflows always stop at
+`awaiting-diff-approval` and finalize through `workflow_apply`.
 
 ## Review Checklist
 
