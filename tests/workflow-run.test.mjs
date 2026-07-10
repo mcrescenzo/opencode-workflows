@@ -6274,6 +6274,41 @@ return [a, b];`);
   assert.equal(bp.lanes[1].label, "lane-2");
 });
 
+test("fnop.3 laneBlueprint resolves canonical two-argument agent(prompt, opts) call sites", () => {
+  // The guest runtime and bundled workflows use agent(prompt, opts). Static preview must
+  // introspect literal options from that form; the legacy one-object form stays recognized.
+  const bp = laneBlueprint(`export const meta = { name: "twoarg", profile: "read-only-review" };
+const a = agent("find targets", { role: "finder", tier: "fast", readOnly: true });
+const b = agent("verify", { role: "verifier", tier: "deep", schema: { type: "object" } });
+return [a, b];`);
+  assert.equal(bp.lanes.length, 2);
+  assert.equal(bp.lanes[0].shapes[0].optsResolved, true);
+  assert.equal(bp.lanes[0].shapes[0].role, "finder");
+  assert.equal(bp.lanes[0].shapes[0].tier, "fast");
+  assert.equal(bp.lanes[0].shapes[0].readOnly, true);
+  assert.equal(bp.lanes[1].shapes[0].role, "verifier");
+  assert.equal(bp.lanes[1].shapes[0].tier, "deep");
+  assert.equal(bp.lanes[1].shapes[0].schema, true);
+});
+
+test("fnop.3 two-argument fan-out and dynamic option forms", () => {
+  const bp = laneBlueprint(`export const meta = { name: "twoarg-fan", profile: "read-only-review" };
+const r = parallel([() => agent("x", { role: "finder", tier: "fast" }), () => agent("y", { role: "v", tier: "deep" })]);
+return r;`);
+  const lane = bp.lanes[0];
+  assert.equal(lane.fanOut, true);
+  assert.deepEqual(lane.shapes.map((s) => s.role), ["finder", "v"]);
+  assert.equal(lane.shapes[0].optsResolved, true);
+
+  // Dynamic opts in the canonical two-arg form stay uncertain.
+  const dyn = laneBlueprint(`export const meta = { name: "twoarg-dyn", profile: "read-only-review" };
+const opts = compute();
+const r = agent("p", opts);
+return r;`);
+  assert.equal(dyn.lanes[0].shapes[0].optsResolved, false);
+  assert.equal(dyn.lanes[0].shapes[0].role, null);
+});
+
 test("tfil.2 laneBlueprint marks parallel fan-out runtime-determined and never totals", () => {
   const bp = laneBlueprint(`export const meta = { name: "fan", profile: "read-only-review" };
 const r = parallel([() => agent({ role: "finder" }), () => agent({ role: "verifier", tier: "deep" })]);
@@ -6369,11 +6404,29 @@ test("tfil.3 consequenceStatements: edit workflow with budgets is apply-gated", 
 test("tfil.3 consequenceStatements: drain autonomous-local is in-run-apply", () => {
   const { statements, applyGate } = __test.consequenceStatements({
     authority: { profile: "drain-autonomous-local", edit: true }, budgetCeilings: { maxCost: 1 }, maxAgents: 6,
-    meta: { harness: "drain" }, runtimeArgs: { mode: "autonomous-local" },
+    meta: { harness: "drain" }, runtimeArgs: { mode: "autonomous-local" }, autoApplyEligible: true,
   });
   assert.equal(applyGate, "in-run-apply");
   assert.ok(statements.some((s) => s.startsWith("Authority: autonomous-local drain")));
   assert.ok(statements.some((s) => s.startsWith("Apply gate: a successful run applies its verified diff plan in-run")));
+});
+
+test("fnop.4 consequenceStatements: autonomous-local drain without auto-apply eligibility is apply-gated", () => {
+  // Preview must describe the SAME resolved auto-apply eligibility that execution enforces. A
+  // trusted adapter that explicitly disables auto-apply (supportsAutoApply:false) is not eligible,
+  // so the preview must promise explicit workflow_apply approval, not in-run apply.
+  const disabled = __test.consequenceStatements({
+    authority: { profile: "drain-autonomous-local", edit: true }, budgetCeilings: {}, maxAgents: 1,
+    meta: { harness: "drain" }, autoApplyEligible: false,
+  });
+  assert.equal(disabled.applyGate, "apply-gated");
+  assert.ok(disabled.statements.some((s) => s.startsWith("Apply gate: this workflow may stage changes")));
+  // The eligible case stays in-run-apply.
+  const eligible = __test.consequenceStatements({
+    authority: { profile: "drain-autonomous-local", edit: true }, budgetCeilings: {}, maxAgents: 1,
+    meta: { harness: "drain" }, autoApplyEligible: true,
+  });
+  assert.equal(eligible.applyGate, "in-run-apply");
 });
 
 test("tfil.3 consequenceStatements makes no per-file or runtime-cost claims", () => {

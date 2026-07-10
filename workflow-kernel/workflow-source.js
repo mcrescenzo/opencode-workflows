@@ -292,9 +292,20 @@ function hasOptsKey(optsNode, name) {
 
 // Resolve the agent() call's opts to a literal ObjectExpression when possible; returns null for
 // agent() with no args (defaults), a dynamic opts object, or a non-object arg.
+// Canonical runtime/authoring form is agent(prompt, opts): when two arguments are present, opts
+// is the SECOND argument (fnop.3). The legacy one-object form (a single ObjectExpression) is
+// still recognized statically for compatibility, but the runtime itself is agent(prompt, opts).
 function agentOptsNode(agentCall, bindings) {
-  const arg = resolveExpression(agentCall.arguments?.[0], bindings);
-  if (arg && arg.type === "ObjectExpression") return arg;
+  const args = agentCall.arguments ?? [];
+  if (args.length >= 2) {
+    const opts = resolveExpression(args[1], bindings);
+    if (opts && opts.type === "ObjectExpression") return opts;
+    return null;
+  }
+  if (args.length === 1) {
+    const arg = resolveExpression(args[0], bindings);
+    if (arg && arg.type === "ObjectExpression") return arg;
+  }
   return null;
 }
 
@@ -553,7 +564,7 @@ function collectAgentArityDiagnostics(ast, diagnostics) {
     if (!isAgentCall(node)) return;
     const argCount = (node.arguments ?? []).length;
     if (argCount === 0) {
-      diagnostics.push({ rule: "agent-arity", severity: "error", line: locLine(node), message: "agent() called with no arguments; it requires a prompt/role (and optional opts). Use agent(\"role\", { ... }) or agent({ role: \"...\" })." });
+      diagnostics.push({ rule: "agent-arity", severity: "error", line: locLine(node), message: "agent() called with no arguments; it requires a prompt and optional opts. Use agent(\"prompt\", { ... })." });
     } else if (argCount > 2) {
       diagnostics.push({ rule: "agent-arity", severity: "error", line: locLine(node), message: `agent() called with ${argCount} arguments; it accepts at most (prompt, opts).` });
     }

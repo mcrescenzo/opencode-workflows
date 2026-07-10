@@ -548,7 +548,13 @@ function mutationDomainSummary(run) {
 // It makes NO per-file / per-target / runtime-cost / lane-execution-count claims — those are not
 // knowable at preview. Consumed by the tfil.7 preview renderer; display-only.
 function applyGateClass(run) {
-  if (run.meta?.harness === "drain" && run.authority?.profile === "drain-autonomous-local") return "in-run-apply";
+  if (run.meta?.harness === "drain" && run.authority?.profile === "drain-autonomous-local") {
+    // fnop.4: the preview must describe the SAME resolved auto-apply eligibility that execution
+    // enforces (source trust + adapter supportsAutoApply, computed by shouldAutoApplyDrain). A
+    // drain whose adapter disables auto-apply is not eligible and stops at awaiting-diff-approval,
+    // so its preview is apply-gated, not in-run-apply. Fails closed when the fact is unresolved.
+    return run.autoApplyEligible === true ? "in-run-apply" : "apply-gated";
+  }
   if (run.authority?.edit || run.authority?.worktreeEdit || run.authority?.integration) return "apply-gated";
   return "read-only";
 }
@@ -2110,9 +2116,13 @@ async function planWorkflowEnvelope(pluginContext, toolContext, args) {
       nestedSnapshots,
       autoApprove,
       // tfil.2/tfil.8: static lane blueprint (shape only, never a runtime count), enriched with the
-      // optional human-curated meta.lanes declaration when present. Display-only: it is NOT part of
-      // approvalEnvelope() (which uses an explicit field list), so it cannot re-key approvalHash.
+      // optional human-curated meta.lanes declaration when present. Display-only: it is NOT part
+      // of approvalEnvelope() (which uses an explicit field list), so it cannot re-key approvalHash.
       laneBlueprint: await resolveLaneBlueprintWithDeclarations(pluginContext, source, meta),
+      // fnop.4: resolve the auto-apply eligibility ONCE from the same trust + adapter-capability
+      // facts that shouldAutoApplyDrain enforces at runtime, so preview consequences and execution
+      // agree. Display-only; not part of approvalEnvelope()'s explicit field set.
+      autoApplyEligible: shouldAutoApplyDrain({ meta, authority, sourcePath }, pluginContext),
     },
   };
 }

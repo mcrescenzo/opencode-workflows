@@ -220,6 +220,39 @@ test("inventoryFiles applies precompiled literal and glob excludes", async () =>
   }
 });
 
+test("inventoryFiles refuses an explicit start symlink that resolves outside the project root", async () => {
+  // fnop.2: the walk() helper already skips symlinks it discovers while readdir'ing, but an
+  // explicit start path is checked lexically (pathContains) and then stat-followed. A symlink
+  // inside the project that points at an outside directory therefore enumerates outside files.
+  const project = await fs.mkdtemp(path.join(os.tmpdir(), "workflow-inventory-symlink-start-"));
+  const outside = await fs.mkdtemp(path.join(os.tmpdir(), "workflow-inventory-outside-"));
+  try {
+    await fs.writeFile(path.join(outside, "outside-unique-leak.txt"), "secret\n", "utf8");
+    await fs.symlink(outside, path.join(project, "linked-outside"));
+    const runDir = path.join(project, ".run");
+    await fs.mkdir(runDir, { recursive: true });
+
+    const out = await executeSandbox(
+      NO_CTX,
+      { directory: project, worktree: project },
+      minimalRun({ dir: runDir, eventCount: 0 }),
+      'return await inventoryFiles({ paths: ["linked-outside"] });',
+      null,
+      NO_DEPS,
+    );
+
+    assert.equal(out.ok, true);
+    const allPaths = out.shards.flatMap((shard) => shard.paths);
+    assert.ok(
+      allPaths.every((p) => !p.includes("outside-unique-leak")),
+      `an explicit symlink start must not enumerate outside files; got ${JSON.stringify(allPaths)}`,
+    );
+  } finally {
+    await fs.rm(project, { recursive: true, force: true });
+    await fs.rm(outside, { recursive: true, force: true });
+  }
+});
+
 test("non-dry drain launches with zero gate preflight and reaches the adapter (no drain.live_gates event)", async () => {
   // Design C deleted the live-gate-probe preflight that used to run before a non-dry drain could
   // mutate: drainGateStatus (and the "drain.live_gates" event it recorded) no longer exist. A

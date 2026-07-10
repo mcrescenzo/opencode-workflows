@@ -148,6 +148,18 @@ export function sessionPermissionEchoStatus(created, expectedRules = []) {
   };
 }
 
+// Physical-location resolver used at isolation boundaries: realpath is canonical (resolves
+// symlinks) so two lexically-distinct paths that point at the same on-disk directory compare
+// equal. Falls back to path.resolve when realpath throws (missing path), preserving prior
+// behavior for the non-existent-path error case.
+async function realpathOrResolve(target) {
+  try {
+    return await fs.realpath(target);
+  } catch {
+    return path.resolve(target);
+  }
+}
+
 // Deterministic replacement for the deleted LLM directory-echo probe: the typed opencode Session
 // always echoes `directory` on servers >= MIN_OPENCODE_SERVER_VERSION, so a lane can assert the
 // child session actually landed in the lane's directory (worktree or primary) without asking the
@@ -409,9 +421,15 @@ export async function createEditWorktree(run, toolContext, callId) {
     directory: toolContext.directory,
   });
   const worktreePath = created?.path || created?.directory || created?.dir || fallbackPath;
-  const resolvedWorktreePath = path.resolve(worktreePath);
-  if (resolvedWorktreePath === path.resolve(toolContext.directory)) {
-    throw new WorkflowAuthorityError(`Edit worktree path resolves to the primary tree (${resolvedWorktreePath}); refusing to run edit lanes against the primary checkout`);
+  // Physical isolation boundary (fnop.1): path.resolve normalizes "./.." but does NOT resolve
+  // symlinks, so a worktree adapter that returns an in-root symlink alias pointing at the
+  // primary checkout would slip past a purely lexical comparison. Compare realpath-canonical
+  // physical locations and fail closed when they coincide. Falls back to path.resolve when
+  // realpath is unavailable (e.g. a non-existent path) so normal error behavior is preserved.
+  const primaryPhysical = await realpathOrResolve(path.resolve(toolContext.directory));
+  const worktreePhysical = await realpathOrResolve(path.resolve(worktreePath));
+  if (worktreePhysical === primaryPhysical) {
+    throw new WorkflowAuthorityError(`Edit worktree path resolves to the primary tree (${worktreePhysical}); refusing to run edit lanes against the primary checkout`);
   }
   // Register the tracking record BEFORE the defensive mkdir below. createWorktree() has already
   // created the real worktree dir + branch (workflow/<runId>/<hash>); cleanupWorktrees() and

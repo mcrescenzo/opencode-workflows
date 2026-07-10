@@ -550,6 +550,12 @@ async function inventoryRunFiles(pluginContext, toolContext, run, payload) {
     catch (error) { return { ok: false, error: extractTextFromError(error), manifest: null, shards: [], partial: false }; }
   }
   const projectRoot = path.resolve(toolContext?.worktree || toolContext?.directory || ".");
+  // Physical project root (fnop.2): explicit start paths are checked lexically by pathContains,
+  // which normalizes "./.." but does NOT resolve symlinks. An explicit in-root symlink pointing
+  // outside the project would otherwise pass the lexical check and then be followed by the
+  // stat/walk below, enumerating out-of-root filenames. Resolve the canonical root once and
+  // re-check each explicit start's physical containment before it is inspected.
+  const projectRootReal = await fs.realpath(projectRoot).catch(() => projectRoot);
   const paths = Array.isArray(payload?.paths) && payload.paths.length ? payload.paths : ["."];
   const excludeGlobs = Array.isArray(payload?.exclude) ? payload.exclude : [];
   const excludeRules = __compileExcludeGlobs(excludeGlobs);
@@ -584,6 +590,14 @@ async function inventoryRunFiles(pluginContext, toolContext, run, payload) {
     for (const p of paths) {
       const start = path.resolve(projectRoot, String(p));
       if (!pathContains(projectRoot, start)) {
+        partial = true;
+        continue;
+      }
+      // Re-check physical containment (fnop.2): resolve the explicit start through realpath and
+      // verify it is the root or a descendant of the canonical root. A symlink start that
+      // resolves outside the project root is rejected before any file or directory is inventoried.
+      const physicalStart = await fs.realpath(start).catch(() => start);
+      if (physicalStart !== projectRootReal && !pathContains(projectRootReal, physicalStart)) {
         partial = true;
         continue;
       }

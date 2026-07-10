@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { parseWorkflowSource, resolveWorkflowSource } from "../workflow-kernel/workflow-source.js";
+import { parseWorkflowSource, resolveWorkflowSource, laneBlueprint } from "../workflow-kernel/workflow-source.js";
 import { BUNDLED_WORKFLOW_DIR } from "../workflow-kernel/constants.js";
 import { ajv } from "../workflow-kernel/structured-output.js";
 
@@ -36,4 +36,19 @@ test("deep-research resolves by NAME at bundled scope from an empty project", as
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
   }
+});
+
+test("fnop.3 bundled deep-research laneBlueprint resolves two-argument agent(prompt, opts) shapes", async () => {
+  // The bundled workflow calls agent(prompt, opts) throughout. Before fnop.3, static
+  // introspection read the first argument as opts, so every detected lane shape rendered
+  // unresolved (optsResolved false). Literal two-arg options must now resolve.
+  const source = await fs.readFile(bundledPath, "utf8");
+  const bp = laneBlueprint(source);
+  assert.ok(bp.lanes.length > 0, "deep-research must declare at least one lane");
+  const allShapes = bp.lanes.flatMap((l) => l.shapes ?? []);
+  const resolved = allShapes.filter((s) => s.optsResolved === true);
+  assert.ok(
+    resolved.length > 0,
+    `deep-research literal agent(prompt, opts) calls must produce resolved shapes; got ${JSON.stringify(allShapes.map((s) => ({ role: s.role, tier: s.tier, optsResolved: s.optsResolved })))}`,
+  );
 });

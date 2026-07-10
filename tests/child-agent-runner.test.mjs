@@ -1509,6 +1509,27 @@ test("createEditWorktree throws when the adapter's worktree path resolves to the
   }
 });
 
+test("createEditWorktree rejects a symlink alias that physically resolves to the primary tree", async (t) => {
+  // fnop.1: path.resolve sees the distinct lexical alias; only realpath resolves the symlink
+  // back to the primary checkout. The isolation boundary must compare physical locations.
+  const { root, dir } = await tempRunDir("child-agent-worktree-symlink-alias");
+  const alias = path.join(dir, "primary-alias");
+  await fs.symlink(root, alias);
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const run = minimalChildRun(dir, {
+    adapter: {
+      async createWorktree() {
+        return { path: alias };
+      },
+    },
+  });
+  const toolContext = { directory: root, sessionID: "parent-session" };
+  await assert.rejects(
+    createEditWorktree(run, toolContext, "lane:edit"),
+    /worktree path resolves to the primary tree/,
+  );
+});
+
 test("laneAuthorityInstruction renders grants and denials from authority flags", () => {
   assert.equal(
     laneAuthorityInstruction({ readOnly: true }),
