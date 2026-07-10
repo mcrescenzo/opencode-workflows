@@ -419,18 +419,6 @@ async function saveWorkflow(context, args) {
   return [`Saved workflow ${args.name}.`, `Path: ${filePath}`, `sourceHash: ${hash(args.source)}`].join("\n");
 }
 
-// Curated, built-in invocation hints for BUNDLED workflows only. This is the single place
-// where example args / category / notes / whenToUse that are not read verbatim from a workflow's
-// own `meta` are attached. Keyed by workflow name and applied only to the bundled scope so a
-// same-named saved/global workflow never inherits curated hints it did not declare.
-// Curated per-workflow invocation hints (keyed by workflow name), merged over a workflow's own
-// meta in workflow_list. Domain-specific workflows supply their examples via their own meta.examples;
-// this stays empty in the core kernel (no bundled domain workflows). A curated entry may also carry
-// `whenToUse`, but the preferred path is author-owned: the bundled deep-research workflow declares
-// meta.whenToUse directly (meta-declared fields always win over curated — see
-// buildInvocationMetadata below, semantics unchanged).
-const CURATED_INVOCATION_HINTS = {};
-
 const MAX_INVOCATION_EXAMPLES = 4;
 
 // Only accept example args that are explicit, plain JSON objects. redactValue bounds depth,
@@ -462,19 +450,17 @@ function renderRunExample(name, argsExample) {
   return parts.join(" ");
 }
 
-// Build runnable invocation metadata for one workflow entry. Only explicit `meta` fields
-// (examples/category/notes/whenToUse/modelTiers) and the curated bundled defaults above are
-// surfaced; nothing is inferred from the workflow body.
+// Build runnable invocation metadata for one workflow entry. Only author-owned `meta` fields
+// (examples/category/notes/whenToUse/modelTiers) are surfaced; nothing is inferred from the
+// workflow body and there is no second metadata source (fnop.11 removed the dormant curated map).
 function buildInvocationMetadata(entry, meta) {
-  const curated = entry.scope === "bundled" ? CURATED_INVOCATION_HINTS[entry.name] : undefined;
-  // Explicit meta.examples win over curated defaults; never infer args from the source body.
-  let argsExamples = sanitizeArgsExamples(meta.examples);
-  if (argsExamples.length === 0 && curated) argsExamples = sanitizeArgsExamples(curated.argsExamples);
-  const category = typeof meta.category === "string" ? truncateText(meta.category, 80) : curated?.category;
-  const notes = typeof meta.notes === "string" ? truncateText(meta.notes, 240) : curated?.notes;
+  // Explicit meta.examples are the sole args source; never infer args from the source body.
+  const argsExamples = sanitizeArgsExamples(meta.examples);
+  const category = typeof meta.category === "string" ? truncateText(meta.category, 80) : undefined;
+  const notes = typeof meta.notes === "string" ? truncateText(meta.notes, 240) : undefined;
   // whenToUse mirrors Claude Code's bundled-workflow discovery hint: an author-owned, one-line
-  // "reach for this when…" surfaced by workflow_list (curated fallback for bundled scope only).
-  const whenToUse = typeof meta.whenToUse === "string" ? truncateText(meta.whenToUse, 240) : curated?.whenToUse;
+  // "reach for this when…" surfaced by workflow_list.
+  const whenToUse = typeof meta.whenToUse === "string" ? truncateText(meta.whenToUse, 240) : undefined;
   const runExamples = argsExamples.length > 0
     ? argsExamples.map((example) => renderRunExample(entry.name, example))
     : [renderRunExample(entry.name)];

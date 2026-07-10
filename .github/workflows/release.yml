@@ -67,9 +67,9 @@ jobs:
             npm ci
           fi
 
-      - name: Test
+      - name: Run no-token release gate (canonical contract, same as CI)
         if: steps.version.outputs.publish == 'true'
-        run: node --test tests/*.test.mjs
+        run: npm run release:no-token
 
       - name: Publish to npm (trusted publishing; provenance is automatic)
         if: steps.version.outputs.publish == 'true'
