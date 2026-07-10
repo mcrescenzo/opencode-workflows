@@ -24,7 +24,6 @@ import {
   addEditPlanFromResult,
   runChildAgent,
   sessionDirectoryEchoStatus,
-  createEditWorktree,
 } from "../workflow-kernel/child-agent-runner.js";
 import { writeLaneCheckpoint } from "../workflow-kernel/run-store-projections.js";
 import {
@@ -39,12 +38,15 @@ import {
 import { loadRoleDefaultsManifest, mergeRoleDefaults, resolveRole } from "../workflow-kernel/role-template-loading.js";
 import { checkBudgetBeforeLaunch } from "../workflow-kernel/budget-accounting.js";
 
-// Direct unit coverage for the pure/semi-pure lane-scoped helpers exported from
-// workflow-kernel/child-agent-runner.js: the resume cache-hit and checkpoint-hit discriminators,
-// the lane task-summary chooser, the integration-lane lookup, and the edit-patch normalizer +
-// edit-plan accumulator. runChildAgent itself is the heavy child-session lifecycle (create/prompt/
-// retry/integrate) and is intentionally not exercised here; it is covered indirectly by the
-// drain/workflow suites.
+// Direct unit coverage for lane-scoped behavior exported from
+// workflow-kernel/child-agent-runner.js: the pure/semi-pure discriminators (resume cache-hit,
+// checkpoint-hit, lane task-summary, integration-lane lookup, edit-patch normalizer + edit-plan
+// accumulator), the lane failure taxonomy (errors.js), AND the real runChildAgent lane lifecycle
+// (create/prompt/retry/backoff, budget reservation, structured-output corrective retries,
+// checkpoint-resume, effort/role resolution) driven through direct plugin-context mocks.
+// Worktree-isolation scenarios (createEditWorktree, concurrent worktree creation) live in
+// worktree-isolation.test.mjs; sandbox settlePendingHostOps concurrency lives in
+// sandbox-executor.test.mjs.
 
 async function tempRunDir(prefix) {
   const root = await fs.mkdtemp(path.join("/tmp", `${prefix}-`));
@@ -1488,47 +1490,6 @@ test("sessionDirectoryEchoStatus tolerates symlink-realpath divergence", async (
   await fs.symlink(real, link);
   t.after(() => fs.rm(real, { recursive: true, force: true }).then(() => fs.rm(link, { force: true })));
   assert.equal(sessionDirectoryEchoStatus({ data: { id: "s", directory: real } }, link).state, "verified");
-});
-
-test("createEditWorktree throws when the adapter's worktree path resolves to the primary directory", async () => {
-  const { root, dir } = await tempRunDir("child-agent-worktree-distinctness");
-  try {
-    const run = minimalChildRun(dir, {
-      adapter: {
-        async createWorktree() {
-          return { path: root };
-        },
-      },
-    });
-    const toolContext = { directory: root, sessionID: "parent-session" };
-    await assert.rejects(
-      createEditWorktree(run, toolContext, "lane:edit"),
-      /worktree path resolves to the primary tree/,
-    );
-  } finally {
-    await fs.rm(root, { recursive: true, force: true });
-  }
-});
-
-test("createEditWorktree rejects a symlink alias that physically resolves to the primary tree", async (t) => {
-  // fnop.1: path.resolve sees the distinct lexical alias; only realpath resolves the symlink
-  // back to the primary checkout. The isolation boundary must compare physical locations.
-  const { root, dir } = await tempRunDir("child-agent-worktree-symlink-alias");
-  const alias = path.join(dir, "primary-alias");
-  await fs.symlink(root, alias);
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
-  const run = minimalChildRun(dir, {
-    adapter: {
-      async createWorktree() {
-        return { path: alias };
-      },
-    },
-  });
-  const toolContext = { directory: root, sessionID: "parent-session" };
-  await assert.rejects(
-    createEditWorktree(run, toolContext, "lane:edit"),
-    /worktree path resolves to the primary tree/,
-  );
 });
 
 test("laneAuthorityInstruction renders grants and denials from authority flags", () => {

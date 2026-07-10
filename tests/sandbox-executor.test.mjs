@@ -136,6 +136,55 @@ test("executeSandbox rejects host operations that are started but not awaited", 
   }
 });
 
+// --- concurrency-2: sandbox-executor.js settlePendingHostOps concurrent aborts --------------
+// Reuses the established "unawaited host op" recipe (see the test above) to force
+// settlePendingHostOps to run, but populates run.activeLaneAbortControllers with several lanes
+// and stubs the underlying session.abort to record in-flight overlap, proving the aborts are
+// dispatched concurrently rather than serialized one-at-a-time inside the loop.
+
+test("settlePendingHostOps aborts active lanes concurrently instead of serializing them (concurrency-2)", async () => {
+  const laneCount = 4;
+  const activeLaneAbortControllers = new Map();
+  for (let i = 0; i < laneCount; i += 1) {
+    activeLaneAbortControllers.set(`lane-${i}`, {
+      abortController: new AbortController(),
+      childID: `child-${i}`,
+      directory: "/tmp/bughunt-concurrency-lane",
+    });
+  }
+  const run = minimalRun({ waitingAgents: [], activeLaneAbortControllers });
+
+  let inFlight = 0;
+  let maxInFlight = 0;
+  const pluginContext = {
+    __workflowPendingHostOpSettleTimeoutMs: 5000,
+    client: {
+      session: {
+        abort: async () => {
+          inFlight += 1;
+          maxInFlight = Math.max(maxInFlight, inFlight);
+          await sleep(60);
+          inFlight -= 1;
+        },
+      },
+    },
+  };
+
+  __setSandboxHostOpTestHook(async ({ op, run: hookRun }) => {
+    if (op === "noop" && hookRun.hostCalls === 2) await sleep(300);
+  });
+  try {
+    await assert.rejects(
+      executeSandbox(pluginContext, NO_CTX, run, '__host("noop", {}); return "done";', null, NO_DEPS),
+      /host operation.*must be awaited/i,
+    );
+  } finally {
+    __setSandboxHostOpTestHook(undefined);
+  }
+
+  assert.equal(maxInFlight, laneCount, `expected all ${laneCount} lane aborts in flight simultaneously, got max ${maxInFlight}`);
+});
+
 test("executeSandbox records structured diagnostics for dropped fanout failures", async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "workflow-fanout-diagnostics-"));
   try {

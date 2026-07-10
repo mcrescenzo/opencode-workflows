@@ -8,13 +8,14 @@ import { promisify } from "node:util";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { createWorktreeAdapter } from "../workflow-kernel/worktree-adapter.js";
-import { createIntegrationLaneWorktree } from "../workflow-kernel/child-agent-runner.js";
-import { executeSandbox, __setSandboxHostOpTestHook } from "../workflow-kernel/sandbox-executor.js";
+import { createEditWorktree, createIntegrationLaneWorktree } from "../workflow-kernel/child-agent-runner.js";
+import { DEFAULT_CAPABILITIES } from "./helpers/harness.mjs";
 
-// Regression coverage for three adversarially-verified concurrency findings (bughunt-ad31fd87,
-// bughunt-a3e1f548, bughunt-73843471): the worktree-creation mutex in worktree-adapter.js, the
-// lazy-init memoization in child-agent-runner.js's createIntegrationLaneWorktree, and the
-// concurrent-abort fix in sandbox-executor.js's settlePendingHostOps.
+// Worktree-isolation regression coverage, grouped by owning behavior: the concurrent git worktree
+// creation mutex (worktree-adapter.js), the integration-lane lazy-init memoization
+// (child-agent-runner.js's createIntegrationLaneWorktree), and the edit-worktree primary-tree
+// distinctness enforcement (child-agent-runner.js's createEditWorktree). These scenarios were
+// previously spread across child-agent-runner.test.mjs and bughunt-concurrency.test.mjs.
 
 const execFileAsync = promisify(execFile);
 
@@ -27,6 +28,67 @@ async function initRepo(prefix) {
   await execFileAsync("git", ["add", "README.md"], { cwd: directory });
   await execFileAsync("git", ["commit", "-m", "initial"], { cwd: directory });
   return directory;
+}
+
+async function tempRunDir(prefix) {
+  const root = await fs.mkdtemp(path.join("/tmp", `${prefix}-`));
+  const dir = path.join(root, ".opencode", "workflows", "runs", "run-child-agent");
+  await fs.mkdir(dir, { recursive: true });
+  return { root, dir };
+}
+
+function minimalChildRun(dir, overrides = {}) {
+  return {
+    id: "run-child-agent",
+    dir,
+    sourceHash: "source-hash",
+    runtimeArgs: null,
+    meta: { name: "child-agent-direct" },
+    authority: {
+      readOnly: true,
+      shell: false,
+      shellPolicy: { allow: [], deny: [] },
+      network: false,
+      mcp: false,
+      edit: false,
+      worktreeEdit: false,
+      integration: false,
+      profile: "read-only-review",
+    },
+    capabilities: { ...DEFAULT_CAPABILITIES },
+    adapter: {},
+    defaultChildModel: "test/model",
+    modelTiers: {},
+    laneTimeoutMs: 1_000,
+    agentsStarted: 0,
+    maxAgents: 5,
+    concurrency: 1,
+    activeAgents: 0,
+    waitingAgents: [],
+    tokens: { input: 0, output: 0, reasoning: 0 },
+    replayedTokens: { input: 0, output: 0, reasoning: 0 },
+    cost: 0,
+    replayedCost: 0,
+    cacheStats: { hits: 0, misses: 0, invalidated: 0 },
+    budgetCeilings: {},
+    laneOutcomes: { success: 0, failure: 0, cancelled: 0, timeout: 0, budget_stopped: 0 },
+    droppedLaneCount: 0,
+    laneRecords: new Map(),
+    resumeJournal: new Map(),
+    children: new Map(),
+    activeLaneAbortControllers: new Map(),
+    abortController: new AbortController(),
+    editWorktrees: [],
+    integrationWorktrees: [],
+    integrationPlan: { lanes: [] },
+    diagnostics: {},
+    nestedSnapshots: new Map(),
+    eventCount: 0,
+    journalRecords: 0,
+    status: "running",
+    startedAt: new Date().toISOString(),
+    ...overrides,
+  };
 }
 
 // --- concurrency-1: worktree-adapter.js createManagedWorktree/remove() mutex ----------------
@@ -131,70 +193,45 @@ test("createIntegrationLaneWorktree memoizes racing lazy-init into a single adap
   }
 });
 
-// --- concurrency-2: sandbox-executor.js settlePendingHostOps concurrent aborts --------------
-// Reuses the established "unawaited host op" recipe (see sandbox-executor.test.mjs) to force
-// settlePendingHostOps to run, but populates run.activeLaneAbortControllers with several lanes
-// and stubs the underlying session.abort to record in-flight overlap, proving the aborts are
-// dispatched concurrently rather than serialized one-at-a-time inside the loop.
+// --- createEditWorktree: edit-worktree primary-tree distinctness enforcement ---------------
 
-const NO_CTX = {};
-const NO_DEPS = {};
-
-function minimalRun(overrides = {}) {
-  return {
-    id: "bughunt-concurrency-2-test",
-    sourcePath: "<bughunt-concurrency-2-test>",
-    hostCalls: 0,
-    tokens: { input: 7, output: 5, reasoning: 1 },
-    cost: 0.12,
-    replayedTokens: { input: 3, output: 0, reasoning: 0 },
-    replayedCost: 0.04,
-    budgetCeilings: {},
-    maxAgents: 8,
-    agentsStarted: 2,
-    ...overrides,
-  };
-}
-
-test("settlePendingHostOps aborts active lanes concurrently instead of serializing them (concurrency-2)", async () => {
-  const laneCount = 4;
-  const activeLaneAbortControllers = new Map();
-  for (let i = 0; i < laneCount; i += 1) {
-    activeLaneAbortControllers.set(`lane-${i}`, {
-      abortController: new AbortController(),
-      childID: `child-${i}`,
-      directory: "/tmp/bughunt-concurrency-lane",
-    });
-  }
-  const run = minimalRun({ waitingAgents: [], activeLaneAbortControllers });
-
-  let inFlight = 0;
-  let maxInFlight = 0;
-  const pluginContext = {
-    __workflowPendingHostOpSettleTimeoutMs: 5000,
-    client: {
-      session: {
-        abort: async () => {
-          inFlight += 1;
-          maxInFlight = Math.max(maxInFlight, inFlight);
-          await sleep(60);
-          inFlight -= 1;
+test("createEditWorktree throws when the adapter's worktree path resolves to the primary directory", async () => {
+  const { root, dir } = await tempRunDir("child-agent-worktree-distinctness");
+  try {
+    const run = minimalChildRun(dir, {
+      adapter: {
+        async createWorktree() {
+          return { path: root };
         },
       },
-    },
-  };
-
-  __setSandboxHostOpTestHook(async ({ op, run: hookRun }) => {
-    if (op === "noop" && hookRun.hostCalls === 2) await sleep(300);
-  });
-  try {
+    });
+    const toolContext = { directory: root, sessionID: "parent-session" };
     await assert.rejects(
-      executeSandbox(pluginContext, NO_CTX, run, '__host("noop", {}); return "done";', null, NO_DEPS),
-      /host operation.*must be awaited/i,
+      createEditWorktree(run, toolContext, "lane:edit"),
+      /worktree path resolves to the primary tree/,
     );
   } finally {
-    __setSandboxHostOpTestHook(undefined);
+    await fs.rm(root, { recursive: true, force: true });
   }
+});
 
-  assert.equal(maxInFlight, laneCount, `expected all ${laneCount} lane aborts in flight simultaneously, got max ${maxInFlight}`);
+test("createEditWorktree rejects a symlink alias that physically resolves to the primary tree", async (t) => {
+  // fnop.1: path.resolve sees the distinct lexical alias; only realpath resolves the symlink
+  // back to the primary checkout. The isolation boundary must compare physical locations.
+  const { root, dir } = await tempRunDir("child-agent-worktree-symlink-alias");
+  const alias = path.join(dir, "primary-alias");
+  await fs.symlink(root, alias);
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const run = minimalChildRun(dir, {
+    adapter: {
+      async createWorktree() {
+        return { path: alias };
+      },
+    },
+  });
+  const toolContext = { directory: root, sessionID: "parent-session" };
+  await assert.rejects(
+    createEditWorktree(run, toolContext, "lane:edit"),
+    /worktree path resolves to the primary tree/,
+  );
 });
