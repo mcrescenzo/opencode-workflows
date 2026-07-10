@@ -86,8 +86,12 @@ A public release must not equate "skipped" with "verified":
   (the full no-token matrix) passes before opening a pull request.
 - Keep `README.md`, `AGENTS.md`, and the relevant `docs/` file in sync with any
   behavior or configuration change.
-- Preserve the kernel invariants in `AGENTS.md` (single plugin export, in-place
-  `hooks`/`output.parts` mutation, module-level shared state, bounded maps,
-  model IDs from config) — see `AGENTS.md` for the full list.
+- Preserve the workflow-boundary and runtime-trust invariants documented in
+  `AGENTS.md` (the "Workflow Boundaries" and "Runtime Trust Model And Sensitive
+  State" sections): the kernel ships no domain drain workflow or domain
+  extension (drains come from configured trusted extensions, invoked by name),
+  structured-output is text-only with no native `json_schema` output-format
+  route, and elevated authority is checked once per server via a memoized
+  `GET /global/health` fingerprint — not an LLM-probe live-gate subsystem.
 - Run `npm run test:lockfile-sync` if you changed `package.json` dependencies,
   and keep `bun.lock` (the canonical lockfile) up to date.

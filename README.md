@@ -214,8 +214,16 @@ source checkout, or follow the GitHub links in the table.
 | Packaged reference surfaces | `README.md`, `skills/*/SKILL.md`, `docs/workflow-plugin.md` | **Yes** |
 | Active operator references (GitHub only) | [docs/workflow-recipes.md](https://github.com/mcrescenzo/opencode-workflows/blob/main/docs/workflow-recipes.md), [docs/plugin-system-tests.md](https://github.com/mcrescenzo/opencode-workflows/blob/main/docs/plugin-system-tests.md), [docs/run-audit-playbook.md](https://github.com/mcrescenzo/opencode-workflows/blob/main/docs/run-audit-playbook.md), [docs/goal-supervision-autonomous-drains.md](https://github.com/mcrescenzo/opencode-workflows/blob/main/docs/goal-supervision-autonomous-drains.md) | No |
 | Active technical contracts (GitHub only) | [docs/workflow-extensions.md](https://github.com/mcrescenzo/opencode-workflows/blob/main/docs/workflow-extensions.md) | No |
-| Historical snapshots / audits / completed plans (GitHub only) | `docs/release-gate-validation-2026-06-16.md`, `docs/dogfood-rollout-2026-06-16.md`, `docs/workflow-autonomous-harness-design.md`, `docs/review-2026-06-19-bug-robustness-remediation-plan.md`, `docs/general-purpose-harness-extraction-plan.md`, `docs/superpowers/specs/2026-06-23-session-aware-model-tiering-design.md`, `docs/superpowers/plans/2026-06-23-session-aware-model-tiering-plan.md`, `docs/superpowers/plans/2026-06-23-port-repo-bughunt-to-opencode.md`, `docs/superpowers/specs/2026-07-07-toast-status-cards-design.md`, `docs/superpowers/plans/2026-07-07-design-c-gate-simplification.md`, `docs/superpowers/plans/2026-07-08-agent-surface-docs-accuracy.md`, `docs/superpowers/specs/2026-07-08-deep-research-bundled-workflow-design.md`, `docs/superpowers/plans/2026-07-08-deep-research-bundled-workflow.md`, `docs/superpowers/plans/2026-07-08-inline-approval-rekey-hardening.md`, `docs/superpowers/specs/2026-07-08-pure-architecture-extraction-design.md`, `docs/superpowers/plans/2026-07-08-pure-architecture-extraction.md`, `docs/superpowers/plans/2026-07-09-deep-research-hardening.md` | No |
-| Roadmap / planning (GitHub only) | `docs/workflow-autonomous-harness-plan.md`, `docs/claude-parity-roadmap.md` | No |
+| Roadmap / planning (GitHub only) | `docs/claude-parity-roadmap.md` | No |
+| Historical snapshots / audits / completed plans (GitHub only) | `docs/release-gate-validation-2026-06-16.md`, `docs/dogfood-rollout-2026-06-16.md`, `docs/workflow-autonomous-harness-design.md`, `docs/workflow-autonomous-harness-plan.md`, `docs/review-2026-06-19-bug-robustness-remediation-plan.md`, `docs/general-purpose-harness-extraction-plan.md`, `docs/superpowers/specs/2026-06-23-session-aware-model-tiering-design.md`, `docs/superpowers/plans/2026-06-23-session-aware-model-tiering-plan.md`, `docs/superpowers/plans/2026-06-23-port-repo-bughunt-to-opencode.md`, `docs/superpowers/specs/2026-07-07-toast-status-cards-design.md`, `docs/superpowers/plans/2026-07-07-design-c-gate-simplification.md`, `docs/superpowers/plans/2026-07-08-agent-surface-docs-accuracy.md`, `docs/superpowers/specs/2026-07-08-deep-research-bundled-workflow-design.md`, `docs/superpowers/plans/2026-07-08-deep-research-bundled-workflow.md`, `docs/superpowers/plans/2026-07-08-inline-approval-rekey-hardening.md`, `docs/superpowers/specs/2026-07-08-pure-architecture-extraction-design.md`, `docs/superpowers/plans/2026-07-08-pure-architecture-extraction.md`, `docs/superpowers/plans/2026-07-09-deep-research-hardening.md` | No |
+
+**Drains and extensions.** The kernel ships no domain drain workflow or domain
+extension — drain workflows (`harness: "drain"`) are contributed by configured
+trusted extensions and invoked by name (see `docs/workflow-extensions.md` and
+the "Workflow Boundaries" section of `AGENTS.md`).
+`docs/goal-supervision-autonomous-drains.md` describes the `/goal` oversight
+boundary for such extension-supplied drains; it does not itself ship or assume a
+bundled drain workflow.
 
 Canonical safety references — apply authority and primary-tree writes, the
 raw-artifact source-of-truth hierarchy, lifecycle recovery and cleanup, and the
@@ -277,4 +285,10 @@ policy, and release-readiness notes. Verification matrix: `npm test`;
 
 ## Roadmap
 
-The autonomous-harness plan lives in `docs/workflow-autonomous-harness-plan.md`.
+The current roadmap is `docs/claude-parity-roadmap.md` — proposed parity work
+where every item is marked proposed or **[shipped]**. The earlier
+`docs/workflow-autonomous-harness-plan.md` is a **historical** moonshot plan
+retained for context (its beads domain and live-gate subsystem were implemented
+and later removed; see CHANGELOG 0.2.0). Current autonomous-drain behavior comes
+from configured trusted extensions (`docs/workflow-extensions.md`), not a
+bundled domain workflow.
