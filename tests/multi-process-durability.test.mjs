@@ -18,19 +18,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import WorkflowPlugin from "../workflow-kernel/index.js";
-
-const { __test } = WorkflowPlugin;
-const {
-  acquireWorkflowLock,
-  readLock,
-  lockPathForRun,
-  clearStaleRunLocks,
-  processAppearsAlive,
-  runDirForRoot,
-  writeJsonAtomic,
-  readRunEntry,
-} = __test;
+import { acquireWorkflowLock, readLock, lockPathForRun, clearStaleRunLocks } from "../workflow-kernel/run-store-locks.js";
+import { processAppearsAlive, runDirForRoot, writeJsonAtomic, currentProcessInfo } from "../workflow-kernel/run-store-fs.js";
+import { readRunEntry } from "../workflow-kernel/run-store-status-format.js";
 
 const PLUGIN_ROOT = path.join(import.meta.dirname, "..");
 
@@ -108,8 +98,8 @@ async function killChild(child) {
 const HOLDER_SRC = `
 import process from "node:process";
 const [pluginRoot, lockPath] = process.argv.slice(2);
-const { default: WP } = await import(pluginRoot + "/workflow-kernel/index.js");
-const { acquireWorkflowLock } = WP.__test;
+const { acquireWorkflowLock } = await import(pluginRoot + "/workflow-kernel/run-store-locks.js");
+const { currentProcessInfo } = await import(pluginRoot + "/workflow-kernel/run-store-fs.js");
 let release;
 try {
   release = await acquireWorkflowLock(lockPath, { operation: "run" });
@@ -117,7 +107,7 @@ try {
   if (typeof process.send === "function") process.send({ error: String((error && error.message) || error) });
   process.exit(1);
 }
-const info = await WP.__test.currentProcessInfo();
+const info = await currentProcessInfo();
 if (typeof process.send === "function") process.send({ ready: true, pid: process.pid, info });
 process.on("message", (msg) => {
   if (msg && msg.release) {
@@ -133,8 +123,8 @@ process.on("message", (msg) => {
 const SCOUT_SRC = `
 import process from "node:process";
 const [pluginRoot] = process.argv.slice(2);
-const { default: WP } = await import(pluginRoot + "/workflow-kernel/index.js");
-const info = await WP.__test.currentProcessInfo();
+const { currentProcessInfo } = await import(pluginRoot + "/workflow-kernel/run-store-fs.js");
+const info = await currentProcessInfo();
 if (typeof process.send === "function") process.send({ info });
 `;
 
@@ -144,8 +134,7 @@ if (typeof process.send === "function") process.send({ info });
 const CONTENDER_SRC = `
 import process from "node:process";
 const [pluginRoot, lockPath] = process.argv.slice(2);
-const { default: WP } = await import(pluginRoot + "/workflow-kernel/index.js");
-const { acquireWorkflowLock } = WP.__test;
+const { acquireWorkflowLock } = await import(pluginRoot + "/workflow-kernel/run-store-locks.js");
 try {
   const release = await acquireWorkflowLock(lockPath, { operation: "run" });
   if (typeof process.send === "function") process.send({ acquired: true, pid: process.pid });

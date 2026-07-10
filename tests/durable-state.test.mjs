@@ -6,6 +6,48 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import WorkflowPlugin from "../workflow-kernel/index.js";
+import { acquireWorkflowLock, clearStaleRunLocks, lockPathForRun, readLock, runLocksForEntry } from "../workflow-kernel/run-store-locks.js";
+import { ACTIVE_STATUSES, DURABLE_STATE_VERSION, MAX_EVENTS, MAX_JOURNAL_RECORDS } from "../workflow-kernel/constants.js";
+import {
+  appendApplyLedger,
+  appendDomainLedger,
+  appendEvent,
+  appendIntegrationLedger,
+  appendJournal,
+  appendLedger,
+  appendValidationLedger,
+  applyLedgerHasCompleted,
+  compactJournal,
+  domainMutationIdempotencyKey,
+  finalizeStagedDomainMutations,
+  laneSignature,
+  loadJournal,
+  readJsonlLedger,
+  runDomainMutation,
+  stageDomainMutation,
+} from "../workflow-kernel/event-journal.js";
+import {
+  assertSafeRunId,
+  ensureRunRoot,
+  PRIVATE_DIR_MODE,
+  PRIVATE_FILE_MODE,
+  processAppearsAlive,
+  runDirForRoot,
+  runRoots,
+  safeProjectionName,
+  writeJsonAtomic,
+} from "../workflow-kernel/run-store-fs.js";
+import { budgetSnapshot, checkBudgetBeforeLaunch, normalizeBudgetCeilings } from "../workflow-kernel/budget-accounting.js";
+import { cleanupWorktrees } from "../workflow-kernel/workflow-plugin.js";
+import { pendingNotificationPaths } from "../workflow-kernel/lifecycle-control.js";
+import { readRunEntry } from "../workflow-kernel/run-store-status-format.js";
+import { redactValue, truncateText } from "../workflow-kernel/text-json.js";
+import { rehydrateRunFromPriorState } from "../workflow-kernel/run-store-rehydrate.js";
+import { resolveWorkflowSource, workflowFileName } from "../workflow-kernel/workflow-source.js";
+import { writeState, __setWriteStateTestHook } from "../workflow-kernel/run-store-state.js";
+import { writeLaneProjection } from "../workflow-kernel/run-store-projections.js";
+import { normalizePatternList, parseModel, WORKFLOW_MUTATING_TOOLS } from "../workflow-kernel/authority-policy.js";
+import { withTimeout } from "../workflow-kernel/async-util.js";
 
 const { __test } = WorkflowPlugin;
 
@@ -79,15 +121,15 @@ test("durable run state writes ledgers and projection files", async () => {
     },
   });
 
-  await __test.appendIntegrationLedger(run, { phase: "lane-committed", callId: "lane:1" });
-  await __test.appendValidationLedger(run, { phase: "started", validationKey: "central" });
-  await __test.appendValidationLedger(run, { phase: "completed", validationKey: "central" });
-  await __test.writeLaneProjection(run, "lane:1", { status: "running", startedAt: "2026-06-15T00:00:10.000Z", taskSummary: "Implement lane one", tokens: { input: 1, output: 2, reasoning: 0 } });
-  await __test.writeLaneProjection(run, "lane:1", { status: "completed", outcome: "success", completedAt: "2026-06-15T00:00:20.000Z", tokens: { input: 3, output: 5, reasoning: 1 } });
-  await __test.writeState(run);
+  await appendIntegrationLedger(run, { phase: "lane-committed", callId: "lane:1" });
+  await appendValidationLedger(run, { phase: "started", validationKey: "central" });
+  await appendValidationLedger(run, { phase: "completed", validationKey: "central" });
+  await writeLaneProjection(run, "lane:1", { status: "running", startedAt: "2026-06-15T00:00:10.000Z", taskSummary: "Implement lane one", tokens: { input: 1, output: 2, reasoning: 0 } });
+  await writeLaneProjection(run, "lane:1", { status: "completed", outcome: "success", completedAt: "2026-06-15T00:00:20.000Z", tokens: { input: 3, output: 5, reasoning: 1 } });
+  await writeState(run);
 
   const state = JSON.parse(await fs.readFile(path.join(dir, "state.json"), "utf8"));
-  assert.equal(state.stateVersion, __test.DURABLE_STATE_VERSION);
+  assert.equal(state.stateVersion, DURABLE_STATE_VERSION);
   assert.equal(state.durability.ledgers["integration-ledger"].records, 1);
   assert.equal(state.durability.ledgers["validation-ledger"].records, 2);
   assert.equal(state.laneRecords.length, 1);
@@ -116,7 +158,7 @@ test("writeState serializes concurrent writes so a delayed stale snapshot cannot
   let hookCalls = 0;
   let releaseFirst;
   const firstPaused = new Promise((resolve) => {
-    __test.__setWriteStateTestHook(async ({ state }) => {
+    __setWriteStateTestHook(async ({ state }) => {
       hookCalls += 1;
       if (hookCalls === 1) {
         assert.equal(state.status, "running");
@@ -129,7 +171,7 @@ test("writeState serializes concurrent writes so a delayed stale snapshot cannot
   });
 
   try {
-    const first = __test.writeState(run);
+    const first = writeState(run);
     await firstPaused;
 
     run.status = "completed";
@@ -140,7 +182,7 @@ test("writeState serializes concurrent writes so a delayed stale snapshot cannot
       outcome: "success",
       completedAt: "2026-06-15T00:00:30.000Z",
     });
-    const second = __test.writeState(run);
+    const second = writeState(run);
 
     const earlySecondResult = await Promise.race([
       second.then(() => "completed"),
@@ -157,7 +199,7 @@ test("writeState serializes concurrent writes so a delayed stale snapshot cannot
     assert.deepEqual(state.laneRecords.map((record) => record.callId), ["lane:complete"]);
     assert.equal(hookCalls, 2);
   } finally {
-    __test.__setWriteStateTestHook(undefined);
+    __setWriteStateTestHook(undefined);
     await fs.rm(dir, { recursive: true, force: true });
   }
 });
@@ -182,7 +224,7 @@ test("cleanupWorktrees ignores ledger and event append failures", async () => {
     return await realAppendFile.call(fs, filePath, ...rest);
   };
   try {
-    assert.equal(await __test.cleanupWorktrees(run), true);
+    assert.equal(await cleanupWorktrees(run), true);
     assert.equal(run.worktreeCleanup.integration[0].preserved, true);
     assert.equal(run.worktreeCleanup.integration[0].reason, "dirty");
   } finally {
@@ -200,24 +242,24 @@ test("ensureRunRoot reports when all candidate roots are unwritable", async (t) 
   });
 
   await assert.rejects(
-    () => __test.ensureRunRoot({ directory: dir, worktree: dir }),
+    () => ensureRunRoot({ directory: dir, worktree: dir }),
     /Could not create a writable workflow run directory/,
   );
-  assert.deepEqual(attemptedRoots, __test.runRoots({ directory: dir, worktree: dir }));
+  assert.deepEqual(attemptedRoots, runRoots({ directory: dir, worktree: dir }));
 });
 
 test("appendLedger accepts canonical lowercase ledgers and rejects unsafe names", async () => {
   const dir = await tempDir("workflow-ledger-file-name");
   try {
-    await __test.appendLedger(dir, "domain-ledger.jsonl", { phase: "started", mutationKey: "domain:1" });
-    await __test.appendLedger(dir, "custom-ledger.jsonl", { phase: "started", key: "custom:1" });
+    await appendLedger(dir, "domain-ledger.jsonl", { phase: "started", mutationKey: "domain:1" });
+    await appendLedger(dir, "custom-ledger.jsonl", { phase: "started", key: "custom:1" });
 
     assert.match(await fs.readFile(path.join(dir, "domain-ledger.jsonl"), "utf8"), /"mutationKey":"domain:1"/);
     assert.match(await fs.readFile(path.join(dir, "custom-ledger.jsonl"), "utf8"), /"key":"custom:1"/);
 
     for (const fileName of ["../../etc/passwd.jsonl", "nested/domain-ledger.jsonl", "", "custom-ledger.JSONL"]) {
       await assert.rejects(
-        () => __test.appendLedger(dir, fileName, { phase: "started" }),
+        () => appendLedger(dir, fileName, { phase: "started" }),
         /Invalid ledger file name/,
         `${fileName || "empty filename"} should be rejected`,
       );
@@ -229,11 +271,11 @@ test("appendLedger accepts canonical lowercase ledgers and rejects unsafe names"
 
 test("appendLedger rejects missing run directories", async () => {
   await assert.rejects(
-    () => __test.appendLedger(undefined, "domain-ledger.jsonl", { phase: "started" }),
+    () => appendLedger(undefined, "domain-ledger.jsonl", { phase: "started" }),
     /appendLedger requires a run directory/,
   );
   await assert.rejects(
-    () => __test.appendLedger({}, "domain-ledger.jsonl", { phase: "started" }),
+    () => appendLedger({}, "domain-ledger.jsonl", { phase: "started" }),
     /appendLedger requires a run directory/,
   );
 });
@@ -252,78 +294,78 @@ test("applyLedgerHasCompleted detects matching completed records and skips corru
     "utf8",
   );
 
-  assert.equal(await __test.applyLedgerHasCompleted(dir, "plan-a"), true);
-  assert.equal(await __test.applyLedgerHasCompleted(dir, "missing-plan"), false);
-  assert.equal(await __test.applyLedgerHasCompleted(path.join(dir, "missing"), "plan-a"), false);
+  assert.equal(await applyLedgerHasCompleted(dir, "plan-a"), true);
+  assert.equal(await applyLedgerHasCompleted(dir, "missing-plan"), false);
+  assert.equal(await applyLedgerHasCompleted(path.join(dir, "missing"), "plan-a"), false);
 
-  await __test.appendApplyLedger(dir, { phase: "completed", diffPlanHash: "plan-c" });
-  assert.equal(await __test.applyLedgerHasCompleted(dir, "plan-c"), true);
+  await appendApplyLedger(dir, { phase: "completed", diffPlanHash: "plan-c" });
+  assert.equal(await applyLedgerHasCompleted(dir, "plan-c"), true);
 });
 
 test("truncateText preserves exact max length and truncates max+1", () => {
   const exact = "x".repeat(40);
-  assert.equal(__test.truncateText(exact, 40), exact);
+  assert.equal(truncateText(exact, 40), exact);
 
-  const truncated = __test.truncateText(`${exact}y`, 40);
+  const truncated = truncateText(`${exact}y`, 40);
   assert.equal(truncated.length, 40);
   // 41-char input at max=40: the "...[truncated 24 chars]" suffix (23 chars) is carved out
   // of the budget, leaving a 17-char head — so 41 - 17 = 24 chars are actually dropped.
   assert.match(truncated, /\.\.\.\[truncated 24 chars\]$/);
 
-  const surrogate = __test.truncateText(`prefix ${"x".repeat(20)}😀 suffix`, 40);
+  const surrogate = truncateText(`prefix ${"x".repeat(20)}😀 suffix`, 40);
   assert.notEqual(surrogate.charCodeAt(surrogate.indexOf("...[truncated") - 1), 0xd83d);
   assert.doesNotMatch(surrogate, /\ud83d(?![\udc00-\udfff])/u);
 });
 
 test("parseModel and normalizePatternList cover split and validation edges", () => {
-  assert.deepEqual(__test.parseModel("openai/gpt/4.1"), { providerID: "openai", modelID: "gpt/4.1" });
-  assert.deepEqual(__test.parseModel("a/b"), { providerID: "a", modelID: "b" });
-  assert.equal(__test.parseModel("/model"), undefined);
-  assert.equal(__test.parseModel("provider/"), undefined);
-  assert.equal(__test.parseModel(42), undefined);
+  assert.deepEqual(parseModel("openai/gpt/4.1"), { providerID: "openai", modelID: "gpt/4.1" });
+  assert.deepEqual(parseModel("a/b"), { providerID: "a", modelID: "b" });
+  assert.equal(parseModel("/model"), undefined);
+  assert.equal(parseModel("provider/"), undefined);
+  assert.equal(parseModel(42), undefined);
 
-  assert.deepEqual(__test.normalizePatternList([" bd status ", "bd status"], "shell.allow"), ["bd status"]);
+  assert.deepEqual(normalizePatternList([" bd status ", "bd status"], "shell.allow"), ["bd status"]);
   assert.deepEqual(
-    __test.normalizePatternList(Array.from({ length: 1000 }, () => " bd status "), "shell.allow"),
+    normalizePatternList(Array.from({ length: 1000 }, () => " bd status "), "shell.allow"),
     ["bd status"],
   );
-  assert.throws(() => __test.normalizePatternList("   ", "shell.allow"), /shell\.allow entries must be non-empty strings/);
-  assert.throws(() => __test.normalizePatternList(["bd status", 1], "shell.allow"), /shell\.allow entries must be non-empty strings/);
+  assert.throws(() => normalizePatternList("   ", "shell.allow"), /shell\.allow entries must be non-empty strings/);
+  assert.throws(() => normalizePatternList(["bd status", 1], "shell.allow"), /shell\.allow entries must be non-empty strings/);
 });
 
 test("workflow source helpers reject missing source and invalid names", async () => {
   await assert.rejects(
-    () => __test.resolveWorkflowSource({ directory: process.cwd(), worktree: process.cwd() }, {}),
+    () => resolveWorkflowSource({ directory: process.cwd(), worktree: process.cwd() }, {}),
     /Provide `source`, `scriptPath`, or `name`/,
   );
 
-  assert.equal(__test.workflowFileName("valid-name"), "valid-name.js");
-  assert.throws(() => __test.workflowFileName("has spaces"), /Workflow name must be a simple slug/);
-  assert.throws(() => __test.workflowFileName("a".repeat(64)), /Workflow name must be a simple slug/);
+  assert.equal(workflowFileName("valid-name"), "valid-name.js");
+  assert.throws(() => workflowFileName("has spaces"), /Workflow name must be a simple slug/);
+  assert.throws(() => workflowFileName("a".repeat(64)), /Workflow name must be a simple slug/);
 });
 
 test("assertSafeRunId covers traversal, dot names, and length boundaries", () => {
-  assert.equal(__test.assertSafeRunId("a"), "a");
-  assert.equal(__test.assertSafeRunId("a".repeat(128)), "a".repeat(128));
+  assert.equal(assertSafeRunId("a"), "a");
+  assert.equal(assertSafeRunId("a".repeat(128)), "a".repeat(128));
 
   for (const runId of [".", "..", "run/../../secret", "../secret", "/absolute", "", "a".repeat(129)]) {
     assert.throws(
-      () => __test.assertSafeRunId(runId),
+      () => assertSafeRunId(runId),
       /runId must be a simple run id without path separators/,
       `${runId || "empty run id"} should be rejected`,
     );
   }
 
   assert.throws(
-    () => __test.runDirForRoot("/tmp/workflow-root", "../secret"),
+    () => runDirForRoot("/tmp/workflow-root", "../secret"),
     /runId must be a simple run id without path separators/,
   );
 });
 
 test("safeProjectionName sanitizes, caps, and falls back for punctuation-only ids", () => {
-  assert.equal(__test.safeProjectionName(" lane:/one "), "lane_one");
-  assert.equal(__test.safeProjectionName("a".repeat(140)).length, 120);
-  assert.match(__test.safeProjectionName("!!!"), /^[0-9a-f]{16}$/);
+  assert.equal(safeProjectionName(" lane:/one "), "lane_one");
+  assert.equal(safeProjectionName("a".repeat(140)).length, 120);
+  assert.match(safeProjectionName("!!!"), /^[0-9a-f]{16}$/);
 });
 
 test("rehydrateRunFromPriorState ignores invalid prior field types", async () => {
@@ -336,7 +378,7 @@ test("rehydrateRunFromPriorState ignores invalid prior field types", async () =>
     laneRecords: new Map([["lane:1", { callId: "lane:1", status: "completed" }]]),
   });
 
-  __test.rehydrateRunFromPriorState(run, {
+  rehydrateRunFromPriorState(run, {
     agentsStarted: "3",
     maxAgents: 0,
     currentPhase: 42,
@@ -359,7 +401,7 @@ test("withTimeout rejects immediately for pre-aborted signals and preserves time
   let abortCleanupCalled = false;
 
   await assert.rejects(
-    () => __test.withTimeout(() => {
+    () => withTimeout(() => {
       called = true;
       return "done";
     }, { timeoutMs: 100, signal: controller.signal, label: "pre-aborted", onTimeout: () => { abortCleanupCalled = true; } }),
@@ -371,7 +413,7 @@ test("withTimeout rejects immediately for pre-aborted signals and preserves time
 
   const abortDuringWait = new AbortController();
   let signalAbortCleanupCalled = false;
-  const pending = __test.withTimeout(() => new Promise(() => {}), {
+  const pending = withTimeout(() => new Promise(() => {}), {
     timeoutMs: 1000,
     signal: abortDuringWait.signal,
     label: "abort-during-wait",
@@ -383,7 +425,7 @@ test("withTimeout rejects immediately for pre-aborted signals and preserves time
   assert.equal(signalAbortCleanupCalled, true, "signal-abort branch must run timeout/abort cleanup");
 
   await assert.rejects(
-    () => __test.withTimeout(() => new Promise(() => {}), {
+    () => withTimeout(() => new Promise(() => {}), {
       timeoutMs: 0,
       label: "tiny timeout",
       onTimeout: async () => {
@@ -395,7 +437,7 @@ test("withTimeout rejects immediately for pre-aborted signals and preserves time
 
   const started = Date.now();
   await assert.rejects(
-    () => __test.withTimeout(() => new Promise(() => {}), {
+    () => withTimeout(() => new Promise(() => {}), {
       timeoutMs: 1,
       label: "hung cleanup",
       onTimeout: async () => await new Promise(() => {}),
@@ -414,24 +456,24 @@ test("checkBudgetBeforeLaunch enforces equality boundaries across live and repla
     budgetCeilings: { maxCost: 1, maxTokens: 10 },
   });
 
-  assert.doesNotThrow(() => __test.checkBudgetBeforeLaunch(run));
+  assert.doesNotThrow(() => checkBudgetBeforeLaunch(run));
 
   run.replayedCost = 0.01;
-  assert.throws(() => __test.checkBudgetBeforeLaunch(run), (error) => error?.code === "WORKFLOW_BUDGET_STOPPED");
+  assert.throws(() => checkBudgetBeforeLaunch(run), (error) => error?.code === "WORKFLOW_BUDGET_STOPPED");
 
   run.cost = 0;
   run.replayedCost = 0;
   run.tokens.reasoning = 3;
-  assert.throws(() => __test.checkBudgetBeforeLaunch(run), (error) => error?.code === "WORKFLOW_BUDGET_STOPPED");
+  assert.throws(() => checkBudgetBeforeLaunch(run), (error) => error?.code === "WORKFLOW_BUDGET_STOPPED");
 
   run.tokens = { input: NaN, output: 1, reasoning: 1 };
   run.replayedTokens = zeroTokens();
-  assert.doesNotThrow(() => __test.checkBudgetBeforeLaunch(run));
-  assert.deepEqual(__test.normalizeBudgetCeilings({ maxCost: 0, maxTokens: 1.5 }), { maxCost: 0, maxTokens: undefined });
+  assert.doesNotThrow(() => checkBudgetBeforeLaunch(run));
+  assert.deepEqual(normalizeBudgetCeilings({ maxCost: 0, maxTokens: 1.5 }), { maxCost: 0, maxTokens: undefined });
 });
 
 test("redaction preserves numeric usage tokens but redacts credential tokens", () => {
-  const redacted = __test.redactValue({
+  const redacted = redactValue({
     tokens: { input: 10, output: 2, reasoning: 1 },
     accessToken: "secret-token",
     nested: { idToken: "secret-id-token", tokenUsage: { input: 1, output: 1 } },
@@ -446,7 +488,7 @@ test("redaction preserves numeric usage tokens but redacts credential tokens", (
 test("resume rehydrates worktree, integration, lane, and budget state", async () => {
   const dir = await tempDir("workflow-rehydrate-state");
   const run = makeRun(dir, { agentsStarted: 0, editWorktrees: [], integrationWorktrees: [], laneRecords: new Map() });
-  __test.rehydrateRunFromPriorState(run, {
+  rehydrateRunFromPriorState(run, {
     startedAt: "2026-06-14T23:00:00.000Z",
     currentPhase: "integrate",
     agentsStarted: 3,
@@ -472,7 +514,7 @@ test("resume rehydrates worktree, integration, lane, and budget state", async ()
   assert.equal(run.maxAgents, 5);
   assert.deepEqual(run.budgetCeilings, { maxCost: 3, maxTokens: 20 });
   assert.equal(run.authority.profile, "read-only-review");
-  assert.equal(__test.budgetSnapshot(run).remainingAgents, 2);
+  assert.equal(budgetSnapshot(run).remainingAgents, 2);
   // R9: prior historical spend (prior live + prior replayed) is folded into the replayed
   // counters and the live counters reset to zero for this segment, so total spend equals
   // the real prior spend (not doubled). Live tokens/cost: 10/2/1 and 1.25; prior replayed:
@@ -481,7 +523,7 @@ test("resume rehydrates worktree, integration, lane, and budget state", async ()
   assert.equal(run.cost, 0);
   assert.deepEqual(run.replayedTokens, { input: 14, output: 3, reasoning: 1 });
   assert.equal(run.replayedCost, 1.75);
-  const snapshot = __test.budgetSnapshot(run);
+  const snapshot = budgetSnapshot(run);
   assert.deepEqual(snapshot.total.tokens, { input: 14, output: 3, reasoning: 1 });
   assert.equal(snapshot.total.cost, 1.75);
   assert.equal(run.cacheStats.hits, 2);
@@ -493,7 +535,7 @@ test("resume rehydrates worktree, integration, lane, and budget state", async ()
   // keeps the dead-maxCost honesty caveat. And it is warning-only: checkBudgetBeforeLaunch must
   // not throw merely because the flag is set (free/local providers legitimately report cost 0).
   assert.equal(run.costTrackingUnreliable, true);
-  assert.doesNotThrow(() => __test.checkBudgetBeforeLaunch(run));
+  assert.doesNotThrow(() => checkBudgetBeforeLaunch(run));
 });
 
 test("R9: resume does not double-count prior spend; ceiling reflects real spend", async () => {
@@ -503,7 +545,7 @@ test("R9: resume does not double-count prior spend; ceiling reflects real spend"
   // Prior segment(s) spent: 800 input + 100 output + 100 reasoning = 1000 tokens live,
   // plus 50/30/20 = 100 tokens already replayed from an even earlier segment, and
   // 4.0 + 1.0 = 5.0 cost. Real historical total spend = 1100 tokens / 5.0 cost.
-  __test.rehydrateRunFromPriorState(run, {
+  rehydrateRunFromPriorState(run, {
     agentsStarted: 5,
     maxAgents: 50,
     budgetCeilings: { maxCost: 6, maxTokens: 1200 },
@@ -516,7 +558,7 @@ test("R9: resume does not double-count prior spend; ceiling reflects real spend"
   // Before the fix, rehydrate copied prior live spend into run.tokens AND replay re-added
   // it into replayedTokens, so total would read 2100 tokens / 9.0 cost (~2x) and trip the
   // 1200-token / 6.0-cost ceiling even though real spend (1100 / 5.0) is well under it.
-  const snapshotAfterResume = __test.budgetSnapshot(run);
+  const snapshotAfterResume = budgetSnapshot(run);
   assert.deepEqual(snapshotAfterResume.total.tokens, { input: 850, output: 130, reasoning: 120 });
   assert.equal(
     snapshotAfterResume.total.tokens.input + snapshotAfterResume.total.tokens.output + snapshotAfterResume.total.tokens.reasoning,
@@ -531,8 +573,8 @@ test("R9: resume does not double-count prior spend; ceiling reflects real spend"
   // carried-forward replayed counters already represent the full historical total. The
   // production cache-hit path returns the cached result without touching the counters, so
   // total spend is stable across replay and the ceiling (above real spend) does not trip.
-  assert.doesNotThrow(() => __test.checkBudgetBeforeLaunch(run));
-  const snapshotAfterReplay = __test.budgetSnapshot(run);
+  assert.doesNotThrow(() => checkBudgetBeforeLaunch(run));
+  const snapshotAfterReplay = budgetSnapshot(run);
   assert.deepEqual(snapshotAfterReplay.total.tokens, snapshotAfterResume.total.tokens);
   assert.equal(snapshotAfterReplay.total.cost, snapshotAfterResume.total.cost);
 
@@ -543,7 +585,7 @@ test("R9: resume does not double-count prior spend; ceiling reflects real spend"
   run.tokens.input += 100;
   run.tokens.output += 50;
   run.cost += 0.4;
-  const snapshotWithLive = __test.budgetSnapshot(run);
+  const snapshotWithLive = budgetSnapshot(run);
   assert.equal(
     snapshotWithLive.total.tokens.input + snapshotWithLive.total.tokens.output + snapshotWithLive.total.tokens.reasoning,
     1250,
@@ -551,7 +593,7 @@ test("R9: resume does not double-count prior spend; ceiling reflects real spend"
   assert.equal(snapshotWithLive.total.cost, 5.4);
   const budgetError = (() => {
     try {
-      __test.checkBudgetBeforeLaunch(run);
+      checkBudgetBeforeLaunch(run);
       return null;
     } catch (error) {
       return error;
@@ -564,9 +606,9 @@ test("R9: resume does not double-count prior spend; ceiling reflects real spend"
 test("reconcile preserves durable ledgers and reports ambiguous recovery state", async () => {
   const root = await tempDir("workflow-reconcile-root");
   const runId = "reconcile-run";
-  const dir = __test.runDirForRoot(root, runId);
+  const dir = runDirForRoot(root, runId);
   await fs.mkdir(dir, { recursive: true });
-  await __test.writeJsonAtomic(path.join(dir, "state.json"), {
+  await writeJsonAtomic(path.join(dir, "state.json"), {
     id: runId,
     status: "running",
     startedAt: "2026-06-15T00:00:00.000Z",
@@ -575,12 +617,12 @@ test("reconcile preserves durable ledgers and reports ambiguous recovery state",
     integrationWorktrees: [{ path: "/tmp/integration" }],
     integrationPlan: { lanes: [{ callId: "lane:1" }] },
   });
-  await __test.appendLedger(dir, "domain-ledger.jsonl", { phase: "started", mutationKey: "close:1" });
-  await __test.appendLedger(dir, "validation-ledger.jsonl", { phase: "started", validationKey: "central" });
-  await __test.appendLedger(dir, "apply-ledger.jsonl", { phase: "started", diffPlanHash: "plan" });
-  await __test.appendLedger(dir, "apply-ledger.jsonl", { phase: "before-write", diffPlanHash: "plan", path: "a.txt" });
+  await appendLedger(dir, "domain-ledger.jsonl", { phase: "started", mutationKey: "close:1" });
+  await appendLedger(dir, "validation-ledger.jsonl", { phase: "started", validationKey: "central" });
+  await appendLedger(dir, "apply-ledger.jsonl", { phase: "started", diffPlanHash: "plan" });
+  await appendLedger(dir, "apply-ledger.jsonl", { phase: "before-write", diffPlanHash: "plan", path: "a.txt" });
 
-  const entry = await __test.readRunEntry(root, runId, { reconcile: true });
+  const entry = await readRunEntry(root, runId, { reconcile: true });
   assert.equal(entry.status, "interrupted");
   assert.equal(entry.state.recovery.incompleteApply, true);
   assert.deepEqual(entry.state.recovery.incompleteDomainMutations, ["close:1"]);
@@ -598,14 +640,14 @@ test("domain mutation ledger is idempotent by mutation key", async () => {
   const execute = async () => ({ call: ++calls });
   const readback = async (result) => ({ observed: result.call });
 
-  const first = await __test.runDomainMutation(run, { mutationKey: "bd-close:1", operation: "close", execute, readback });
-  const second = await __test.runDomainMutation(run, { mutationKey: "bd-close:1", operation: "close", execute, readback });
+  const first = await runDomainMutation(run, { mutationKey: "bd-close:1", operation: "close", execute, readback });
+  const second = await runDomainMutation(run, { mutationKey: "bd-close:1", operation: "close", execute, readback });
 
   assert.equal(first.replayed, false);
   assert.equal(second.replayed, true);
   assert.equal(calls, 1);
   assert.deepEqual(second.readback, { observed: 1 });
-  const records = await __test.readJsonlLedger(path.join(dir, "domain-ledger.jsonl"));
+  const records = await readJsonlLedger(path.join(dir, "domain-ledger.jsonl"));
   assert.equal(records.filter((record) => record.phase === "completed").length, 1);
 });
 
@@ -622,15 +664,15 @@ test("domain mutation passes a deterministic idempotency key to execute and reco
     return { ok: true };
   };
 
-  const expectedKey = __test.domainMutationIdempotencyKey("bd-create:abc");
+  const expectedKey = domainMutationIdempotencyKey("bd-create:abc");
   assert.match(expectedKey, /^ocw-idem-[0-9a-f]+$/);
-  assert.equal(__test.domainMutationIdempotencyKey("bd-create:abc"), expectedKey, "key derivation must be deterministic");
+  assert.equal(domainMutationIdempotencyKey("bd-create:abc"), expectedKey, "key derivation must be deterministic");
 
-  const result = await __test.runDomainMutation(run, { mutationKey: "bd-create:abc", operation: "create", execute });
+  const result = await runDomainMutation(run, { mutationKey: "bd-create:abc", operation: "create", execute });
   assert.equal(result.replayed, false);
   assert.deepEqual(seenKeys, [expectedKey], "execute must receive the deterministic idempotency key");
 
-  const records = await __test.readJsonlLedger(path.join(dir, "domain-ledger.jsonl"));
+  const records = await readJsonlLedger(path.join(dir, "domain-ledger.jsonl"));
   const started = records.find((record) => record.phase === "started");
   assert.equal(started.idempotencyKey, expectedKey, "started record must persist the idempotency key before execute runs");
 });
@@ -638,17 +680,17 @@ test("domain mutation passes a deterministic idempotency key to execute and reco
 test("journal cap throws, event cap drops, and truncated journal lines are skipped", async () => {
   const dir = await tempDir("workflow-journal-cap");
   const run = makeRun(dir, {
-    journalRecords: __test.MAX_JOURNAL_RECORDS,
-    eventCount: __test.MAX_EVENTS,
+    journalRecords: MAX_JOURNAL_RECORDS,
+    eventCount: MAX_EVENTS,
   });
 
   await assert.rejects(
-    () => __test.appendJournal(run, { callId: "too-many", outcome: "success" }),
-    new RegExp(`Workflow journal exceeded ${__test.MAX_JOURNAL_RECORDS} records`),
+    () => appendJournal(run, { callId: "too-many", outcome: "success" }),
+    new RegExp(`Workflow journal exceeded ${MAX_JOURNAL_RECORDS} records`),
   );
-  assert.equal(run.journalRecords, __test.MAX_JOURNAL_RECORDS);
+  assert.equal(run.journalRecords, MAX_JOURNAL_RECORDS);
 
-  await __test.appendEvent(run, { type: "dropped-at-cap" });
+  await appendEvent(run, { type: "dropped-at-cap" });
   const events = await fs.readFile(path.join(dir, "events.jsonl"), "utf8").catch((error) => {
     if (error.code === "ENOENT") return "";
     throw error;
@@ -660,7 +702,7 @@ test("journal cap throws, event cap drops, and truncated journal lines are skipp
     `${JSON.stringify({ callId: "kept", outcome: "success" })}\n{"callId":"truncated`,
     "utf8",
   );
-  const loaded = await __test.loadJournal(dir);
+  const loaded = await loadJournal(dir);
   assert.equal(loaded.size, 1);
   assert.equal(loaded.get("kept").outcome, "success");
 });
@@ -678,11 +720,11 @@ test("compactJournal rewrites the latest entry per callId and removes corrupt tr
     "utf8",
   );
 
-  const loaded = await __test.loadJournal(dir);
+  const loaded = await loadJournal(dir);
   assert.equal(loaded.size, 2);
   assert.equal(loaded.get("lane:1").attempt, 2);
 
-  const compacted = await __test.compactJournal(dir, loaded);
+  const compacted = await compactJournal(dir, loaded);
   assert.equal(compacted, 2);
   const lines = (await fs.readFile(path.join(dir, "journal.jsonl"), "utf8")).trim().split(/\r?\n/);
   assert.equal(lines.length, 2);
@@ -701,8 +743,8 @@ test("domain mutation crash between execute and executed-record replays execute 
   const run = makeRun(dir);
 
   // Pre-seed the ledger to mimic a crash: a "started" record with a key, no "executed"/"completed".
-  const crashKey = __test.domainMutationIdempotencyKey("bd-create:crash");
-  await __test.appendDomainLedger(run, { phase: "started", mutationKey: "bd-create:crash", operation: "create", idempotencyKey: crashKey });
+  const crashKey = domainMutationIdempotencyKey("bd-create:crash");
+  await appendDomainLedger(run, { phase: "started", mutationKey: "bd-create:crash", operation: "create", idempotencyKey: crashKey });
 
   let executeCalls = 0;
   let observedKey;
@@ -712,12 +754,12 @@ test("domain mutation crash between execute and executed-record replays execute 
     return { ok: true };
   };
 
-  const result = await __test.runDomainMutation(run, { mutationKey: "bd-create:crash", operation: "create", execute });
+  const result = await runDomainMutation(run, { mutationKey: "bd-create:crash", operation: "create", execute });
   assert.equal(executeCalls, 1, "resume after a started-only crash must run execute exactly once");
   assert.equal(observedKey, crashKey, "the resumed execute must reuse the key from the started record's mutationKey");
   assert.equal(result.replayed, false);
 
-  const records = await __test.readJsonlLedger(path.join(dir, "domain-ledger.jsonl"));
+  const records = await readJsonlLedger(path.join(dir, "domain-ledger.jsonl"));
   assert.equal(records.filter((record) => record.phase === "completed").length, 1);
 });
 
@@ -732,7 +774,7 @@ test("laneSignature is stable and changes for lane-defining inputs", () => {
     policy: { bash: "deny" },
     opts: { tools: { read: true }, retryCount: 1 },
   };
-  const signature = (runOverrides = {}, resolvedOverrides = {}, prompt = "Implement the lane") => __test.laneSignature(
+  const signature = (runOverrides = {}, resolvedOverrides = {}, prompt = "Implement the lane") => laneSignature(
     makeRun("/tmp/workflow-lane-signature", {
       sourceHash: "source-a",
       runtimeArgs: { issue: "opencode-workflows-ct3" },
@@ -770,18 +812,18 @@ test("laneSignature is stable and changes for lane-defining inputs", () => {
 test("finalizeStagedDomainMutations rejects unsupported staged operations", async () => {
   const dir = await tempDir("workflow-domain-unsupported");
   const run = makeRun(dir);
-  await __test.stageDomainMutation(run, {
+  await stageDomainMutation(run, {
     mutationKey: "custom:1",
     operation: "custom.operation",
     payload: { id: "custom-1" },
   });
 
   await assert.rejects(
-    () => __test.finalizeStagedDomainMutations(dir, { id: run.id }),
+    () => finalizeStagedDomainMutations(dir, { id: run.id }),
     /Unsupported staged domain mutation operation: custom\.operation/,
   );
 
-  const records = await __test.readJsonlLedger(path.join(dir, "domain-ledger.jsonl"));
+  const records = await readJsonlLedger(path.join(dir, "domain-ledger.jsonl"));
   assert.equal(records.some((record) => record.phase === "failed" && record.operation === "custom.operation"), true);
 });
 
@@ -796,7 +838,7 @@ test("R30: writeJsonAtomic removes the tmp file when fs.rename fails, then rethr
   await fs.writeFile(path.join(target, "child"), "x", "utf8");
 
   await assert.rejects(
-    __test.writeJsonAtomic(target, { ok: true }),
+    writeJsonAtomic(target, { ok: true }),
     (error) => error instanceof Error && typeof error.code === "string",
     "a rename failure must propagate the original error",
   );
@@ -821,7 +863,7 @@ test("writeJsonAtomic removes the tmp file when fs.writeFile fails after a parti
   });
 
   await assert.rejects(
-    () => __test.writeJsonAtomic(target, { ok: true }),
+    () => writeJsonAtomic(target, { ok: true }),
     (error) => error?.code === "ENOSPC",
   );
 
@@ -835,17 +877,17 @@ test("run-store artifacts are created with private file and directory modes", as
   const run = makeRun(dir);
   const mode = async (filePath) => (await fs.stat(filePath)).mode & 0o777;
 
-  await __test.writeJsonAtomic(path.join(dir, "state.json"), { ok: true });
-  await __test.appendLedger(dir, "domain-ledger.jsonl", { phase: "started", mutationKey: "m1" });
-  await __test.writeLaneProjection(run, "lane:private", { status: "running" });
-  const release = await __test.acquireWorkflowLock(__test.lockPathForRun(dir, "run"), { operation: "run", runId: run.id });
+  await writeJsonAtomic(path.join(dir, "state.json"), { ok: true });
+  await appendLedger(dir, "domain-ledger.jsonl", { phase: "started", mutationKey: "m1" });
+  await writeLaneProjection(run, "lane:private", { status: "running" });
+  const release = await acquireWorkflowLock(lockPathForRun(dir, "run"), { operation: "run", runId: run.id });
 
-  assert.equal(await mode(dir), __test.PRIVATE_DIR_MODE);
-  assert.equal(await mode(path.join(dir, "state.json")), __test.PRIVATE_FILE_MODE);
-  assert.equal(await mode(path.join(dir, "domain-ledger.jsonl")), __test.PRIVATE_FILE_MODE);
-  assert.equal(await mode(path.join(dir, "lanes")), __test.PRIVATE_DIR_MODE);
-  assert.equal(await mode(path.join(dir, "lanes", `${__test.safeProjectionName("lane:private")}.json`)), __test.PRIVATE_FILE_MODE);
-  assert.equal(await mode(__test.lockPathForRun(dir, "run")), __test.PRIVATE_FILE_MODE);
+  assert.equal(await mode(dir), PRIVATE_DIR_MODE);
+  assert.equal(await mode(path.join(dir, "state.json")), PRIVATE_FILE_MODE);
+  assert.equal(await mode(path.join(dir, "domain-ledger.jsonl")), PRIVATE_FILE_MODE);
+  assert.equal(await mode(path.join(dir, "lanes")), PRIVATE_DIR_MODE);
+  assert.equal(await mode(path.join(dir, "lanes", `${safeProjectionName("lane:private")}.json`)), PRIVATE_FILE_MODE);
+  assert.equal(await mode(lockPathForRun(dir, "run")), PRIVATE_FILE_MODE);
 
   await release();
 });
@@ -855,11 +897,11 @@ test("writeLaneProjection serializes concurrent updates for the same lane", asyn
   const run = makeRun(dir, { id: "serialized-projection-run" });
 
   await Promise.all([
-    __test.writeLaneProjection(run, "lane:race", { status: "running", startedAt: "2026-06-15T00:00:00.000Z" }),
-    __test.writeLaneProjection(run, "lane:race", { outcome: "success", completedAt: "2026-06-15T00:00:01.000Z" }),
+    writeLaneProjection(run, "lane:race", { status: "running", startedAt: "2026-06-15T00:00:00.000Z" }),
+    writeLaneProjection(run, "lane:race", { outcome: "success", completedAt: "2026-06-15T00:00:01.000Z" }),
   ]);
 
-  const projected = JSON.parse(await fs.readFile(path.join(dir, "lanes", `${__test.safeProjectionName("lane:race")}.json`), "utf8"));
+  const projected = JSON.parse(await fs.readFile(path.join(dir, "lanes", `${safeProjectionName("lane:race")}.json`), "utf8"));
   assert.equal(projected.status, "running");
   assert.equal(projected.outcome, "success");
   assert.equal(projected.startedAt, "2026-06-15T00:00:00.000Z");
@@ -871,23 +913,23 @@ test("writeState does not rewrite clean lane projection files", async () => {
   const dir = await tempDir("workflow-lane-projection-clean");
   const run = makeRun(dir, { id: "clean-projection-run" });
 
-  await __test.writeLaneProjection(run, "lane:clean", { status: "completed", outcome: "success" });
-  const cleanPath = path.join(dir, "lanes", `${__test.safeProjectionName("lane:clean")}.json`);
+  await writeLaneProjection(run, "lane:clean", { status: "completed", outcome: "success" });
+  const cleanPath = path.join(dir, "lanes", `${safeProjectionName("lane:clean")}.json`);
   const before = await fs.readFile(cleanPath, "utf8");
 
-  await __test.writeState(run);
+  await writeState(run);
   const after = await fs.readFile(cleanPath, "utf8");
   assert.equal(after, before, "writeState must not re-stamp a clean lane projection");
 
   run.laneRecords.set("lane:manual", { callId: "lane:manual", status: "completed", outcome: "success" });
-  await __test.writeState(run);
-  const manual = JSON.parse(await fs.readFile(path.join(dir, "lanes", `${__test.safeProjectionName("lane:manual")}.json`), "utf8"));
+  await writeState(run);
+  const manual = JSON.parse(await fs.readFile(path.join(dir, "lanes", `${safeProjectionName("lane:manual")}.json`), "utf8"));
   assert.equal(manual.callId, "lane:manual", "writeState still backfills records not written through writeLaneProjection");
 });
 
 test("workflow pause is permissioned as a mutating durable lifecycle tool", () => {
-  assert.equal(__test.ACTIVE_STATUSES.has("pausing"), true);
-  assert.equal(__test.WORKFLOW_MUTATING_TOOLS.includes("workflow_pause"), true);
+  assert.equal(ACTIVE_STATUSES.has("pausing"), true);
+  assert.equal(WORKFLOW_MUTATING_TOOLS.includes("workflow_pause"), true);
 });
 
 test("fanout-cancel of a just-handed-off waiter releases its slot (no activeAgents leak)", async () => {
@@ -925,11 +967,11 @@ test("fanout-cancel of a just-handed-off waiter releases its slot (no activeAgen
 
 test("corrupt/partial lock file is detected as corrupt and not stale", async () => {
   const dir = await tempDir("workflow-corrupt-lock");
-  const lockPath = __test.lockPathForRun(dir, "run");
+  const lockPath = lockPathForRun(dir, "run");
   // A crash mid-write leaves an unparseable (partial) lock on disk.
   await fs.writeFile(lockPath, '{"acquiredAt":"2026-06-15T00:00:00.000Z","proc', "utf8");
 
-  const lock = await __test.readLock(lockPath);
+  const lock = await readLock(lockPath);
   assert.equal(lock.corrupt, true, "unparseable lock must be flagged corrupt");
   assert.equal(lock.stale, false, "corrupt lock has no process so it is not classified stale");
   assert.equal(lock.active, false);
@@ -937,11 +979,11 @@ test("corrupt/partial lock file is detected as corrupt and not stale", async () 
 
 test("corrupt lock blocks acquisition with a reconcile recovery hint", async () => {
   const dir = await tempDir("workflow-corrupt-lock-acquire");
-  const lockPath = __test.lockPathForRun(dir, "run");
+  const lockPath = lockPathForRun(dir, "run");
   await fs.writeFile(lockPath, "not-json-at-all", "utf8");
 
   await assert.rejects(
-    __test.acquireWorkflowLock(lockPath, { operation: "run" }),
+    acquireWorkflowLock(lockPath, { operation: "run" }),
     (error) => /already held \(corrupt\)/.test(error.message)
       && /workflow_reconcile/.test(error.message),
     "corrupt lock must surface a corrupt state + reconcile recovery hint",
@@ -951,28 +993,28 @@ test("corrupt lock blocks acquisition with a reconcile recovery hint", async () 
 test("clearStaleRunLocks clears a corrupt lock so the run is acquirable again", async () => {
   const root = await tempDir("workflow-corrupt-lock-clear");
   const runId = "corrupt-lock-run";
-  const dir = __test.runDirForRoot(root, runId);
+  const dir = runDirForRoot(root, runId);
   await fs.mkdir(dir, { recursive: true });
-  await __test.writeJsonAtomic(path.join(dir, "state.json"), {
+  await writeJsonAtomic(path.join(dir, "state.json"), {
     id: runId,
     status: "completed",
     startedAt: "2026-06-15T00:00:00.000Z",
   });
   // Simulate a partial-write run.lock left behind by a crash.
-  const lockPath = __test.lockPathForRun(dir, "run");
+  const lockPath = lockPathForRun(dir, "run");
   await fs.writeFile(lockPath, '{"operation":"run","acquir', "utf8");
 
   // Before reconcile, the corrupt lock surfaces in state.locks (wedging cleanup)
   // and blocks acquisition.
-  const before = await __test.runLocksForEntry({ kind: "valid", dir });
+  const before = await runLocksForEntry({ kind: "valid", dir });
   assert.equal(before.run.corrupt, true, "corrupt lock should appear in run locks");
   await assert.rejects(
-    __test.acquireWorkflowLock(lockPath, { operation: "run" }),
+    acquireWorkflowLock(lockPath, { operation: "run" }),
     /already held \(corrupt\)/,
   );
 
   // Reconcile (clearStaleLocks) must clear the corrupt lock like a stale one.
-  const cleared = await __test.clearStaleRunLocks({ kind: "valid", dir });
+  const cleared = await clearStaleRunLocks({ kind: "valid", dir });
   assert.deepEqual(
     cleared.map((entry) => ({ operation: entry.operation, reason: entry.reason })),
     [{ operation: "run", reason: "corrupt" }],
@@ -981,8 +1023,8 @@ test("clearStaleRunLocks clears a corrupt lock so the run is acquirable again", 
   assert.equal(await fs.access(lockPath).then(() => true, () => false), false, "lock file removed");
 
   // The run is acquirable again, and the lock is now a fully-written record.
-  const release = await __test.acquireWorkflowLock(lockPath, { operation: "run" });
-  const reacquired = await __test.readLock(lockPath);
+  const release = await acquireWorkflowLock(lockPath, { operation: "run" });
+  const reacquired = await readLock(lockPath);
   assert.equal(reacquired.corrupt ?? false, false, "reacquired lock must be parseable");
   assert.equal(reacquired.operation, "run");
   await release();
@@ -994,9 +1036,9 @@ test("readLock classifies a transient non-ENOENT read error as unreadable, not c
   // lock's owner is alive. It must be classified `unreadable`, never `corrupt`, so reconcile
   // does not delete a possibly-live lock on a filesystem hiccup. Only JSON.parse failure is corrupt.
   const dir = await tempDir("workflow-unreadable-lock");
-  const lockPath = __test.lockPathForRun(dir, "run");
+  const lockPath = lockPathForRun(dir, "run");
   // A fully-written, parseable lock exists on disk; the failure is purely at the read step.
-  const release = await __test.acquireWorkflowLock(lockPath, { operation: "run", runId: "live-owner" });
+  const release = await acquireWorkflowLock(lockPath, { operation: "run", runId: "live-owner" });
   try {
     const originalReadFile = fs.readFile;
     const mock = t.mock.method(fs, "readFile", async (filePath, ...rest) => {
@@ -1008,7 +1050,7 @@ test("readLock classifies a transient non-ENOENT read error as unreadable, not c
       return await originalReadFile.call(fs, filePath, ...rest);
     });
 
-    const lock = await __test.readLock(lockPath);
+    const lock = await readLock(lockPath);
     assert.equal(lock.unreadable, true, "a transient read error must be classified unreadable");
     assert.notEqual(lock.corrupt, true, "a transient read error must NOT be classified corrupt");
     assert.equal(lock.stale, false, "an unreadable lock is not stale");
@@ -1027,10 +1069,10 @@ test("clearStaleRunLocks does not delete an actively-held lock on a transient re
   // concurrently, the exact corruption this lock prevents.
   const root = await tempDir("workflow-unreadable-lock-clear");
   const runId = "unreadable-lock-run";
-  const dir = __test.runDirForRoot(root, runId);
+  const dir = runDirForRoot(root, runId);
   await fs.mkdir(dir, { recursive: true });
-  const lockPath = __test.lockPathForRun(dir, "run");
-  const release = await __test.acquireWorkflowLock(lockPath, { operation: "run", runId });
+  const lockPath = lockPathForRun(dir, "run");
+  const release = await acquireWorkflowLock(lockPath, { operation: "run", runId });
   try {
     const originalReadFile = fs.readFile;
     const mock = t.mock.method(fs, "readFile", async (filePath, ...rest) => {
@@ -1042,12 +1084,12 @@ test("clearStaleRunLocks does not delete an actively-held lock on a transient re
       return await originalReadFile.call(fs, filePath, ...rest);
     });
 
-    const cleared = await __test.clearStaleRunLocks({ kind: "valid", dir });
+    const cleared = await clearStaleRunLocks({ kind: "valid", dir });
     assert.deepEqual(cleared, [], "a transiently-unreadable, actively-held lock must NOT be cleared");
 
     mock.mock.restore();
     assert.equal(await fs.access(lockPath).then(() => true, () => false), true, "the live lock file must remain on disk");
-    const reread = await __test.readLock(lockPath);
+    const reread = await readLock(lockPath);
     assert.equal(reread.active, true, "the still-held lock reads back as active once the read succeeds again");
   } finally {
     await release();
@@ -1057,15 +1099,15 @@ test("clearStaleRunLocks does not delete an actively-held lock on a transient re
 
 test("readLock ages out live-PID locks that lack a recorded process start time", async () => {
   const dir = await tempDir("workflow-startless-lock-ttl");
-  const lockPath = __test.lockPathForRun(dir, "run");
-  await __test.writeJsonAtomic(lockPath, {
+  const lockPath = lockPathForRun(dir, "run");
+  await writeJsonAtomic(lockPath, {
     operation: "run",
     runId: "startless-lock",
     acquiredAt: "1970-01-01T00:00:00.000Z",
     process: { pid: process.pid },
   });
 
-  const lock = await __test.readLock(lockPath);
+  const lock = await readLock(lockPath);
 
   assert.equal(lock.active, false);
   assert.equal(lock.stale, true);
@@ -1073,13 +1115,13 @@ test("readLock ages out live-PID locks that lack a recorded process start time",
 
 test("workflow lock release does not unlink a reclaimed lock with a different process start time", async () => {
   const dir = await tempDir("workflow-lock-release-reclaimed");
-  const lockPath = __test.lockPathForRun(dir, "run");
-  const releaseStaleOwner = await __test.acquireWorkflowLock(lockPath, { operation: "run", runId: "first-owner" });
-  const first = await __test.readLock(lockPath);
+  const lockPath = lockPathForRun(dir, "run");
+  const releaseStaleOwner = await acquireWorkflowLock(lockPath, { operation: "run", runId: "first-owner" });
+  const first = await readLock(lockPath);
   assert.equal(first.process.pid, process.pid);
 
-  await __test.writeJsonAtomic(lockPath, {
-    stateVersion: __test.DURABLE_STATE_VERSION,
+  await writeJsonAtomic(lockPath, {
+    stateVersion: DURABLE_STATE_VERSION,
     acquiredAt: new Date().toISOString(),
     operation: "run",
     runId: "reclaimed-owner",
@@ -1091,7 +1133,7 @@ test("workflow lock release does not unlink a reclaimed lock with a different pr
 
   await releaseStaleOwner();
 
-  const after = await __test.readLock(lockPath);
+  const after = await readLock(lockPath);
   assert.equal(after.runId, "reclaimed-owner", "stale release must leave the reclaimed lock in place");
   assert.notEqual(after.process.startTime, first.process.startTime);
 });
@@ -1099,16 +1141,16 @@ test("workflow lock release does not unlink a reclaimed lock with a different pr
 test("readRunEntry reconcile clears a corrupt lock out of state.locks", async () => {
   const root = await tempDir("workflow-corrupt-lock-reconcile");
   const runId = "corrupt-lock-reconcile-run";
-  const dir = __test.runDirForRoot(root, runId);
+  const dir = runDirForRoot(root, runId);
   await fs.mkdir(dir, { recursive: true });
-  await __test.writeJsonAtomic(path.join(dir, "state.json"), {
+  await writeJsonAtomic(path.join(dir, "state.json"), {
     id: runId,
     status: "completed",
     startedAt: "2026-06-15T00:00:00.000Z",
   });
-  await fs.writeFile(__test.lockPathForRun(dir, "run"), "{partial", "utf8");
+  await fs.writeFile(lockPathForRun(dir, "run"), "{partial", "utf8");
 
-  const reconciled = await __test.readRunEntry(root, runId, { reconcile: true, clearStaleLocks: true });
+  const reconciled = await readRunEntry(root, runId, { reconcile: true, clearStaleLocks: true });
   assert.equal(reconciled.state.locks, undefined, "corrupt lock must be gone after reconcile");
   assert.deepEqual(
     (reconciled.state.staleLocksCleared ?? []).map((entry) => entry.reason),
@@ -1125,7 +1167,7 @@ test("processAppearsAlive distrusts a recorded-start PID when the live start tim
   const processInfo = { pid: process.pid, startTime: 12345 };
 
   for (const unreadable of [undefined, NaN, Infinity, -Infinity, null]) {
-    const result = await __test.processAppearsAlive(processInfo, {
+    const result = await processAppearsAlive(processInfo, {
       readStartTime: async () => unreadable,
     });
     assert.equal(
@@ -1136,32 +1178,32 @@ test("processAppearsAlive distrusts a recorded-start PID when the live start tim
   }
 
   // Control: an alive PID whose readable live start matches the recorded start is alive.
-  const matching = await __test.processAppearsAlive(processInfo, {
+  const matching = await processAppearsAlive(processInfo, {
     readStartTime: async () => 12345,
   });
   assert.equal(matching, true, "a readable matching live start must remain alive");
 
   // Control: a readable live start that differs (classic PID reuse) is not-alive.
-  const mismatched = await __test.processAppearsAlive(processInfo, {
+  const mismatched = await processAppearsAlive(processInfo, {
     readStartTime: async () => 99999,
   });
   assert.equal(mismatched, false, "a readable mismatched live start must yield not-alive");
 
   // Control: with NO recorded start there is nothing to confirm, so the bare liveness check
   // governs and an unreadable live start does NOT flip a live PID to not-alive.
-  const noRecord = await __test.processAppearsAlive(
+  const noRecord = await processAppearsAlive(
     { pid: process.pid },
     { readStartTime: async () => undefined },
   );
   assert.equal(noRecord, true, "no recorded start falls back to bare liveness (stays alive)");
 
-  const freshStartlessLock = await __test.processAppearsAlive(
+  const freshStartlessLock = await processAppearsAlive(
     { process: { pid: process.pid }, acquiredAt: "2026-06-15T00:00:00.000Z" },
     { now: Date.parse("2026-06-15T00:00:10.000Z"), lockTtlMs: 60_000 },
   );
   assert.equal(freshStartlessLock, true, "a fresh startless lock may use bare liveness before the TTL");
 
-  const expiredStartlessLock = await __test.processAppearsAlive(
+  const expiredStartlessLock = await processAppearsAlive(
     { process: { pid: process.pid }, acquiredAt: "2026-06-15T00:00:00.000Z" },
     { now: Date.parse("2026-06-15T00:02:00.000Z"), lockTtlMs: 60_000 },
   );
@@ -1173,8 +1215,8 @@ test("processAppearsAlive distrusts a recorded-start PID when the live start tim
 // hidepid, sandbox). Such an error must be swallowed rather than propagated out of the event hook.
 test("event hook returns normally when readdir rejects with EPERM", async (t) => {
   const dir = await tempDir("workflow-event-eperm");
-  const savedPending = new Set(__test.pendingNotificationPaths);
-  __test.pendingNotificationPaths.clear();
+  const savedPending = new Set(pendingNotificationPaths);
+  pendingNotificationPaths.clear();
   const readdirMock = t.mock.method(fs, "readdir", async () => {
     const error = new Error("operation not permitted");
     error.code = "EPERM";
@@ -1195,8 +1237,8 @@ test("event hook returns normally when readdir rejects with EPERM", async (t) =>
   } finally {
     // Restore readdir before cleanup so the recursive rm is not affected by the EPERM mock.
     readdirMock.mock.restore();
-    __test.pendingNotificationPaths.clear();
-    for (const value of savedPending) __test.pendingNotificationPaths.add(value);
+    pendingNotificationPaths.clear();
+    for (const value of savedPending) pendingNotificationPaths.add(value);
     await fs.rm(dir, { recursive: true, force: true });
   }
 });

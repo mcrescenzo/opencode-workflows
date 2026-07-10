@@ -6,12 +6,18 @@ import path from "node:path";
 
 import WorkflowPlugin from "../workflow-kernel/index.js";
 import { makeHarness } from "./helpers/harness.mjs";
+import { classifyResumeCacheHit } from "../workflow-kernel/child-agent-runner.js";
+import {
+  buildResumeSignatureIndex,
+  claimResumeSignatureFallback,
+  loadJournal,
+  markResumeSignatureClaimed,
+} from "../workflow-kernel/event-journal.js";
+import { writeSalvagedLaneOutcome } from "../workflow-kernel/run-store-projections.js";
+import { runDirForRoot } from "../workflow-kernel/run-store-fs.js";
 
-// __test aggregates the kernel barrel (loadJournal, writeSalvagedLaneOutcome,
-// runDirForRoot, writeLaneProjection, ...) plus the orchestrator symbols added in
-// workflow-plugin.js (classifyResumeCacheHit, isLaneIntegrable).
+// isLaneIntegrable is an orchestrator-local helper exposed via workflow-plugin.js's __test.
 const { __test } = WorkflowPlugin;
-const classifyResumeCacheHit = __test.classifyResumeCacheHit;
 const isLaneIntegrable = __test.isLaneIntegrable;
 
 async function tempDir(name) {
@@ -73,15 +79,15 @@ test("signature fallback index is scope-bound and claim-once", () => {
     [failed.callId, failed],
   ]);
   const run = {
-    resumeSignatureIndex: __test.buildResumeSignatureIndex(resumeJournal),
+    resumeSignatureIndex: buildResumeSignatureIndex(resumeJournal),
     resumeSignatureClaims: new Set(),
   };
 
-  __test.markResumeSignatureClaimed(run, topA.callId);
-  assert.equal(__test.claimResumeSignatureFallback(run, "root/agent:3", "sig-top"), topB);
-  assert.equal(__test.claimResumeSignatureFallback(run, "root/agent:4", "sig-top"), null, "claimed and failed entries must not be reused");
-  assert.equal(__test.claimResumeSignatureFallback(run, "root/parallel:0/item:1/agent:0", "sig-fanout"), fanout, "fanout items in the same group can recover by signature");
-  assert.equal(__test.claimResumeSignatureFallback(run, "root/parallel:1/item:0/agent:0", "sig-fanout"), null, "different fanout groups must not cross-claim");
+  markResumeSignatureClaimed(run, topA.callId);
+  assert.equal(claimResumeSignatureFallback(run, "root/agent:3", "sig-top"), topB);
+  assert.equal(claimResumeSignatureFallback(run, "root/agent:4", "sig-top"), null, "claimed and failed entries must not be reused");
+  assert.equal(claimResumeSignatureFallback(run, "root/parallel:0/item:1/agent:0", "sig-fanout"), fanout, "fanout items in the same group can recover by signature");
+  assert.equal(claimResumeSignatureFallback(run, "root/parallel:1/item:0/agent:0", "sig-fanout"), null, "different fanout groups must not cross-claim");
 });
 
 // --- isLaneIntegrable: the hard-enforced read-only-vs-edit asymmetry ---------------------
@@ -126,13 +132,13 @@ test("the integration lane filter excludes a salvaged edit claim from the runAut
 test("a salvaged journal entry survives loadJournal and classifies as a salvaged cache hit on resume", async () => {
   const root = await tempDir("salvage-resume-wiring");
   const runId = "salvage-resume-wiring-run";
-  const dir = __test.runDirForRoot(root, runId);
+  const dir = runDirForRoot(root, runId);
   await fs.mkdir(dir, { recursive: true });
   const callId = "lane:salvaged-ro";
   const signatureHash = "sig-salvaged-ro";
 
   // Write a synthetic salvaged entry exactly as workflow_salvage's approve path does.
-  await __test.writeSalvagedLaneOutcome(dir, callId, {
+  await writeSalvagedLaneOutcome(dir, callId, {
     runId,
     signatureHash,
     outcome: "success",
@@ -146,7 +152,7 @@ test("a salvaged journal entry survives loadJournal and classifies as a salvaged
 
   // The resume path builds its cache map via loadJournal(dir); a salvaged entry must round-trip
   // with its salvagedFromTranscript tag and signatureHash intact so the discriminator can route it.
-  const journal = await __test.loadJournal(dir);
+  const journal = await loadJournal(dir);
   const cached = journal.get(callId);
   assert.equal(cached.salvagedFromTranscript, true);
   assert.equal(cached.signatureHash, signatureHash);
@@ -163,7 +169,7 @@ test("a salvaged journal entry survives loadJournal and classifies as a salvaged
 test("a normally-captured journal entry still classifies as a plain cache hit (no salvage regression)", async () => {
   const root = await tempDir("salvage-resume-normal");
   const runId = "salvage-resume-normal-run";
-  const dir = __test.runDirForRoot(root, runId);
+  const dir = runDirForRoot(root, runId);
   await fs.mkdir(dir, { recursive: true });
   const callId = "lane:normal-capture";
   const signatureHash = "sig-normal";
@@ -174,7 +180,7 @@ test("a normally-captured journal entry still classifies as a plain cache hit (n
     "utf8",
   );
 
-  const journal = await __test.loadJournal(dir);
+  const journal = await loadJournal(dir);
   const cached = journal.get(callId);
   assert.equal(cached.salvagedFromTranscript, undefined);
   assert.deepEqual(classifyResumeCacheHit(cached, signatureHash), { kind: "hit", eventType: "cache.hit" });

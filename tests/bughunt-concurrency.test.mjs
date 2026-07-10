@@ -7,18 +7,14 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { setTimeout as sleep } from "node:timers/promises";
 
-import WorkflowPlugin from "../workflow-kernel/index.js";
+import { createWorktreeAdapter } from "../workflow-kernel/worktree-adapter.js";
+import { createIntegrationLaneWorktree } from "../workflow-kernel/child-agent-runner.js";
+import { executeSandbox, __setSandboxHostOpTestHook } from "../workflow-kernel/sandbox-executor.js";
 
 // Regression coverage for three adversarially-verified concurrency findings (bughunt-ad31fd87,
 // bughunt-a3e1f548, bughunt-73843471): the worktree-creation mutex in worktree-adapter.js, the
 // lazy-init memoization in child-agent-runner.js's createIntegrationLaneWorktree, and the
 // concurrent-abort fix in sandbox-executor.js's settlePendingHostOps.
-const {
-  createWorktreeAdapter,
-  createIntegrationLaneWorktree,
-  executeSandbox,
-  __setSandboxHostOpTestHook,
-} = WorkflowPlugin.__test;
 
 const execFileAsync = promisify(execFile);
 

@@ -4,9 +4,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import WorkflowPlugin from "../workflow-kernel/index.js";
-
-const { __test } = WorkflowPlugin;
+import { appendEvent } from "../workflow-kernel/event-journal.js";
+import { recordRecentLog } from "../workflow-kernel/run-observability.js";
+import { writeState } from "../workflow-kernel/run-store-state.js";
 
 async function tempDir(name) {
   return await fs.mkdtemp(path.join(os.tmpdir(), `${name}-`));
@@ -72,7 +72,7 @@ test("appendEvent invokes run.eventSink after durable append without changing ev
     },
   });
 
-  await __test.appendEvent(run, { type: "phase", phase: "verify" });
+  await appendEvent(run, { type: "phase", phase: "verify" });
 
   const raw = await fs.readFile(path.join(dir, "events.jsonl"), "utf8");
   const lines = raw.trim().split("\n");
@@ -92,9 +92,9 @@ test("appendEvent swallows eventSink throw and absent sink paths", async () => {
     },
   });
 
-  await __test.appendEvent(run, { type: "log", message: "one" });
+  await appendEvent(run, { type: "log", message: "one" });
   run.eventSink = undefined;
-  await __test.appendEvent(run, { type: "log", message: "two" });
+  await appendEvent(run, { type: "log", message: "two" });
 
   const raw = await fs.readFile(path.join(dir, "events.jsonl"), "utf8");
   assert.equal(raw.trim().split("\n").length, 2);
@@ -102,11 +102,11 @@ test("appendEvent swallows eventSink throw and absent sink paths", async () => {
 
 test("recordRecentLog keeps the newest three narrator messages in order", () => {
   const run = {};
-  assert.deepEqual(__test.recordRecentLog(run, ""), []);
-  __test.recordRecentLog(run, "one");
-  __test.recordRecentLog(run, "two");
-  __test.recordRecentLog(run, "three");
-  __test.recordRecentLog(run, "four");
+  assert.deepEqual(recordRecentLog(run, ""), []);
+  recordRecentLog(run, "one");
+  recordRecentLog(run, "two");
+  recordRecentLog(run, "three");
+  recordRecentLog(run, "four");
   assert.deepEqual(run.recentLogs, ["two", "three", "four"]);
 });
 
@@ -117,7 +117,7 @@ test("writeState persists recentLogs but never serializes eventSink", async () =
     eventSink() {},
   });
 
-  await __test.writeState(run);
+  await writeState(run);
 
   const state = JSON.parse(await fs.readFile(path.join(dir, "state.json"), "utf8"));
   assert.deepEqual(state.recentLogs, ["one", "two", "three"]);

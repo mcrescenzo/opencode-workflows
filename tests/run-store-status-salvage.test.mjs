@@ -4,10 +4,17 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import WorkflowPlugin from "../workflow-kernel/index.js";
-import { activeLaneSummaries } from "../workflow-kernel/run-store-status-format.js";
-
-const { __test } = WorkflowPlugin;
+import {
+  activeLaneSummaries,
+  compactStatusForEntry,
+  fullStatusForEntry,
+  readRunEntry,
+  STALE_PROGRESS_THRESHOLD_MS,
+  summarizeEntries,
+} from "../workflow-kernel/run-store-status-format.js";
+import { computeLastProgressAt, writeState as writeDurableState } from "../workflow-kernel/run-store-state.js";
+import { computeSalvageCandidates, writeLaneProjection } from "../workflow-kernel/run-store-projections.js";
+import { runDirForRoot, writeJsonAtomic } from "../workflow-kernel/run-store-fs.js";
 
 async function tempDir(name) {
   return await fs.mkdtemp(path.join(os.tmpdir(), `${name}-`));
@@ -32,11 +39,11 @@ async function snapshotTree(dir) {
 }
 
 function writeState(dir, state) {
-  return __test.writeJsonAtomic(path.join(dir, "state.json"), state);
+  return writeJsonAtomic(path.join(dir, "state.json"), state);
 }
 
 async function writeLane(dir, runId, callId, projection) {
-  await __test.writeLaneProjection({ id: runId, dir, laneRecords: new Map() }, callId, projection);
+  await writeLaneProjection({ id: runId, dir, laneRecords: new Map() }, callId, projection);
 }
 
 function appendJournalSuccess(dir, callId, overrides = {}) {
@@ -54,7 +61,7 @@ const DONE = { callId: "lane:done", childID: "child-session-done" };
 test("computeSalvageCandidates flags only running lanes with a childID and no success journal entry", async () => {
   const root = await tempDir("salvage-compute");
   const runId = "salvage-compute-run";
-  const dir = __test.runDirForRoot(root, runId);
+  const dir = runDirForRoot(root, runId);
   await fs.mkdir(dir, { recursive: true });
 
   await writeLane(dir, runId, ORPHAN.callId, {
@@ -72,7 +79,7 @@ test("computeSalvageCandidates flags only running lanes with a childID and no su
   await writeLane(dir, runId, "lane:running-but-done", { status: "running", childID: "child-redundant" });
   await appendJournalSuccess(dir, "lane:running-but-done");
 
-  const candidates = await __test.computeSalvageCandidates(dir, { laneRecords: [] });
+  const candidates = await computeSalvageCandidates(dir, { laneRecords: [] });
 
   assert.equal(candidates.length, 1);
   assert.equal(candidates[0].callId, ORPHAN.callId);
@@ -124,7 +131,7 @@ test("active lane summaries expose bounded progress without terminal lanes", () 
     progressEmitted: true,
   });
 
-  const compact = __test.compactStatusForEntry({ kind: "valid", id: state.id, status: state.status, state });
+  const compact = compactStatusForEntry({ kind: "valid", id: state.id, status: state.status, state });
   assert.equal(compact.activeLaneCount, 1);
   assert.equal(compact.activeLanes[0].callId, "lane:active");
 });
@@ -138,13 +145,13 @@ test("lastProgressAt considers durable event activity beyond lane state transiti
     ],
   };
 
-  assert.equal(__test.computeLastProgressAt(run), "2026-06-24T00:03:00.000Z");
+  assert.equal(computeLastProgressAt(run), "2026-06-24T00:03:00.000Z");
 });
 
 test("reconciled interrupted run surfaces orphaned lane childIDs with a workflow_salvage hint", async () => {
   const root = await tempDir("salvage-interrupted");
   const runId = "salvage-interrupted-run";
-  const dir = __test.runDirForRoot(root, runId);
+  const dir = runDirForRoot(root, runId);
   await fs.mkdir(dir, { recursive: true });
 
   await writeState(dir, {
@@ -158,7 +165,7 @@ test("reconciled interrupted run surfaces orphaned lane childIDs with a workflow
   await writeLane(dir, runId, DONE.callId, { status: "completed", childID: DONE.childID, outcome: "success" });
   await appendJournalSuccess(dir, DONE.callId);
 
-  const entry = await __test.readRunEntry(root, runId, { reconcile: true });
+  const entry = await readRunEntry(root, runId, { reconcile: true });
   assert.equal(entry.status, "interrupted");
 
   const salvage = entry.salvageCandidates ?? [];
@@ -173,7 +180,7 @@ test("reconciled interrupted run surfaces orphaned lane childIDs with a workflow
 test("stale-active status is strictly read-only and still surfaces salvage candidates", async () => {
   const root = await tempDir("salvage-stale-active");
   const runId = "salvage-stale-run";
-  const dir = __test.runDirForRoot(root, runId);
+  const dir = runDirForRoot(root, runId);
   await fs.mkdir(dir, { recursive: true });
 
   await writeState(dir, {
@@ -188,7 +195,7 @@ test("stale-active status is strictly read-only and still surfaces salvage candi
   const before = await snapshotTree(dir);
 
   // No reconcile: the stale-active branch must not write anything.
-  const entry = await __test.readRunEntry(root, runId);
+  const entry = await readRunEntry(root, runId);
   assert.equal(entry.status, "stale-active");
   assert.equal(entry.salvageCandidates.length, 1);
   assert.equal(entry.salvageCandidates[0].childID, ORPHAN.childID);
@@ -200,7 +207,7 @@ test("stale-active status is strictly read-only and still surfaces salvage candi
 test("already-interrupted re-read surfaces salvage candidates read-only", async () => {
   const root = await tempDir("salvage-reread");
   const runId = "salvage-reread-run";
-  const dir = __test.runDirForRoot(root, runId);
+  const dir = runDirForRoot(root, runId);
   await fs.mkdir(dir, { recursive: true });
 
   // Status already interrupted from a prior reconcile (not an active status), so the
@@ -215,7 +222,7 @@ test("already-interrupted re-read surfaces salvage candidates read-only", async 
   await writeLane(dir, runId, ORPHAN.callId, { status: "running", childID: ORPHAN.childID });
 
   const before = await snapshotTree(dir);
-  const entry = await __test.readRunEntry(root, runId);
+  const entry = await readRunEntry(root, runId);
   assert.equal(entry.status, "interrupted");
   assert.equal(entry.salvageCandidates.length, 1);
   assert.equal(entry.salvageCandidates[0].callId, ORPHAN.callId);
@@ -226,7 +233,7 @@ test("already-interrupted re-read surfaces salvage candidates read-only", async 
 test("compact, full, and summary status each surface the salvage hint", async () => {
   const root = await tempDir("salvage-surfaces");
   const runId = "salvage-surfaces-run";
-  const dir = __test.runDirForRoot(root, runId);
+  const dir = runDirForRoot(root, runId);
   await fs.mkdir(dir, { recursive: true });
 
   await writeState(dir, {
@@ -237,20 +244,20 @@ test("compact, full, and summary status each surface the salvage hint", async ()
   });
   await writeLane(dir, runId, ORPHAN.callId, { status: "running", childID: ORPHAN.childID });
 
-  const entry = await __test.readRunEntry(root, runId);
+  const entry = await readRunEntry(root, runId);
 
-  const compact = __test.compactStatusForEntry(entry);
+  const compact = compactStatusForEntry(entry);
   assert.equal(compact.status, "interrupted");
   assert.equal(compact.salvageCandidates.length, 1);
   assert.equal(compact.salvageCandidates[0].childID, ORPHAN.childID);
   assert.match(compact.salvageCandidates[0].hint, /workflow_salvage/);
 
-  const full = await __test.fullStatusForEntry(entry);
+  const full = await fullStatusForEntry(entry);
   assert.equal(full.status, "interrupted");
   assert.equal(full.salvageCandidates.length, 1);
   assert.equal(full.salvageCandidates[0].callId, ORPHAN.callId);
 
-  const summary = __test.summarizeEntries([entry]);
+  const summary = summarizeEntries([entry]);
   assert.match(summary, /salvage lane:orphan/);
   assert.match(summary, /workflow_salvage runId=/);
 });
@@ -261,7 +268,7 @@ test("compact, full, and summary status each surface the salvage hint", async ()
 test("compact status on a completed-with-failed-lanes run names the failing lanes and error class", async () => {
   const root = await tempDir("compact-lane-failures");
   const runId = "compact-lane-failures-run";
-  const dir = __test.runDirForRoot(root, runId);
+  const dir = runDirForRoot(root, runId);
   await fs.mkdir(dir, { recursive: true });
 
   await writeState(dir, {
@@ -297,8 +304,8 @@ test("compact status on a completed-with-failed-lanes run names the failing lane
     ],
   });
 
-  const entry = await __test.readRunEntry(root, runId);
-  const compact = __test.compactStatusForEntry(entry);
+  const entry = await readRunEntry(root, runId);
+  const compact = compactStatusForEntry(entry);
 
   assert.ok(Array.isArray(compact.laneFailures), "compact must carry a laneFailures array");
   assert.equal(compact.laneFailures.length, 2, "only failed lanes appear; the success lane is excluded");
@@ -319,14 +326,14 @@ test("compact status on a completed-with-failed-lanes run names the failing lane
   }
 
   // Human text view mirrors it without expanding to detail=full.
-  const summary = __test.summarizeEntries([entry]);
+  const summary = summarizeEntries([entry]);
   assert.match(summary, /lane-failed lane:bad-model \[failure\/terminal\]/);
   assert.match(summary, /lane-failed lane:slow \[timeout\/transient_exhausted\]/);
 });
 
 test("compact status exposes lastProgressAt + a documented staleness threshold for stall detection", async () => {
   const root = await tempDir("compact-staleness");
-  const dir = (id) => __test.runDirForRoot(root, id);
+  const dir = (id) => runDirForRoot(root, id);
 
   // An ACTIVE (running) run whose last lane progress is far in the past => stale.
   const stalledId = "compact-staleness-stalled";
@@ -337,13 +344,13 @@ test("compact status exposes lastProgressAt + a documented staleness threshold f
     startedAt: "2026-06-24T00:00:00.000Z",
     laneRecords: [{ callId: "lane:1", status: "running", childID: "c1", updatedAt: "2000-01-01T00:00:00.000Z", startedAt: "2000-01-01T00:00:00.000Z" }],
   });
-  const stalledEntry = await __test.readRunEntry(root, stalledId);
-  const stalledCompact = __test.compactStatusForEntry(stalledEntry);
+  const stalledEntry = await readRunEntry(root, stalledId);
+  const stalledCompact = compactStatusForEntry(stalledEntry);
   assert.equal(stalledCompact.lastProgressAt, "2026-06-24T00:00:00.000Z", "lastProgressAt is the most recent lane/run timestamp");
-  assert.equal(stalledCompact.staleness.thresholdMs, __test.STALE_PROGRESS_THRESHOLD_MS, "the staleness threshold is documented in the payload");
-  assert.ok(stalledCompact.staleness.ageMs > __test.STALE_PROGRESS_THRESHOLD_MS, "ageMs must exceed the threshold for a long-idle run");
+  assert.equal(stalledCompact.staleness.thresholdMs, STALE_PROGRESS_THRESHOLD_MS, "the staleness threshold is documented in the payload");
+  assert.ok(stalledCompact.staleness.ageMs > STALE_PROGRESS_THRESHOLD_MS, "ageMs must exceed the threshold for a long-idle run");
   assert.equal(stalledCompact.staleness.stale, true, "an active run idle past the threshold is reported stale");
-  assert.match(__test.summarizeEntries([stalledEntry]), /STALE no-progress>/);
+  assert.match(summarizeEntries([stalledEntry]), /STALE no-progress>/);
 
   // A run with very recent lane progress is NOT stale even though it is active.
   const freshId = "compact-staleness-fresh";
@@ -355,7 +362,7 @@ test("compact status exposes lastProgressAt + a documented staleness threshold f
     startedAt: now,
     laneRecords: [{ callId: "lane:1", status: "running", childID: "c1", updatedAt: now }],
   });
-  const freshCompact = __test.compactStatusForEntry(await __test.readRunEntry(root, freshId));
+  const freshCompact = compactStatusForEntry(await readRunEntry(root, freshId));
   assert.equal(freshCompact.staleness.stale, false, "a run with recent progress is not stale");
 
   // A terminal (completed) run is never "stale" regardless of how old its progress is.
@@ -368,7 +375,7 @@ test("compact status exposes lastProgressAt + a documented staleness threshold f
     finishedAt: "2000-01-01T00:10:00.000Z",
     laneRecords: [{ callId: "lane:1", status: "completed", outcome: "success", updatedAt: "2000-01-01T00:09:00.000Z" }],
   });
-  const doneCompact = __test.compactStatusForEntry(await __test.readRunEntry(root, doneId));
+  const doneCompact = compactStatusForEntry(await readRunEntry(root, doneId));
   assert.equal(doneCompact.staleness.stale, false, "terminal runs are never reported stale");
   assert.equal(doneCompact.staleness.lastProgressAt, "2000-01-01T00:09:00.000Z");
 });
@@ -376,7 +383,7 @@ test("compact status exposes lastProgressAt + a documented staleness threshold f
 test("writeState persists lastProgressAt advancing on each lane state change", async () => {
   const root = await tempDir("laststate-progress");
   const runId = "laststate-progress-run";
-  const dir = __test.runDirForRoot(root, runId);
+  const dir = runDirForRoot(root, runId);
   await fs.mkdir(dir, { recursive: true });
 
   const run = {
@@ -393,19 +400,19 @@ test("writeState persists lastProgressAt advancing on each lane state change", a
     replayedCost: 0,
   };
 
-  await __test.writeState(run);
+  await writeDurableState(run);
   let persisted = JSON.parse(await fs.readFile(path.join(dir, "state.json"), "utf8"));
   assert.equal(persisted.lastProgressAt, "2026-06-24T00:00:00.000Z", "with no lanes the run start is the baseline");
 
   run.laneRecords.set("lane:1", { callId: "lane:1", status: "completed", outcome: "success", updatedAt: "2026-06-24T00:04:00.000Z" });
-  await __test.writeState(run);
+  await writeDurableState(run);
   persisted = JSON.parse(await fs.readFile(path.join(dir, "state.json"), "utf8"));
   assert.equal(persisted.lastProgressAt, "2026-06-24T00:04:00.000Z", "a lane state change advances lastProgressAt");
 
   // computeLastProgressAt takes the latest of run start/resume and any lane timestamp; resume
   // counts as progress, and a later lane update wins over both.
   assert.equal(
-    __test.computeLastProgressAt({
+    computeLastProgressAt({
       startedAt: "2026-06-24T00:00:00.000Z",
       resumedAt: "2026-06-24T00:02:00.000Z",
       laneRecords: [{ callId: "lane:1", updatedAt: "2026-06-24T00:06:00.000Z" }],
@@ -417,19 +424,19 @@ test("writeState persists lastProgressAt advancing on each lane state change", a
 test("a fully completed run surfaces no salvage candidates", async () => {
   const root = await tempDir("salvage-none");
   const runId = "salvage-none-run";
-  const dir = __test.runDirForRoot(root, runId);
+  const dir = runDirForRoot(root, runId);
   await fs.mkdir(dir, { recursive: true });
 
   await writeState(dir, { id: runId, status: "completed", startedAt: "2026-06-24T00:00:00.000Z" });
   await writeLane(dir, runId, DONE.callId, { status: "completed", childID: DONE.childID, outcome: "success" });
   await appendJournalSuccess(dir, DONE.callId);
 
-  const entry = await __test.readRunEntry(root, runId);
+  const entry = await readRunEntry(root, runId);
   assert.equal(entry.status, "completed");
   assert.equal(entry.salvageCandidates, undefined, "non-interrupted runs carry no salvage candidates");
 
-  const compact = __test.compactStatusForEntry(entry);
+  const compact = compactStatusForEntry(entry);
   assert.equal(compact.salvageCandidates, undefined);
-  const full = await __test.fullStatusForEntry(entry);
+  const full = await fullStatusForEntry(entry);
   assert.equal(full.salvageCandidates, undefined);
 });

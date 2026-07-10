@@ -10,11 +10,15 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import workflowPlugin from "../workflow-kernel/index.js";
-import { encodeApplyBundle, decodeApplyBundle } from "../workflow-kernel/approval-hashing.js";
+import { encodeApplyBundle, decodeApplyBundle, computeDiffPlanHash } from "../workflow-kernel/approval-hashing.js";
+import { appendLedger, computeDomainMutationHash, stagedDomainMutationManifest, stageDomainMutation } from "../workflow-kernel/event-journal.js";
+import { acquireWorkflowLock, lockPathForRun } from "../workflow-kernel/run-store-locks.js";
+import { normalizePatches } from "../workflow-kernel/child-agent-runner.js";
+import { stableStringify } from "../workflow-kernel/text-json.js";
+import { writeJsonAtomic } from "../workflow-kernel/run-store-fs.js";
+import { rollbackPatches, validatePatchTargets } from "../workflow-kernel/workflow-plugin.js";
 import { makeHarness } from "./helpers/harness.mjs";
 const execFileAsync = promisify(execFile);
-const { __test } = workflowPlugin;
 
 async function tempDir() {
   return await fs.mkdtemp(path.join(os.tmpdir(), "workflow-apply-security-"));
@@ -94,10 +98,10 @@ async function rejectJson(promise) {
 async function refreshDomainManifest(status) {
   const planPath = path.join(status.dir, "diff-plan.json");
   const plan = JSON.parse(await fs.readFile(planPath, "utf8"));
-  plan.domainMutationManifest = await __test.stagedDomainMutationManifest(status.dir);
-  plan.domainMutationHash = __test.computeDomainMutationHash(plan.domainMutationManifest);
-  plan.diffPlanHash = __test.computeDiffPlanHash(plan);
-  await __test.writeJsonAtomic(planPath, plan);
+  plan.domainMutationManifest = await stagedDomainMutationManifest(status.dir);
+  plan.domainMutationHash = computeDomainMutationHash(plan.domainMutationManifest);
+  plan.diffPlanHash = computeDiffPlanHash(plan);
+  await writeJsonAtomic(planPath, plan);
   status.editPlan = { ...status.editPlan, domainMutationManifest: plan.domainMutationManifest, domainMutationHash: plan.domainMutationHash, diffPlanHash: plan.diffPlanHash };
   return status;
 }
@@ -133,7 +137,7 @@ return await agent("edit", { edit: true, schema: { type: "object", properties: {
     const output = await runApproved(tools, context, source);
     const runId = runIdFrom(output);
     const status = JSON.parse(await tools.workflow_status.execute({ runId, format: "json", detail: "full" }, context));
-    await __test.stageDomainMutation({ id: runId, dir: status.dir }, {
+    await stageDomainMutation({ id: runId, dir: status.dir }, {
       mutationKey: `note:${issueId}:apply-finalized`,
       operation: "fixture.append-notes",
       payload: { issueId, note: "finalized after apply" },
@@ -171,7 +175,7 @@ return await agent("edit", { edit: true, schema: { type: "object", properties: {
     }, context);
     assert.match(reapplied, /already applied/);
 
-    await __test.stageDomainMutation({ id: runId, dir: status.dir }, {
+    await stageDomainMutation({ id: runId, dir: status.dir }, {
       mutationKey: `note:${issueId}:invalid-approval-not-finalized`,
       operation: "fixture.append-notes",
       payload: { issueId, note: "invalid approval finalized" },
@@ -225,7 +229,7 @@ return await agent("edit", { edit: true, schema: { type: "object", properties: {
     const output = await runApproved(tools, context, source);
     const runId = runIdFrom(output);
     const status = JSON.parse(await tools.workflow_status.execute({ runId, format: "json", detail: "full" }, context));
-    await __test.stageDomainMutation({ id: runId, dir: status.dir }, {
+    await stageDomainMutation({ id: runId, dir: status.dir }, {
       mutationKey: `note:${issueId}:post-approval`,
       operation: "fixture.append-notes",
       payload: { issueId, note: "not approved" },
@@ -269,7 +273,7 @@ return await agent("edit", { edit: true, schema: { type: "object", properties: {
     const output = await runApproved(tools, context, source);
     const runId = runIdFrom(output);
     const status = JSON.parse(await tools.workflow_status.execute({ runId, format: "json", detail: "full" }, context));
-    await __test.stageDomainMutation({ id: runId, dir: status.dir }, {
+    await stageDomainMutation({ id: runId, dir: status.dir }, {
       mutationKey: "close:missing:apply-finalization-fails",
       operation: "fixture.close",
       payload: { issueId: "missing-issue", reason: "should fail" },
@@ -327,7 +331,7 @@ return await agent("edit", { edit: true, schema: { type: "object", properties: {
     const output = await runApproved(tools, context, source);
     const runId = runIdFrom(output);
     const status = JSON.parse(await tools.workflow_status.execute({ runId, format: "json", detail: "full" }, context));
-    await __test.stageDomainMutation({ id: runId, dir: status.dir }, {
+    await stageDomainMutation({ id: runId, dir: status.dir }, {
       mutationKey: `note:${issueId}:crash-recovery`,
       operation: "fixture.append-notes",
       payload: { issueId, note: "finalized during crash recovery" },
@@ -340,14 +344,14 @@ return await agent("edit", { edit: true, schema: { type: "object", properties: {
     // interrupted, and the domain mutation was never finalized.
     const planHash = status.editPlan.diffPlanHash;
     await fs.writeFile(path.join(directory, "crash-recovered.txt"), "applied\n", "utf8");
-    await __test.appendLedger(status.dir, "apply-ledger.jsonl", { phase: "started", diffPlanHash: planHash, patchCount: 1 });
-    await __test.appendLedger(status.dir, "apply-ledger.jsonl", { phase: "before-write", diffPlanHash: planHash, path: "crash-recovered.txt" });
-    await __test.appendLedger(status.dir, "apply-ledger.jsonl", { phase: "after-write", diffPlanHash: planHash, path: "crash-recovered.txt" });
-    await __test.appendLedger(status.dir, "apply-ledger.jsonl", { phase: "completed", diffPlanHash: planHash });
+    await appendLedger(status.dir, "apply-ledger.jsonl", { phase: "started", diffPlanHash: planHash, patchCount: 1 });
+    await appendLedger(status.dir, "apply-ledger.jsonl", { phase: "before-write", diffPlanHash: planHash, path: "crash-recovered.txt" });
+    await appendLedger(status.dir, "apply-ledger.jsonl", { phase: "after-write", diffPlanHash: planHash, path: "crash-recovered.txt" });
+    await appendLedger(status.dir, "apply-ledger.jsonl", { phase: "completed", diffPlanHash: planHash });
     const crashedState = JSON.parse(await fs.readFile(path.join(status.dir, "state.json"), "utf8"));
     crashedState.status = "interrupted";
     crashedState.error = "Workflow was active when no owning OpenCode process was found";
-    await __test.writeJsonAtomic(path.join(status.dir, "state.json"), crashedState);
+    await writeJsonAtomic(path.join(status.dir, "state.json"), crashedState);
 
     const interruptedStatus = JSON.parse(await tools.workflow_status.execute({ runId, format: "json", detail: "full" }, context));
     assert.equal(interruptedStatus.status, "interrupted");
@@ -398,7 +402,7 @@ return await agent("edit", { edit: true, schema: { type: "object", properties: {
     const output = await runApproved(tools, context, source);
     const runId = runIdFrom(output);
     const status = JSON.parse(await tools.workflow_status.execute({ runId, format: "json", detail: "full" }, context));
-    await __test.stageDomainMutation({ id: runId, dir: status.dir }, {
+    await stageDomainMutation({ id: runId, dir: status.dir }, {
       mutationKey: `note:${issueId}:drift-recovery`,
       operation: "fixture.append-notes",
       payload: { issueId, note: "must not finalize drifted tree" },
@@ -407,14 +411,14 @@ return await agent("edit", { edit: true, schema: { type: "object", properties: {
 
     const planHash = status.editPlan.diffPlanHash;
     await fs.writeFile(path.join(directory, "drifted-after-apply.txt"), "tampered\n", "utf8");
-    await __test.appendLedger(status.dir, "apply-ledger.jsonl", { phase: "started", diffPlanHash: planHash, patchCount: 1 });
-    await __test.appendLedger(status.dir, "apply-ledger.jsonl", { phase: "before-write", diffPlanHash: planHash, path: "drifted-after-apply.txt" });
-    await __test.appendLedger(status.dir, "apply-ledger.jsonl", { phase: "after-write", diffPlanHash: planHash, path: "drifted-after-apply.txt" });
-    await __test.appendLedger(status.dir, "apply-ledger.jsonl", { phase: "completed", diffPlanHash: planHash });
+    await appendLedger(status.dir, "apply-ledger.jsonl", { phase: "started", diffPlanHash: planHash, patchCount: 1 });
+    await appendLedger(status.dir, "apply-ledger.jsonl", { phase: "before-write", diffPlanHash: planHash, path: "drifted-after-apply.txt" });
+    await appendLedger(status.dir, "apply-ledger.jsonl", { phase: "after-write", diffPlanHash: planHash, path: "drifted-after-apply.txt" });
+    await appendLedger(status.dir, "apply-ledger.jsonl", { phase: "completed", diffPlanHash: planHash });
     const crashedState = JSON.parse(await fs.readFile(path.join(status.dir, "state.json"), "utf8"));
     crashedState.status = "interrupted";
     crashedState.error = "Workflow was active when no owning OpenCode process was found";
-    await __test.writeJsonAtomic(path.join(status.dir, "state.json"), crashedState);
+    await writeJsonAtomic(path.join(status.dir, "state.json"), crashedState);
 
     await assert.rejects(tools.workflow_apply.execute({
       runId,
@@ -457,10 +461,10 @@ return await agent("edit", { edit: true, schema: { type: "object", properties: {
 
     // A crash before the patch writes completed: the apply ledger never reached "completed",
     // so finalizing idempotently is unsafe. Only a "started" record exists.
-    await __test.appendLedger(status.dir, "apply-ledger.jsonl", { phase: "started", diffPlanHash: status.editPlan.diffPlanHash, patchCount: 1 });
+    await appendLedger(status.dir, "apply-ledger.jsonl", { phase: "started", diffPlanHash: status.editPlan.diffPlanHash, patchCount: 1 });
     const crashedState = JSON.parse(await fs.readFile(path.join(status.dir, "state.json"), "utf8"));
     crashedState.status = "interrupted";
-    await __test.writeJsonAtomic(path.join(status.dir, "state.json"), crashedState);
+    await writeJsonAtomic(path.join(status.dir, "state.json"), crashedState);
 
     await assert.rejects(tools.workflow_apply.execute({
       runId,
@@ -482,11 +486,11 @@ test("normalizePatches rejects unsupported (non-replace) patch modes (R17)", () 
   // every apply site does an unconditional whole-file write. The schema must now
   // reject any non-replace mode instead of approving a plan it cannot honor.
   assert.throws(
-    () => __test.normalizePatches({ patches: [{ path: "log.txt", content: "more\n", mode: "append" }] }),
+    () => normalizePatches({ patches: [{ path: "log.txt", content: "more\n", mode: "append" }] }),
     /Unsupported edit patch mode for log\.txt: append/,
   );
   assert.throws(
-    () => __test.normalizePatches([{ path: "log.txt", content: "more\n", mode: "prepend" }]),
+    () => normalizePatches([{ path: "log.txt", content: "more\n", mode: "prepend" }]),
     /Unsupported edit patch mode/,
   );
 
@@ -494,13 +498,13 @@ test("normalizePatches rejects unsupported (non-replace) patch modes (R17)", () 
   // (now-constant) mode field is no longer carried into the patch object, so it
   // can no longer be silently committed to computeDiffPlanHash while ignored at
   // apply. The diff-plan hash for both forms must therefore match.
-  const fromBare = __test.normalizePatches([{ path: "a.txt", content: "x" }]);
-  const fromReplace = __test.normalizePatches([{ path: "a.txt", content: "x", mode: "replace" }]);
+  const fromBare = normalizePatches([{ path: "a.txt", content: "x" }]);
+  const fromReplace = normalizePatches([{ path: "a.txt", content: "x", mode: "replace" }]);
   assert.deepEqual(fromBare, [{ path: "a.txt", content: "x" }]);
   assert.deepEqual(fromReplace, [{ path: "a.txt", content: "x" }]);
   assert.equal(
-    __test.computeDiffPlanHash({ patches: fromBare }),
-    __test.computeDiffPlanHash({ patches: fromReplace }),
+    computeDiffPlanHash({ patches: fromBare }),
+    computeDiffPlanHash({ patches: fromReplace }),
   );
 });
 
@@ -516,15 +520,15 @@ test("stableStringify mirrors JSON.stringify for undefined so in-memory and file
     baseCommit: undefined,
     domainMutationHash: undefined,
   };
-  const inMemory = __test.computeDiffPlanHash(plan);
+  const inMemory = computeDiffPlanHash(plan);
 
   const directory = await tempDir();
   try {
     const file = path.join(directory, "diff-plan.json");
-    await __test.writeJsonAtomic(file, plan);
+    await writeJsonAtomic(file, plan);
     const fromFile = JSON.parse(await fs.readFile(file, "utf8"));
     assert.equal(
-      __test.computeDiffPlanHash(fromFile),
+      computeDiffPlanHash(fromFile),
       inMemory,
       "file-recomputed diffPlanHash must match the in-memory hash for an undefined worktreePath",
     );
@@ -536,7 +540,7 @@ test("stableStringify mirrors JSON.stringify for undefined so in-memory and file
   // sentinel-serialized, so an absent worktreePath hashes identically to undefined.
   assert.equal(
     inMemory,
-    __test.computeDiffPlanHash({
+    computeDiffPlanHash({
       patches: [{ path: "a.txt", content: "x", callId: "agent:0" }],
       sourceHash: "abc",
     }),
@@ -545,14 +549,14 @@ test("stableStringify mirrors JSON.stringify for undefined so in-memory and file
   // A real worktreePath must still change the hash — the fix must not collapse distinct plans.
   assert.notEqual(
     inMemory,
-    __test.computeDiffPlanHash({
+    computeDiffPlanHash({
       patches: [{ path: "a.txt", content: "x", callId: "agent:0", worktreePath: "/wt/lane" }],
       sourceHash: "abc",
     }),
     "a present worktreePath must produce a distinct diffPlanHash",
   );
   // Array undefined elements must coerce to null, matching JSON.stringify of an array.
-  assert.equal(__test.stableStringify([1, undefined, 3]), "[1,null,3]");
+  assert.equal(stableStringify([1, undefined, 3]), "[1,null,3]");
 });
 
 test("workflow_apply rejects symlink ancestor patch targets before writing", async () => {
@@ -608,7 +612,7 @@ test("rollbackPatches returns rollback failures instead of swallowing them", asy
     await fs.rm(target);
     await fs.symlink(outside, target);
 
-    const failures = await __test.rollbackPatches([
+    const failures = await rollbackPatches([
       { patch: { path: "restore.txt" }, target, existed: true, previousContent: "original\n" },
     ], directory);
 
@@ -667,7 +671,7 @@ return await agent("edit", { edit: true, schema: { type: "object" } });`;
     const output = await runApproved(tools, context, source);
     const runId = runIdFrom(output);
     const status = JSON.parse(await tools.workflow_status.execute({ runId, format: "json", detail: "full" }, context));
-    await __test.writeJsonAtomic(path.join(status.dir, "apply.lock"), { operation: "apply", runId, process: { pid: process.pid } });
+    await writeJsonAtomic(path.join(status.dir, "apply.lock"), { operation: "apply", runId, process: { pid: process.pid } });
 
     await assert.rejects(tools.workflow_apply.execute({
       runId,
@@ -726,8 +730,8 @@ return await agent("edit", { edit: true, schema: { type: "object", properties: {
 
     // Simulate the owning background run still holding run.lock after it wrote
     // awaiting-diff-approval to state.json but before its finally released run.lock.
-    const runLockPath = __test.lockPathForRun(status.dir, "run");
-    const releaseRunLock = await __test.acquireWorkflowLock(runLockPath, { operation: "run", runId });
+    const runLockPath = lockPathForRun(status.dir, "run");
+    const releaseRunLock = await acquireWorkflowLock(runLockPath, { operation: "run", runId });
     try {
       await assert.rejects(tools.workflow_apply.execute(applyArgs, context), /active run lock|still holds an active run lock/);
       // The patch must NOT land while an active owner could still writeState over it.
@@ -813,7 +817,7 @@ test("validatePatchTargets distinguishes tracked and untracked existing patch ta
   try {
     await initGitRepo(directory);
 
-    const tracked = await __test.validatePatchTargets(directory, [
+    const tracked = await validatePatchTargets(directory, [
       { path: "README.md", content: "updated\n" },
     ]);
     assert.equal(tracked.length, 1);
@@ -822,11 +826,11 @@ test("validatePatchTargets distinguishes tracked and untracked existing patch ta
 
     await fs.writeFile(path.join(directory, "untracked.txt"), "local\n", "utf8");
     await assert.rejects(
-      () => __test.validatePatchTargets(directory, [{ path: "untracked.txt", content: "updated\n" }]),
+      () => validatePatchTargets(directory, [{ path: "untracked.txt", content: "updated\n" }]),
       /Patch target exists but is untracked: untracked\.txt/,
     );
 
-    const allowed = await __test.validatePatchTargets(
+    const allowed = await validatePatchTargets(
       directory,
       [{ path: "untracked.txt", content: "updated\n" }],
       { requireTracked: false },
@@ -860,14 +864,14 @@ test("validatePatchTargets treats ENOENT during content read as not-existing", a
       return await readFile(file, ...args);
     });
 
-    const planned = await __test.validatePatchTargets(directory, [
+    const planned = await validatePatchTargets(directory, [
       { path: "vanish.txt", content: "replacement\n" },
     ]);
     assert.equal(planned[0].existed, false);
     assert.equal(planned[0].previousContent, undefined);
 
     await assert.rejects(
-      () => __test.validatePatchTargets(directory, [{ path: "denied.txt", content: "replacement\n" }]),
+      () => validatePatchTargets(directory, [{ path: "denied.txt", content: "replacement\n" }]),
       /read denied after lstat/,
     );
   } finally {
@@ -900,7 +904,7 @@ return await agent("edit", { edit: true, schema: { type: "object", properties: {
     const status = JSON.parse(await tools.workflow_status.execute({ runId, format: "json", detail: "full" }, context));
 
     // Write a run.lock owned by a PID that does not exist (dead owner => stale).
-    await __test.writeJsonAtomic(__test.lockPathForRun(status.dir, "run"), {
+    await writeJsonAtomic(lockPathForRun(status.dir, "run"), {
       operation: "run",
       runId,
       acquiredAt: new Date().toISOString(),
@@ -972,7 +976,7 @@ return await agent("edit", { edit: true, schema: { type: "object", properties: {
     // detail=full emits applyBundle while state.json and diff-plan.json are in sync (pre-staging).
     assert.ok(status.editPlan.applyBundle, "detail=full emits editPlan.applyBundle");
     assert.equal(status.editPlan.applyBundle.startsWith("wfapply1."), true);
-    await __test.stageDomainMutation({ id: runId, dir: status.dir }, {
+    await stageDomainMutation({ id: runId, dir: status.dir }, {
       mutationKey: `note:${issueId}:bundle`, operation: "fixture.append-notes",
       payload: { issueId, note: "bundle finalized" },
     });
@@ -1106,7 +1110,7 @@ return await agent("edit", { edit: true, schema: { type: "object", properties: {
     const status = JSON.parse(await tools.workflow_status.execute({ runId, format: "json", detail: "full" }, context));
     // Stage a domain mutation AFTER diff approval WITHOUT refreshing the caller's hashes, so the
     // server-derived staged-domain drift is the (sole) mismatch dimension.
-    await __test.stageDomainMutation({ id: runId, dir: status.dir }, {
+    await stageDomainMutation({ id: runId, dir: status.dir }, {
       mutationKey: `note:${issueId}:drift`, operation: "fixture.append-notes",
       payload: { issueId, note: "drifted" },
     });

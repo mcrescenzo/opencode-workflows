@@ -1,7 +1,5 @@
 // Kernel barrel. Real modules own their symbols; the workflow-plugin orchestrator
 // exposes only its core (sandbox/run/child/apply/git/lane) symbols.
-import WorkflowPlugin from "./workflow-plugin.js";
-import * as kernel from "./index.js";
 export { default } from "./workflow-plugin.js";
 export {
   acquireAgentSlot,
@@ -58,11 +56,3 @@ export * from "./text-json.js";
 export * from "./workflow-source.js";
 export * from "./worktree-adapter.js";
 export { isPathInside, parseWorktreeList } from "./worktree-git.js";
-
-// Test-only surface. The orchestrator's WorkflowPlugin.__test carries only its core
-// (sandbox/run/child/apply/git/lane) symbols; the extracted modules own everything else.
-// Aggregate the kernel barrel (this module's own namespace) onto __test so test suites
-// reach module internals via this barrel's default export without importing the entry
-// (opencode-workflows.js). The orchestrator's own __test wins on conflict. Not part of the runtime
-// plugin contract.
-WorkflowPlugin.__test = { ...kernel, ...WorkflowPlugin.__test };

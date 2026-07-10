@@ -7,9 +7,23 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
 
-import WorkflowPlugin from "../workflow-kernel/index.js";
 import { makeHarness } from "./helpers/harness.mjs";
 import { emptyDrainAdapter } from "./helpers/fake-drain-adapter.mjs";
+import {
+  executeSandbox,
+  newSandboxContext,
+  persistRunArtifacts,
+  quickJSAsyncModule,
+  runNestedWorkflow,
+  maxHostCallsForRun,
+  __setSandboxHostOpTestHook,
+} from "../workflow-kernel/sandbox-executor.js";
+import {
+  MAX_HOST_CALLS,
+  MAX_PENDING_JOB_DRAIN_ITERATIONS,
+  DEFAULT_GUEST_DEADLINE_MS,
+} from "../workflow-kernel/constants.js";
+import { hash } from "../workflow-kernel/text-json.js";
 
 const execFileAsync = promisify(execFile);
 async function initGitRepo(directory) {
@@ -27,19 +41,6 @@ async function initGitRepo(directory) {
 // and are intentionally not exported (see report). We exercise executeSandbox against tiny
 // inline workflow bodies through the real QuickJS VM — which is deterministic and needs no
 // network or child sessions — plus runNestedWorkflow's pure guard paths.
-const {
-  executeSandbox,
-  newSandboxContext,
-  persistRunArtifacts,
-  quickJSAsyncModule,
-  runNestedWorkflow,
-  MAX_HOST_CALLS,
-  MAX_PENDING_JOB_DRAIN_ITERATIONS,
-  DEFAULT_GUEST_DEADLINE_MS,
-  maxHostCallsForRun,
-  __setSandboxHostOpTestHook,
-  hash,
-} = WorkflowPlugin.__test;
 
 // executeSandbox only touches `run` for the host ops these tests use (noop/budget) plus the
 // top-level counters; noop/budget/runtime-error paths never call appendEvent/writeState, so no

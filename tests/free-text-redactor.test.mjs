@@ -28,6 +28,8 @@ import {
   workflowHeartbeatToastCard,
 } from "../workflow-kernel/notification-toast.js";
 import WorkflowPlugin from "../workflow-kernel/index.js";
+import { runDirForRoot, writeJsonAtomic } from "../workflow-kernel/run-store-fs.js";
+import { writeLaneProjection } from "../workflow-kernel/run-store-projections.js";
 
 const { __test } = WorkflowPlugin;
 const salvageRun = __test.salvageRun;
@@ -276,7 +278,7 @@ async function tempDir(name) {
   return await fs.mkdtemp(path.join(os.tmpdir(), `${name}-`));
 }
 function runRootFor(dir) { return path.join(dir, ".opencode", "workflows", "runs"); }
-function runDirFor(dir, runId) { return __test.runDirForRoot(runRootFor(dir), runId); }
+function runDirFor(dir, runId) { return runDirForRoot(runRootFor(dir), runId); }
 function contextFor(dir) { return { worktree: dir }; }
 function assistantMessage(text) { return { role: "assistant", parts: [{ type: "text", text }] }; }
 function userMessage(text) { return { role: "user", parts: [{ type: "text", text }] }; }
@@ -302,14 +304,14 @@ test("salvage preview redactedSnippet masks a secret embedded in the final assis
   const callId = "lane:salvage-redact";
   const childID = "child-salvage-redact";
   const signatureHash = "sig-salvage-redact";
-  await __test.writeJsonAtomic(path.join(dir, "state.json"), {
+  await writeJsonAtomic(path.join(dir, "state.json"), {
     id: runId,
     status: "interrupted",
     startedAt: "2026-06-24T00:00:00.000Z",
     finishedAt: "2026-06-24T00:02:00.000Z",
     laneRecords: [],
   });
-  await __test.writeLaneProjection({ id: runId, dir, laneRecords: new Map() }, callId, {
+  await writeLaneProjection({ id: runId, dir, laneRecords: new Map() }, callId, {
     status: "running",
     childID,
     signatureHash,
@@ -354,12 +356,12 @@ test("salvage preview redactedSnippet is truncated AFTER masking (a long secret 
   const callId = "lane:salvage-redact-trunc";
   const childID = "child-salvage-redact-trunc";
   const signatureHash = "sig-trunc";
-  await __test.writeJsonAtomic(path.join(dir, "state.json"), {
+  await writeJsonAtomic(path.join(dir, "state.json"), {
     id: runId, status: "interrupted",
     startedAt: "2026-06-24T00:00:00.000Z", finishedAt: "2026-06-24T00:02:00.000Z",
     laneRecords: [],
   });
-  await __test.writeLaneProjection({ id: runId, dir, laneRecords: new Map() }, callId, {
+  await writeLaneProjection({ id: runId, dir, laneRecords: new Map() }, callId, {
     status: "running", childID, signatureHash, title: "orphan", model: "p/m",
   });
   // A reply well over the 200-char snippet cap with the secret near the start: masking must

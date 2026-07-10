@@ -29,6 +29,40 @@ import { fakeDrainAdapter, emptyDrainAdapter } from "./helpers/fake-drain-adapte
 import { makeExtensionDir, writeFakeExtension } from "./helpers/fake-extension.mjs";
 import { metaDiagnostics, validateMeta, laneBlueprint, collectDiagnostics, validateMetaLanes } from "../workflow-kernel/workflow-source.js";
 import { WORKFLOW_INSPECT_TOOLS, WORKFLOW_MUTATING_TOOLS } from "../workflow-kernel/authority-policy.js";
+import {
+  assertKnownAgentOptions,
+  authorityAutoApproveTier,
+  authoritySummary,
+  autoApproveCovers,
+  effectiveAutoApproveCeiling,
+  normalizeAgentOptions,
+  resolveLaneModel,
+  resolveLanePolicy,
+  resolveRunAuthority,
+  toolAuthority,
+} from "../workflow-kernel/authority-policy.js";
+import { approvalHash } from "../workflow-kernel/approval-hashing.js";
+import { buildNestedSnapshots, parseWorkflowSource, projectWorkflowDir, staticNestedWorkflowRefs } from "../workflow-kernel/workflow-source.js";
+import { acquireWorkflowLock, lockPathForRun } from "../workflow-kernel/run-store-locks.js";
+import { compactStatusForEntry, summarizeEntries } from "../workflow-kernel/run-store-status-format.js";
+import { DEFAULT_TEMPLATES, listTemplates } from "../workflow-kernel/role-template-loading.js";
+import {
+  deliveringNotificationPaths,
+  deliverWorkflowNotifications,
+  idleNotificationSessions,
+  notificationSendingIsStale,
+  NOTIFICATION_TRACKING_MAX,
+  pendingNotificationPaths,
+  rehydratePendingNotifications,
+  updateNotificationIdleState,
+  workflowNotificationPrompt,
+  writeCompletionNotification,
+} from "../workflow-kernel/lifecycle-control.js";
+import { domainMutationIdempotencyKey } from "../workflow-kernel/event-journal.js";
+import { hash } from "../workflow-kernel/text-json.js";
+import { MAX_INLINE_RESULT_BYTES, MAX_RESULT_BYTES, MAX_RESULT_READBACK_BYTES, MAX_SOURCE_BYTES, MAX_STATUS_STRING_CHARS } from "../workflow-kernel/constants.js";
+import { runDirForRoot, runRoot, runs, selfProcessStartTime, writeJsonAtomic } from "../workflow-kernel/run-store-fs.js";
+import { __setWriteStateTestHook } from "../workflow-kernel/run-store-state.js";
 const execFileAsync = promisify(execFile);
 const { __test } = workflowPlugin;
 
@@ -223,13 +257,13 @@ test("authority profiles carry no gate vocabulary; elevated launch consults the 
   // version floor (workflow-plugin.js's assertServerSupportsElevatedAuthority for
   // edit/worktreeEdit/integration/shell authority) plus per-lane permission-echo/directory-echo
   // assertions in child-agent-runner.js — proven end-to-end by the fingerprint tests below.
-  const readOnly = __test.resolveRunAuthority({ profile: "read-only-review" }, {});
+  const readOnly = resolveRunAuthority({ profile: "read-only-review" }, {});
   assert.equal(readOnly.profile, "read-only-review");
   assert.equal(readOnly.readOnly, true);
   assert.equal(readOnly.shell, false);
   assert.equal(Object.hasOwn(readOnly, "requiredGates"), false);
 
-  const shell = __test.resolveRunAuthority({ profile: "inspect-with-shell" }, {});
+  const shell = resolveRunAuthority({ profile: "inspect-with-shell" }, {});
   assert.equal(shell.profile, "inspect-with-shell");
   assert.equal(shell.shell, true);
   // inspect-with-shell still enforces the audited command-scoped allowlist + denylist
@@ -241,27 +275,27 @@ test("authority profiles carry no gate vocabulary; elevated launch consults the 
   assert.ok(shell.shellPolicy.allow.includes("git ls-files"), "git ls-files must be allowlisted");
   assert.equal(Object.hasOwn(shell, "requiredGates"), false);
 
-  const editPlan = __test.resolveRunAuthority({ profile: "edit-plan-only" }, {});
+  const editPlan = resolveRunAuthority({ profile: "edit-plan-only" }, {});
   assert.equal(editPlan.profile, "edit-plan-only");
   assert.equal(editPlan.worktreeEdit, true);
   assert.equal(editPlan.edit, false);
   assert.equal(editPlan.editGate, "requires workflow_apply approval before primary writes");
   assert.equal(Object.hasOwn(editPlan, "requiredGates"), false);
 
-  const applyApproved = __test.resolveRunAuthority({ profile: "apply-approved-plan" }, {});
+  const applyApproved = resolveRunAuthority({ profile: "apply-approved-plan" }, {});
   assert.equal(applyApproved.profile, "apply-approved-plan");
   assert.equal(applyApproved.edit, true);
   assert.equal(applyApproved.editGate, "requires workflow_apply approval before primary writes");
   assert.equal(Object.hasOwn(applyApproved, "requiredGates"), false);
 
-  const drainLocal = __test.resolveRunAuthority({ profile: "drain-autonomous-local" }, {});
+  const drainLocal = resolveRunAuthority({ profile: "drain-autonomous-local" }, {});
   assert.equal(drainLocal.profile, "drain-autonomous-local");
   assert.equal(drainLocal.integration, true);
   assert.equal(drainLocal.network, false);
   assert.equal(drainLocal.mcp, false);
   assert.equal(Object.hasOwn(drainLocal, "requiredGates"), false);
 
-  const drainDry = __test.resolveRunAuthority({ profile: "drain-dry-run" }, {});
+  const drainDry = resolveRunAuthority({ profile: "drain-dry-run" }, {});
   assert.equal(drainDry.profile, "drain-dry-run");
   assert.equal(drainDry.readOnly, true);
   assert.equal(Object.hasOwn(drainDry, "requiredGates"), false);
@@ -425,22 +459,22 @@ return { ok: true };`;
 });
 
 test("ad hoc authority remains supported and intentionally mapped", () => {
-  const authority = __test.resolveRunAuthority({ authority: { shell: true } }, {});
+  const authority = resolveRunAuthority({ authority: { shell: true } }, {});
   assert.equal(authority.profile, "ad-hoc");
   assert.equal(authority.shell, true);
   assert.deepEqual(authority.shellPolicy, { allow: ["*"], deny: [] });
 });
 
 test("MCP authority emits pattern-scoped permission rules", () => {
-  const authority = __test.resolveRunAuthority({
+  const authority = resolveRunAuthority({
     authority: { readOnly: true, mcpPolicy: { allow: ["mcp__docs_*"], deny: ["mcp__docs_delete"] } },
   }, {});
 
   assert.equal(authority.mcp, true);
   assert.deepEqual(authority.mcpPolicy, { allow: ["mcp__docs_*"], deny: ["mcp__docs_delete"] });
-  assert.match(__test.authoritySummary(authority), /mcpPolicy=allow:1,deny:1/);
+  assert.match(authoritySummary(authority), /mcpPolicy=allow:1,deny:1/);
 
-  const mcpRules = __test.permissionRulesForAuthority(authority).filter((rule) => rule.permission === "mcp");
+  const mcpRules = permissionRulesForAuthority(authority).filter((rule) => rule.permission === "mcp");
   assert.deepEqual(mcpRules, [
     { permission: "mcp", pattern: "mcp__docs_*", action: "allow" },
     { permission: "mcp", pattern: "mcp__docs_delete", action: "deny" },
@@ -449,7 +483,7 @@ test("MCP authority emits pattern-scoped permission rules", () => {
 });
 
 test("MCP authority accepts mcp object shorthand", () => {
-  const authority = __test.resolveRunAuthority({
+  const authority = resolveRunAuthority({
     authority: { mcp: { allow: ["mcp__kb_read"], deny: ["mcp__kb_write"] } },
   }, {});
 
@@ -458,12 +492,12 @@ test("MCP authority accepts mcp object shorthand", () => {
 });
 
 test("lane MCP policy narrows run authority without escalating", () => {
-  const runAuthority = __test.resolveRunAuthority({
+  const runAuthority = resolveRunAuthority({
     authority: { mcpPolicy: { allow: ["mcp__docs_*"], deny: ["mcp__docs_delete"] } },
   }, {});
   const run = { authority: runAuthority, capabilities: { permissions: "available" } };
 
-  const policy = __test.resolveLanePolicy(run, {
+  const policy = resolveLanePolicy(run, {
     mcpPolicy: { allow: ["mcp__docs_read"], deny: ["mcp__docs_write"] },
   });
 
@@ -480,18 +514,18 @@ test("lane MCP policy narrows run authority without escalating", () => {
   ]);
 
   assert.throws(
-    () => __test.resolveLanePolicy(run, { mcpPolicy: { allow: ["mcp__secrets_*"] } }),
+    () => resolveLanePolicy(run, { mcpPolicy: { allow: ["mcp__secrets_*"] } }),
     /exceeds approved workflow mcpPolicy/,
   );
 });
 
 test("readOnly lane erases MCP policy even when MCP is requested", () => {
-  const runAuthority = __test.resolveRunAuthority({
+  const runAuthority = resolveRunAuthority({
     authority: { mcpPolicy: { allow: ["mcp__docs_*"], deny: ["mcp__docs_delete"] } },
   }, {});
   const run = { authority: runAuthority, capabilities: { permissions: "available" } };
 
-  const policy = __test.resolveLanePolicy(run, {
+  const policy = resolveLanePolicy(run, {
     readOnly: true,
     mcp: true,
     mcpPolicy: { allow: ["mcp__docs_read"] },
@@ -505,12 +539,12 @@ test("readOnly lane erases MCP policy even when MCP is requested", () => {
 });
 
 test("authoritySummary flags unrestricted shell policy explicitly", () => {
-  const authority = __test.resolveRunAuthority(
+  const authority = resolveRunAuthority(
     { profile: "inspect-with-shell", authority: { shell: { allow: ["*"], deny: [] } } },
     {},
   );
 
-  assert.match(__test.authoritySummary(authority), /shellPolicy=UNRESTRICTED\(\*\)/);
+  assert.match(authoritySummary(authority), /shellPolicy=UNRESTRICTED\(\*\)/);
 });
 
 // --- OpenCode bash permission wildcard matcher (mirrors OpenCode's simple-wildcard semantics) ---
@@ -539,8 +573,8 @@ function bashRuleAction(rules, command) {
 }
 
 test("inspect-with-shell enforces the audited command-scoped allowlist in permission rules (P0)", () => {
-  const authority = __test.resolveRunAuthority({ profile: "inspect-with-shell" }, {});
-  const rules = __test.permissionRulesForAuthority(authority);
+  const authority = resolveRunAuthority({ profile: "inspect-with-shell" }, {});
+  const rules = permissionRulesForAuthority(authority);
 
   // Dangerous / non-inspection commands are DENIED (last-matching-rule-wins).
   for (const command of ["rm -rf x", "curl http://x", "cat .env", "ls -la", "wget http://evil"]) {
@@ -560,8 +594,8 @@ test("inspect-with-shell enforces the audited command-scoped allowlist in permis
 });
 
 test("inspect-with-shell permission rules deny known mutation/network/install classes", () => {
-  const authority = __test.resolveRunAuthority({ profile: "inspect-with-shell" }, {});
-  const rules = __test.permissionRulesForAuthority(authority);
+  const authority = resolveRunAuthority({ profile: "inspect-with-shell" }, {});
+  const rules = permissionRulesForAuthority(authority);
   for (const command of [
     "npm install foo", "npm i foo", "yarn add foo", "cargo add bar", "go get baz",
     "npm publish", "git commit -m x", "git push origin", "git merge feat", "git reset --hard",
@@ -575,32 +609,32 @@ test("inspect-with-shell permission rules deny known mutation/network/install cl
 test("inspect-with-shell explicit shellPolicy override is respected over the audited allowlist", () => {
   // An explicit caller-supplied shell object (authority.shell = { allow, deny }) is a deliberate
   // override and wins over the audited policy. This preserves the explicit-override path.
-  const override = __test.resolveRunAuthority(
+  const override = resolveRunAuthority(
     { profile: "inspect-with-shell", authority: { shell: { allow: ["echo *"], deny: ["echo secret"] } } },
     {},
   );
   assert.deepEqual(override.shellPolicy.allow, ["echo *"]);
   assert.deepEqual(override.shellPolicy.deny, ["echo secret"]);
   // The audited deny patterns are NOT injected when an explicit override is present.
-  const rules = __test.permissionRulesForAuthority(override);
+  const rules = permissionRulesForAuthority(override);
   assert.equal(bashRuleAction(rules, "echo hello"), "allow");
   assert.equal(bashRuleAction(rules, "echo secret"), "deny");
   // A non-overridden inspect-with-shell run still uses the audited list (regression guard).
-  const audited = __test.resolveRunAuthority({ profile: "inspect-with-shell" }, {});
+  const audited = resolveRunAuthority({ profile: "inspect-with-shell" }, {});
   assert.ok(audited.shellPolicy.allow.includes("git ls-files"));
   assert.ok(!audited.shellPolicy.allow.includes("echo *"));
 });
 
 test("inspect-with-shell does not grant unrestricted bash wildcard", () => {
-  const authority = __test.resolveRunAuthority({ profile: "inspect-with-shell" }, {});
+  const authority = resolveRunAuthority({ profile: "inspect-with-shell" }, {});
   assert.ok(!authority.shellPolicy.allow.includes("*"), "no unrestricted bash allow");
   // An arbitrary non-allowlisted command falls through to the catch-all deny.
-  const rules = __test.permissionRulesForAuthority(authority);
+  const rules = permissionRulesForAuthority(authority);
   assert.equal(bashRuleAction(rules, "python3 -c 'print(1)'"), "deny");
 });
 
 test("secret globs deny read, grep, glob, list, and lsp lane permissions (R21)", () => {
-  const rules = __test.permissionRulesForAuthority({ readOnly: true });
+  const rules = permissionRulesForAuthority({ readOnly: true });
   // lsp gets a broad allow:* like the other read-class tools, so it must also be
   // denied against every secret glob; otherwise an LSP response could surface
   // secret-file fragments to a read-only lane (opencode-workflows-wgh).
@@ -615,7 +649,7 @@ test("secret globs deny read, grep, glob, list, and lsp lane permissions (R21)",
 });
 
 test("extra secret globs are deduped into every read-class deny rule", () => {
-  const rules = __test.permissionRulesForAuthority({ readOnly: true }, ["**/custom-secret.json", "**/custom-secret.json"]);
+  const rules = permissionRulesForAuthority({ readOnly: true }, ["**/custom-secret.json", "**/custom-secret.json"]);
 
   for (const permission of ["read", "grep", "glob", "list", "lsp"]) {
     const matches = rules.filter((rule) => rule.permission === permission && rule.pattern === "**/custom-secret.json" && rule.action === "deny");
@@ -653,17 +687,17 @@ test("workflow child lanes deny inherited opencode-child tools and permissions",
     capabilities: { permissions: "available" },
   };
 
-  const policy = __test.resolveLanePolicy(run);
+  const policy = resolveLanePolicy(run);
   for (const tool of childTools) {
     assert.equal(policy.tools[tool], false, tool);
-    assert.equal(__test.toolAuthority(tool), "delegation", tool);
+    assert.equal(toolAuthority(tool), "delegation", tool);
     assert.ok(policy.permissionRules.some((rule) => rule.permission === tool && rule.pattern === "*" && rule.action === "deny"), tool);
   }
   for (const permission of childPermissions) {
     assert.ok(policy.permissionRules.some((rule) => rule.permission === permission && rule.pattern === "*" && rule.action === "deny"), permission);
   }
   assert.throws(
-    () => __test.resolveLanePolicy(run, { tools: { oc_prompt: true } }),
+    () => resolveLanePolicy(run, { tools: { oc_prompt: true } }),
     /unapproved delegation tool authority|denied by the workflow authority policy/,
   );
 });
@@ -683,7 +717,7 @@ test("opts.readOnly is authoritative over network/mcp/shell/edit lane toggles (R
   };
 
   // Convenience-flag escalation under readOnly must be dropped, not honored.
-  const networkFlag = __test.resolveLanePolicy(run, { readOnly: true, network: true });
+  const networkFlag = resolveLanePolicy(run, { readOnly: true, network: true });
   assert.equal(networkFlag.authority.readOnly, true);
   assert.equal(networkFlag.authority.network, false);
   assert.equal(networkFlag.mode, "readOnly");
@@ -696,14 +730,14 @@ test("opts.readOnly is authoritative over network/mcp/shell/edit lane toggles (R
 
   // edit escalation under readOnly must NOT flip readOnly back off.
   for (const dimension of ["edit", "mcp", "shell"]) {
-    const policy = __test.resolveLanePolicy(run, { readOnly: true, [dimension]: true });
+    const policy = resolveLanePolicy(run, { readOnly: true, [dimension]: true });
     assert.equal(policy.authority.readOnly, true, dimension);
     assert.equal(policy.authority[dimension], false, dimension);
     assert.equal(policy.mode, "readOnly", dimension);
   }
 
   // Escalation passed via the tools map under readOnly is stripped (not a throw).
-  const toolsMap = __test.resolveLanePolicy(run, {
+  const toolsMap = resolveLanePolicy(run, {
     readOnly: true,
     tools: { webfetch: true, edit: true, bash: true, websearch: true },
   });
@@ -715,7 +749,7 @@ test("opts.readOnly is authoritative over network/mcp/shell/edit lane toggles (R
   assert.equal(toolsMap.tools.bash, false);
 
   // Sanity: without readOnly, an approved run still escalates normally.
-  const escalated = __test.resolveLanePolicy(run, { network: true });
+  const escalated = resolveLanePolicy(run, { network: true });
   assert.equal(escalated.authority.network, true);
   assert.equal(escalated.tools.webfetch, true);
 
@@ -733,7 +767,7 @@ test("opts.readOnly is authoritative over network/mcp/shell/edit lane toggles (R
     capabilities: { permissions: "available" },
   };
   assert.throws(
-    () => __test.resolveLanePolicy(lowRun, { network: true }),
+    () => resolveLanePolicy(lowRun, { network: true }),
     /network authority beyond approved/,
   );
 });
@@ -752,7 +786,7 @@ test("opts.readOnly lane on an integration-approved run denies edit in permissio
     capabilities: { permissions: "available" },
   };
 
-  const policy = __test.resolveLanePolicy(run, { readOnly: true });
+  const policy = resolveLanePolicy(run, { readOnly: true });
   assert.equal(policy.mode, "readOnly");
   assert.equal(policy.authority.readOnly, true);
   assert.equal(policy.authority.integration, false);
@@ -776,7 +810,7 @@ test("opts.readOnly lane on an integration-approved run denies edit in permissio
   assert.equal(webfetchRule.action, "deny");
 
   // Sanity: without readOnly, the integration run still grants edit:* allow.
-  const integrationLane = __test.resolveLanePolicy(run, { worktreeEdit: true });
+  const integrationLane = resolveLanePolicy(run, { worktreeEdit: true });
   const integrationEditRule = integrationLane.permissionRules.find(
     (rule) => rule.permission === "edit" && rule.pattern === "*",
   );
@@ -803,7 +837,7 @@ test("default (non-worktree) child lane in an integration run cannot leak edit/a
     capabilities: { permissions: "available" },
   };
 
-  const policy = __test.resolveLanePolicy(run, {});
+  const policy = resolveLanePolicy(run, {});
 
   // tools map already forbids edit for a default lane.
   assert.equal(policy.tools.edit, false);
@@ -823,7 +857,7 @@ test("default (non-worktree) child lane in an integration run cannot leak edit/a
   // Regression guard: a lane that DOES opt into worktreeEdit (the legitimate
   // integration worktree lane, edited inside a created worktree) still gets edit
   // permission, so legitimate integration editing is preserved.
-  const worktreeLane = __test.resolveLanePolicy(run, { worktreeEdit: true });
+  const worktreeLane = resolveLanePolicy(run, { worktreeEdit: true });
   const worktreeEditRule = worktreeLane.permissionRules.find(
     (rule) => rule.permission === "edit" && rule.pattern === "*",
   );
@@ -898,7 +932,7 @@ test("drain-autonomous-local resolves network:false, mcp:false with no gate to v
   // network:false/mcp:false is enforced entirely by the permission ruleset (no webfetch/websearch/
   // mcp allow rules), so there is nothing left to probe before launch — the authority shape itself
   // is the whole contract now.
-  const drain = __test.resolveRunAuthority({ profile: "drain-autonomous-local" }, {});
+  const drain = resolveRunAuthority({ profile: "drain-autonomous-local" }, {});
   assert.equal(drain.network, false);
   assert.equal(drain.mcp, false);
 });
@@ -932,31 +966,31 @@ test("authority profile name changes approval hash", () => {
     capabilities: {},
     nestedSnapshots: new Map(),
   };
-  const adHoc = __test.resolveRunAuthority({ authority: { shell: true } }, {});
-  const profiled = __test.resolveRunAuthority({ profile: "inspect-with-shell" }, {});
+  const adHoc = resolveRunAuthority({ authority: { shell: true } }, {});
+  const profiled = resolveRunAuthority({ profile: "inspect-with-shell" }, {});
 
   assert.equal(adHoc.shell, profiled.shell);
   assert.notEqual(
-    __test.approvalHash({ ...approval, authority: adHoc }),
-    __test.approvalHash({ ...approval, authority: profiled }),
+    approvalHash({ ...approval, authority: adHoc }),
+    approvalHash({ ...approval, authority: profiled }),
   );
 });
 
 test("auto-approve tiers resolve from post-resolution authority and can only narrow", () => {
-  assert.equal(__test.authorityAutoApproveTier({ readOnly: true }), "readOnly");
-  assert.equal(__test.authorityAutoApproveTier({ readOnly: true, shell: true }), "readOnly");
-  assert.equal(__test.authorityAutoApproveTier({ worktreeEdit: true }), "worktree");
-  assert.equal(__test.authorityAutoApproveTier({ edit: true }), "worktree");
-  assert.equal(__test.authorityAutoApproveTier({ integration: true }), "all");
-  assert.equal(__test.authorityAutoApproveTier({ network: true }), "all");
-  assert.equal(__test.authorityAutoApproveTier({ mcp: true }), "all");
+  assert.equal(authorityAutoApproveTier({ readOnly: true }), "readOnly");
+  assert.equal(authorityAutoApproveTier({ readOnly: true, shell: true }), "readOnly");
+  assert.equal(authorityAutoApproveTier({ worktreeEdit: true }), "worktree");
+  assert.equal(authorityAutoApproveTier({ edit: true }), "worktree");
+  assert.equal(authorityAutoApproveTier({ integration: true }), "all");
+  assert.equal(authorityAutoApproveTier({ network: true }), "all");
+  assert.equal(authorityAutoApproveTier({ mcp: true }), "all");
 
-  assert.equal(__test.effectiveAutoApproveCeiling(false, undefined), false);
-  assert.equal(__test.effectiveAutoApproveCeiling("all", undefined), "all");
-  assert.equal(__test.effectiveAutoApproveCeiling("all", "readOnly"), "readOnly");
-  assert.equal(__test.effectiveAutoApproveCeiling("readOnly", "all"), "readOnly");
-  assert.equal(__test.autoApproveCovers("worktree", "readOnly"), true);
-  assert.equal(__test.autoApproveCovers("readOnly", "worktree"), false);
+  assert.equal(effectiveAutoApproveCeiling(false, undefined), false);
+  assert.equal(effectiveAutoApproveCeiling("all", undefined), "all");
+  assert.equal(effectiveAutoApproveCeiling("all", "readOnly"), "readOnly");
+  assert.equal(effectiveAutoApproveCeiling("readOnly", "all"), "readOnly");
+  assert.equal(autoApproveCovers("worktree", "readOnly"), true);
+  assert.equal(autoApproveCovers("readOnly", "worktree"), false);
 });
 
 test("workflow_run autoApprove launches eligible read-only workflow on first call and records audit trail", async () => {
@@ -1140,17 +1174,17 @@ test("resume preview preserves original authority and budget envelope", async ()
     const runId = "11111111-1111-4111-8111-111111111111";
     const source = `export const meta = { name: "resume-envelope", profile: "read-only-review", maxAgents: 10 };
 return true;`;
-    const root = __test.runRoot(context);
-    const dir = __test.runDirForRoot(root, runId);
+    const root = runRoot(context);
+    const dir = runDirForRoot(root, runId);
     await fs.mkdir(dir, { recursive: true });
     await fs.writeFile(path.join(dir, "script.js"), source, "utf8");
-    await __test.writeJsonAtomic(path.join(dir, "state.json"), {
+    await writeJsonAtomic(path.join(dir, "state.json"), {
       id: runId,
       status: "paused",
       sourcePath: "<inline>",
-      sourceHash: __test.hash(source),
+      sourceHash: hash(source),
       meta: { name: "resume-envelope", profile: "read-only-review", maxAgents: 10 },
-      authority: __test.resolveRunAuthority({ profile: "read-only-review" }, {}),
+      authority: resolveRunAuthority({ profile: "read-only-review" }, {}),
       maxAgents: 2,
       agentsStarted: 2,
       concurrency: 1,
@@ -1177,17 +1211,17 @@ test("resume rejects maxAgents, budget, profile, and authority expansion", async
     const runId = "22222222-2222-4222-8222-222222222222";
     const source = `export const meta = { name: "resume-locked", profile: "read-only-review" };
 return true;`;
-    const root = __test.runRoot(context);
-    const dir = __test.runDirForRoot(root, runId);
+    const root = runRoot(context);
+    const dir = runDirForRoot(root, runId);
     await fs.mkdir(dir, { recursive: true });
     await fs.writeFile(path.join(dir, "script.js"), source, "utf8");
-    await __test.writeJsonAtomic(path.join(dir, "state.json"), {
+    await writeJsonAtomic(path.join(dir, "state.json"), {
       id: runId,
       status: "paused",
       sourcePath: "<inline>",
-      sourceHash: __test.hash(source),
+      sourceHash: hash(source),
       meta: { name: "resume-locked", profile: "read-only-review" },
-      authority: __test.resolveRunAuthority({ profile: "read-only-review" }, {}),
+      authority: resolveRunAuthority({ profile: "read-only-review" }, {}),
       maxAgents: 1,
       agentsStarted: 1,
       concurrency: 1,
@@ -1211,17 +1245,17 @@ test("resume rejects a persisted source whose hash no longer matches script.js",
     const runId = "33333333-3333-4333-8333-333333333333";
     const source = `export const meta = { name: "resume-hash" };
 return true;`;
-    const root = __test.runRoot(context);
-    const dir = __test.runDirForRoot(root, runId);
+    const root = runRoot(context);
+    const dir = runDirForRoot(root, runId);
     await fs.mkdir(dir, { recursive: true });
     await fs.writeFile(path.join(dir, "script.js"), source, "utf8");
-    await __test.writeJsonAtomic(path.join(dir, "state.json"), {
+    await writeJsonAtomic(path.join(dir, "state.json"), {
       id: runId,
       status: "paused",
       sourcePath: "<inline>",
-      sourceHash: __test.hash("export const meta = { name: 'tampered' };\nreturn false;"),
+      sourceHash: hash("export const meta = { name: 'tampered' };\nreturn false;"),
       meta: { name: "resume-hash" },
-      authority: __test.resolveRunAuthority({}, {}),
+      authority: resolveRunAuthority({}, {}),
       maxAgents: 1,
       agentsStarted: 0,
       concurrency: 1,
@@ -1243,16 +1277,16 @@ test("resume rejects a persisted run whose script.js is missing", async () => {
   const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }));
   try {
     const runId = "missing-script-run";
-    const root = __test.runRoot(context);
-    const dir = __test.runDirForRoot(root, runId);
+    const root = runRoot(context);
+    const dir = runDirForRoot(root, runId);
     await fs.mkdir(dir, { recursive: true });
-    await __test.writeJsonAtomic(path.join(dir, "state.json"), {
+    await writeJsonAtomic(path.join(dir, "state.json"), {
       id: runId,
       status: "paused",
       sourcePath: "<inline>",
-      sourceHash: __test.hash("return true;"),
+      sourceHash: hash("return true;"),
       meta: { name: "resume-missing-script" },
-      authority: __test.resolveRunAuthority({}, {}),
+      authority: resolveRunAuthority({}, {}),
       maxAgents: 1,
       agentsStarted: 0,
       concurrency: 1,
@@ -1273,17 +1307,17 @@ test("resume rejects a persisted run whose script.js is missing", async () => {
 async function seedResumableRun(context, runId, { sourceHash, ...stateOverrides } = {}) {
   const source = `export const meta = { name: "resume-model-pin", profile: "read-only-review" };
 return true;`;
-  const root = __test.runRoot(context);
-  const dir = __test.runDirForRoot(root, runId);
+  const root = runRoot(context);
+  const dir = runDirForRoot(root, runId);
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(path.join(dir, "script.js"), source, "utf8");
-  await __test.writeJsonAtomic(path.join(dir, "state.json"), {
+  await writeJsonAtomic(path.join(dir, "state.json"), {
     id: runId,
     status: "interrupted",
     sourcePath: "<inline>",
-    sourceHash: sourceHash ?? __test.hash(source),
+    sourceHash: sourceHash ?? hash(source),
     meta: { name: "resume-model-pin", profile: "read-only-review" },
-    authority: __test.resolveRunAuthority({ profile: "read-only-review" }, {}),
+    authority: resolveRunAuthority({ profile: "read-only-review" }, {}),
     maxAgents: 1,
     agentsStarted: 1,
     concurrency: 1,
@@ -1491,14 +1525,14 @@ return await parallel(lanes);`;
 
 test("workflow source help lists drain as an available global", () => {
   assert.throws(
-    () => __test.parseWorkflowSource(`export default async function main(){ return true; }`),
+    () => parseWorkflowSource(`export default async function main(){ return true; }`),
     /available globals: .*drain.*line 1, column 1/,
   );
 });
 
 test("workflow source syntax errors include line and column context", () => {
   assert.throws(
-    () => __test.parseWorkflowSource(`export const meta = { name: "bad" };
+    () => parseWorkflowSource(`export const meta = { name: "bad" };
 const = 1;`),
     /Workflow source parse error: .*line 2, column/,
   );
@@ -1507,19 +1541,19 @@ const = 1;`),
 test("parseWorkflowSource rejects stray exports sharing the meta declaration", () => {
   assert.throws(
     () =>
-      __test.parseWorkflowSource(
+      parseWorkflowSource(
         `export const meta = { name: "x" }, other = 1;\nreturn typeof other;\n`,
       ),
     /additional exports in the same declaration: other/,
   );
   assert.throws(
     () =>
-      __test.parseWorkflowSource(
+      parseWorkflowSource(
         `export const meta = { name: "x" }, alpha = 1, beta = 2;\nreturn 0;\n`,
       ),
     /additional exports in the same declaration: alpha, beta/,
   );
-  const ok = __test.parseWorkflowSource(
+  const ok = parseWorkflowSource(
     `export const meta = { name: "x" };\nreturn { ok: true };\n`,
   );
   assert.equal(ok.meta.name, "x");
@@ -1527,7 +1561,7 @@ test("parseWorkflowSource rejects stray exports sharing the meta declaration", (
 
 test("parseWorkflowSource rejects literal zero-arg fanout callbacks before approval", () => {
   assert.throws(
-    () => __test.parseWorkflowSource(`export const meta = { name: "bad-parallel" };
+    () => parseWorkflowSource(`export const meta = { name: "bad-parallel" };
 await parallel([
   async () => "x",
   async (api) => api.agent("ok")
@@ -1535,29 +1569,29 @@ await parallel([
     /parallel\(\) callback\(s\) at index 0 declare 0 parameters.*line 3, column 3/s,
   );
   assert.throws(
-    () => __test.parseWorkflowSource(`export const meta = { name: "bad-default-param" };
+    () => parseWorkflowSource(`export const meta = { name: "bad-default-param" };
 await parallel([async (api = {}) => api.agent("x")]);`),
     /Default\/rest parameters.*line 2, column/,
   );
   assert.throws(
-    () => __test.parseWorkflowSource(`export const meta = { name: "bad-pipeline" };
+    () => parseWorkflowSource(`export const meta = { name: "bad-pipeline" };
 await pipeline(["x"], async () => "y");`),
     /pipeline\(\) callback\(s\) at index 0 declare 0 parameters.*line 2, column/s,
   );
 });
 
 test("parseWorkflowSource allows explicit sequential fanout and scoped map lane factories", () => {
-  const sequential = __test.parseWorkflowSource(`export const meta = { name: "intentional-sequential" };
+  const sequential = parseWorkflowSource(`export const meta = { name: "intentional-sequential" };
 return await parallel([async () => "x"], { sequential: true });`);
   assert.equal(sequential.meta.name, "intentional-sequential");
 
-  const scopedMap = __test.parseWorkflowSource(`export const meta = { name: "scoped-map" };
+  const scopedMap = parseWorkflowSource(`export const meta = { name: "scoped-map" };
 const lanes = [1, 2].map((item) => async ({ agent }) => await agent("lane " + item));
 return await parallel(lanes);`);
   assert.equal(scopedMap.meta.name, "scoped-map");
 
   assert.throws(
-    () => __test.parseWorkflowSource(`export const meta = { name: "bad-map" };
+    () => parseWorkflowSource(`export const meta = { name: "bad-map" };
 const lanes = [1, 2].map((item) => async () => item);
 return await parallel(lanes);`),
     /parallel\(\) callback\(s\) at index map\(\) declare 0 parameters.*line 2, column/s,
@@ -1566,26 +1600,26 @@ return await parallel(lanes);`),
 
 test("static nested workflow refs reject dynamic workflow calls", () => {
   assert.throws(
-    () => __test.staticNestedWorkflowRefs(`const nestedName = "child";
+    () => staticNestedWorkflowRefs(`const nestedName = "child";
 await workflow(nestedName);`),
     /workflow\(\) nested calls must use a static string name\/source or workflow\(\{ source: "\.\.\." \}\)/,
   );
   assert.throws(
-    () => __test.staticNestedWorkflowRefs("await workflow(`child-${suffix}`);"),
+    () => staticNestedWorkflowRefs("await workflow(`child-${suffix}`);"),
     /workflow\(\) nested calls must use a static string name\/source or workflow\(\{ source: "\.\.\." \}\)/,
   );
-  assert.deepEqual(__test.staticNestedWorkflowRefs('await workflow("child-workflow");'), ["child-workflow"]);
+  assert.deepEqual(staticNestedWorkflowRefs('await workflow("child-workflow");'), ["child-workflow"]);
 });
 
 test("static nested workflow refs support explicit object source/name forms and reject dynamic source values", () => {
-  assert.deepEqual(__test.staticNestedWorkflowRefs('await workflow({ source: "return 1;", args: { ok: true } });'), ["return 1;"]);
-  assert.deepEqual(__test.staticNestedWorkflowRefs('await workflow({ name: "child-workflow", args });'), ["child-workflow"]);
+  assert.deepEqual(staticNestedWorkflowRefs('await workflow({ source: "return 1;", args: { ok: true } });'), ["return 1;"]);
+  assert.deepEqual(staticNestedWorkflowRefs('await workflow({ name: "child-workflow", args });'), ["child-workflow"]);
   assert.throws(
-    () => __test.staticNestedWorkflowRefs('await workflow({ source: args.childSource });'),
+    () => staticNestedWorkflowRefs('await workflow({ source: args.childSource });'),
     /workflow\(\{ source \}\) must use a static string literal at line 1, column/,
   );
   assert.throws(
-    () => __test.staticNestedWorkflowRefs('await workflow({ source: "return 1;", name: "child" });'),
+    () => staticNestedWorkflowRefs('await workflow({ source: "return 1;", name: "child" });'),
     /workflow\(\) nested source form must include exactly one static source or name/,
   );
 });
@@ -1597,8 +1631,8 @@ await workflow({ source: ${JSON.stringify(tiny)}, args: { value: 1 } });
 return true;`;
 
   const context = { directory: process.cwd() };
-  const snapshots = await __test.buildNestedSnapshots(context, parent);
-  const tinyHash = __test.hash(tiny);
+  const snapshots = await buildNestedSnapshots(context, parent);
+  const tinyHash = hash(tiny);
 
   assert.equal(snapshots.get(tinyHash)?.source, tiny);
   assert.equal(snapshots.get(tinyHash)?.sourceHash, tinyHash);
@@ -1617,10 +1651,10 @@ await workflow(${JSON.stringify(inlineB)});
 return true;`;
 
   const context = { directory: process.cwd() };
-  const snapshots = await __test.buildNestedSnapshots(context, parent);
+  const snapshots = await buildNestedSnapshots(context, parent);
 
-  const hashA = __test.hash(inlineA);
-  const hashB = __test.hash(inlineB);
+  const hashA = hash(inlineA);
+  const hashB = hash(inlineB);
 
   // Both inline snapshots are retrievable by their own hash and carry their own source.
   assert.equal(snapshots.get(hashA)?.source, inlineA);
@@ -1663,7 +1697,7 @@ test("workflow_list includes extension workflows with source metadata", async ()
 
     assert.ok(entry, "missing extension fixture-rich workflow");
     assert.equal(entry.sourcePath, srcPath);
-    assert.equal(entry.sourceHash, __test.hash(src));
+    assert.equal(entry.sourceHash, hash(src));
     assert.deepEqual(entry.phases, ["recon", "find"]);
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
@@ -1806,7 +1840,7 @@ test("ux.1: workflow_list malformed entries stay bounded and carry no invocation
     throw new Error("workflow_list malformed handling must not prompt a model");
   });
   try {
-    const projectRoot = __test.projectWorkflowDir(context);
+    const projectRoot = projectWorkflowDir(context);
     await fs.mkdir(projectRoot, { recursive: true });
     await fs.writeFile(path.join(projectRoot, "broken.js"), "export const meta = { name: \"broken\"", "utf8");
 
@@ -1827,16 +1861,16 @@ test("ux.1: workflow_list malformed entries stay bounded and carry no invocation
 
 test("jbs3.10: normalizeAgentOptions rejects a misspelled agent() opt and preserves valid ones", () => {
   // A typo'd opt would otherwise be silently dropped, leaving the lane on unintended defaults.
-  assert.throws(() => __test.normalizeAgentOptions({ onFailur: "returnNull" }), /Unknown agent\(\) option: onFailur/);
-  assert.throws(() => __test.normalizeAgentOptions({ readonly: true }), /Unknown agent\(\) option: readonly/);
-  assert.throws(() => __test.assertKnownAgentOptions({ foo: 1, bar: 2 }), /Unknown agent\(\) options: foo, bar/);
+  assert.throws(() => normalizeAgentOptions({ onFailur: "returnNull" }), /Unknown agent\(\) option: onFailur/);
+  assert.throws(() => normalizeAgentOptions({ readonly: true }), /Unknown agent\(\) option: readonly/);
+  assert.throws(() => assertKnownAgentOptions({ foo: 1, bar: 2 }), /Unknown agent\(\) options: foo, bar/);
   // Every documented opt key stays accepted; label/phase are still stripped from the normalized value.
   const valid = { model: "v/m", tier: "fast", readOnly: true, edit: false, allowEdits: false, worktreeEdit: false,
     shell: false, allowShell: false, network: false, allowNetwork: false, mcp: false, allowMcp: false,
     mcpPolicy: { allow: ["mcp__docs_*"] }, tools: {}, secretGlobs: [], agent: "build", agentType: "build", role: "explorer", effort: "high", retryCount: 0, correctiveRetries: 1,
     schema: { type: "object" }, timeoutMs: 1000, system: "sys", onFailure: "returnNull",
     taskSummary: "t", summary: "s", label: "L", title: "T", phase: "p" };
-  const normalized = __test.normalizeAgentOptions(valid);
+  const normalized = normalizeAgentOptions(valid);
   assert.equal(normalized.label, undefined, "label is stripped");
   assert.equal(normalized.phase, undefined, "phase is stripped");
   assert.equal(normalized.onFailure, "returnNull", "valid opt survives normalization");
@@ -2000,7 +2034,7 @@ test("external scriptPath with allowExternalScriptPath opt-in previews path + ha
     assert.match(preview, new RegExp(`Source: ${escapeRegExp(externalFile.replace(/\\/g, "/"))}`));
     assert.match(preview, /sourceHash: [a-f0-9]{64}/);
     assert.match(preview, /External source \(allowExternalScriptPath opt-in\): true/);
-    assert.equal(__test.hash(EXTERNAL_WORKFLOW_SOURCE), preview.match(/sourceHash: ([a-f0-9]{64})/)[1]);
+    assert.equal(hash(EXTERNAL_WORKFLOW_SOURCE), preview.match(/sourceHash: ([a-f0-9]{64})/)[1]);
 
     const output = await runApprovedRequest(tools, context, request);
     assert.match(output, /completed/);
@@ -2015,7 +2049,7 @@ test("scriptPath inside the trusted project workflow root runs without opt-in", 
     throw new Error("trusted project-root workflow should not call child prompts");
   });
   try {
-    const projectRoot = __test.projectWorkflowDir(context);
+    const projectRoot = projectWorkflowDir(context);
     await fs.mkdir(projectRoot, { recursive: true });
     const trustedFile = path.join(projectRoot, "trusted-project.js");
     await fs.writeFile(trustedFile, EXTERNAL_WORKFLOW_SOURCE, "utf8");
@@ -2034,7 +2068,7 @@ test("named project workflow resolves from a trusted root without opt-in (no reg
     throw new Error("named workflow should not call child prompts");
   });
   try {
-    const projectRoot = __test.projectWorkflowDir(context);
+    const projectRoot = projectWorkflowDir(context);
     await fs.mkdir(projectRoot, { recursive: true });
     await fs.writeFile(path.join(projectRoot, "named-project.js"), EXTERNAL_WORKFLOW_SOURCE, "utf8");
 
@@ -2052,7 +2086,7 @@ test("by-name preview reports approveByReference: false (approve-by-reference is
     throw new Error("named workflow should not call child prompts");
   });
   try {
-    const projectRoot = __test.projectWorkflowDir(context);
+    const projectRoot = projectWorkflowDir(context);
     await fs.mkdir(projectRoot, { recursive: true });
     await fs.writeFile(path.join(projectRoot, "named-project.js"), EXTERNAL_WORKFLOW_SOURCE, "utf8");
 
@@ -2082,7 +2116,7 @@ return { ok: true };`;
       /workflow_save requires `source`/,
     );
     await assert.rejects(
-      () => tools.workflow_save.execute({ name: "too-large", source: "x".repeat(__test.MAX_SOURCE_BYTES + 1), scope: "project" }, context),
+      () => tools.workflow_save.execute({ name: "too-large", source: "x".repeat(MAX_SOURCE_BYTES + 1), scope: "project" }, context),
       /Workflow source exceeds 524288 bytes/,
     );
     await assert.rejects(
@@ -2103,7 +2137,7 @@ test("workflow_save defaults to project scope and requires explicit global inten
     const source = `export const meta = { name: ${JSON.stringify(name)}, profile: "read-only-review" };
 return { ok: true };`;
     const saved = await tools.workflow_save.execute({ name, source }, context);
-    const projectPath = path.join(__test.projectWorkflowDir(context), `${name}.js`);
+    const projectPath = path.join(projectWorkflowDir(context), `${name}.js`);
     assert.match(saved, new RegExp(`Path: ${escapeRegExp(projectPath)}`));
     assert.equal(await fs.readFile(projectPath, "utf8"), source);
 
@@ -2247,10 +2281,10 @@ test("first-run-slice template is a bounded read-only listing surface", async ()
   // Surface contract for bd opencode-workflows-ux.2: the shipped first-run slice must
   // stay the smallest safe shape — read-only-review, bounded agents, no edit gate — so a
   // fresh agent can validate one slice before fanning out.
-  const source = __test.DEFAULT_TEMPLATES["first-run-slice"];
+  const source = DEFAULT_TEMPLATES["first-run-slice"];
   assert.equal(typeof source, "string", "first-run-slice template must ship in DEFAULT_TEMPLATES");
 
-  const { meta, body } = __test.parseWorkflowSource(source);
+  const { meta, body } = parseWorkflowSource(source);
   assert.equal(meta.name, "first-run-slice");
   assert.equal(meta.profile, "read-only-review");
   assert.ok(meta.maxAgents >= 1 && meta.maxAgents <= 2, `maxAgents must stay small, got ${meta.maxAgents}`);
@@ -2260,13 +2294,13 @@ test("first-run-slice template is a bounded read-only listing surface", async ()
   assert.ok(/return\s*{/.test(body), "template must synthesize and return a plain-JS envelope");
 
   // read-only-review denies edits and requests no apply gate, so no guest write can land.
-  const authority = __test.resolveRunAuthority(meta, {});
+  const authority = resolveRunAuthority(meta, {});
   assert.equal(authority.readOnly, true);
   assert.equal(authority.edit, false);
   assert.equal(authority.mode, "readOnly");
   assert.equal(authority.editGate, "not-requested");
 
-  const templates = JSON.parse(await __test.listTemplates({ format: "json" }));
+  const templates = JSON.parse(await listTemplates({ format: "json" }));
   const entry = templates.find((item) => item.name === "first-run-slice");
   assert.ok(entry, "first-run-slice must appear in workflow_templates listing");
   assert.match(entry.sourceHash, /^[a-f0-9]{12,}$/);
@@ -2283,7 +2317,7 @@ test("workflow_templates retrieves shipped template source explicitly", async ()
     const templates = JSON.parse(await tools.workflow_templates.execute({ format: "json", template: "first-run-slice", includeSource: true }, context));
     assert.equal(templates.length, 1);
     assert.equal(templates[0].name, "first-run-slice");
-    assert.equal(templates[0].source, __test.DEFAULT_TEMPLATES["first-run-slice"]);
+    assert.equal(templates[0].source, DEFAULT_TEMPLATES["first-run-slice"]);
     assert.equal(templates[0].byteLength, Buffer.byteLength(templates[0].source, "utf8"));
     assert.ok(templates[0].lineCount > 1);
   } finally {
@@ -2301,9 +2335,9 @@ test("workflow_template_save saves templates, rejects unsafe calls, and honors o
       name: "saved-template",
       scope: "project",
     }, context);
-    const filePath = path.join(__test.projectWorkflowDir(context), "saved-template.js");
+    const filePath = path.join(projectWorkflowDir(context), "saved-template.js");
     assert.match(saved, /Saved workflow saved-template/);
-    assert.equal(await fs.readFile(filePath, "utf8"), __test.DEFAULT_TEMPLATES["first-run-slice"]);
+    assert.equal(await fs.readFile(filePath, "utf8"), DEFAULT_TEMPLATES["first-run-slice"]);
 
     await assert.rejects(
       () => tools.workflow_template_save.execute({
@@ -2321,7 +2355,7 @@ test("workflow_template_save saves templates, rejects unsafe calls, and honors o
       overwrite: true,
     }, context);
     assert.match(overwritten, /Saved workflow saved-template/);
-    assert.equal(await fs.readFile(filePath, "utf8"), __test.DEFAULT_TEMPLATES["scoped-parallel"]);
+    assert.equal(await fs.readFile(filePath, "utf8"), DEFAULT_TEMPLATES["scoped-parallel"]);
 
     await assert.rejects(
       () => tools.workflow_template_save.execute({ template: "does-not-exist", scope: "project" }, context),
@@ -2352,7 +2386,7 @@ test("first-run-slice template runs read-only, synthesizes in pure JS, and write
     return { data: { parts: [{ type: "text", text: JSON.stringify(laneResult) }], info: { structured: laneResult, tokens: { input: 1, output: 1, reasoning: 0 }, cost: 0 } } };
   });
   try {
-    const source = __test.DEFAULT_TEMPLATES["first-run-slice"].replace(
+    const source = DEFAULT_TEMPLATES["first-run-slice"].replace(
       `{ role: "explorer", schema: findingSchema, label: "slice:" + slice }`,
       `{ schema: findingSchema, label: "slice:" + slice }`,
     );
@@ -2403,7 +2437,7 @@ test("workflow_run resolves extension workflows by name and project overrides wi
     const extPreview = await tools.workflow_run.execute({ name: "fixture-rich" }, context);
     assert.match(extPreview, new RegExp(`Source: ${extWorkflowPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
 
-    const projectPath = path.join(__test.projectWorkflowDir(context), "fixture-rich.js");
+    const projectPath = path.join(projectWorkflowDir(context), "fixture-rich.js");
     await fs.mkdir(path.dirname(projectPath), { recursive: true });
     await fs.writeFile(projectPath, `export const meta = { name: "fixture-rich", description: "project override" };
 return true;`, "utf8");
@@ -2517,7 +2551,7 @@ return true;`;
     const output = await runApproved(tools, context, source);
     assert.match(output, /completed/);
 
-    const authority = __test.resolveRunAuthority({ profile: "inspect-with-shell" }, {});
+    const authority = resolveRunAuthority({ profile: "inspect-with-shell" }, {});
     const rules = permissionRulesForAuthority(authority);
     assert.ok(
       rules.some((rule) => rule.permission === "*" && rule.pattern === "*" && rule.action === "deny"),
@@ -2672,7 +2706,7 @@ return await drain({ adapter: "staged", dryRun: false, maxWaves: 2, maxAttempts:
     assert.equal(records.length, 1);
     assert.deepEqual(records[0], {
       operation: "fixture.close",
-      idempotencyKey: __test.domainMutationIdempotencyKey("fixture-close:item-1"),
+      idempotencyKey: domainMutationIdempotencyKey("fixture-close:item-1"),
       issueId: "item-1",
     });
 
@@ -2848,7 +2882,7 @@ test("fixture-drain autonomous-local defaults to background unless explicitly di
     const started = await tools.workflow_run.execute({ name: "fixture-drain", args: { mode: "autonomous-local" }, approve: true, approvalHash: backgroundHash }, context);
     assert.match(started, /started in background/);
     const backgroundRunId = runIdFrom(started);
-    await __test.runs.get(backgroundRunId)?.done;
+    await runs.get(backgroundRunId)?.done;
     const backgroundStatus = JSON.parse(await tools.workflow_status.execute({ runId: backgroundRunId, format: "json", detail: "full" }, context));
     assert.equal(backgroundStatus.background, true);
 
@@ -3192,16 +3226,16 @@ test("workflow_status full surfaces bounded integration path-conflict diagnostic
   });
   const runId = "integration-conflict-status";
   try {
-    const root = __test.runRoot(context);
-    const dir = __test.runDirForRoot(root, runId);
+    const root = runRoot(context);
+    const dir = runDirForRoot(root, runId);
     await fs.mkdir(dir, { recursive: true });
-    await __test.writeJsonAtomic(path.join(dir, "state.json"), {
+    await writeJsonAtomic(path.join(dir, "state.json"), {
       id: runId,
       status: "review-required",
       sourcePath: "<inline>",
-      sourceHash: __test.hash("return true;"),
+      sourceHash: hash("return true;"),
       meta: { name: "integration-conflict-status" },
-      authority: __test.resolveRunAuthority({ authority: { integration: true } }, {}),
+      authority: resolveRunAuthority({ authority: { integration: true } }, {}),
       startedAt: new Date(0).toISOString(),
       agentsStarted: 2,
       maxAgents: 2,
@@ -3211,7 +3245,7 @@ test("workflow_status full surfaces bounded integration path-conflict diagnostic
       capabilities: {},
       diagnostics: {},
       integrationPlan: {
-        sourceHash: __test.hash("return true;"),
+        sourceHash: hash("return true;"),
         baseCommit: "base",
         patches: [{ path: "conflict.txt", content: "raw patch content must not leak", mode: "replace" }],
         lanes: [],
@@ -3651,8 +3685,8 @@ test("workflow_status refuses result paths outside the run directory", async () 
   const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }));
   try {
     const runId = "forged-result-run";
-    const root = __test.runRoot(context);
-    const dir = __test.runDirForRoot(root, runId);
+    const root = runRoot(context);
+    const dir = runDirForRoot(root, runId);
     const resultPath = path.join(escapeRoot, "result.json");
     await fs.mkdir(dir, { recursive: true });
     await fs.writeFile(resultPath, JSON.stringify({ escaped: true }), "utf8");
@@ -3688,8 +3722,8 @@ test("workflow_status detail full refuses notification paths outside the run dir
   const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }));
   try {
     const runId = "forged-notification-run";
-    const root = __test.runRoot(context);
-    const dir = __test.runDirForRoot(root, runId);
+    const root = runRoot(context);
+    const dir = runDirForRoot(root, runId);
     const notificationPath = path.join(escapeRoot, "notification.json");
     await fs.mkdir(dir, { recursive: true });
     // Attacker-controlled file outside the run dir that the forged state.json points at.
@@ -3715,18 +3749,18 @@ test("workflow_status detail full refuses notification paths outside the run dir
 test("rehydratePendingNotifications rejects a notificationPath outside the run directory", async () => {
   const escapeRoot = await tempDir();
   const { context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }));
-  const savedPending = new Set(__test.pendingNotificationPaths);
-  __test.pendingNotificationPaths.clear();
+  const savedPending = new Set(pendingNotificationPaths);
+  pendingNotificationPaths.clear();
   try {
     const runId = "tampered-rehydrate-run";
-    const root = __test.runRoot(context);
-    const dir = __test.runDirForRoot(root, runId);
+    const root = runRoot(context);
+    const dir = runDirForRoot(root, runId);
     const inRunNotificationPath = path.join(dir, "notification.json");
     const escapedPath = path.join(escapeRoot, "notification.json");
     await fs.mkdir(dir, { recursive: true });
     await fs.writeFile(escapedPath, JSON.stringify({ unused: true }), "utf8");
     // notification.json lives inside the run dir but its notificationPath is tampered to escape it.
-    await __test.writeJsonAtomic(inRunNotificationPath, {
+    await writeJsonAtomic(inRunNotificationPath, {
       stateVersion: 1,
       runId,
       status: "completed",
@@ -3738,7 +3772,7 @@ test("rehydratePendingNotifications rejects a notificationPath outside the run d
       delivery: { attempts: 0, lastAttemptAt: null, sendingAt: null, lastError: null },
     });
 
-    const summary = await __test.rehydratePendingNotifications(
+    const summary = await rehydratePendingNotifications(
       { directory, worktree: directory },
       { type: "session.idle", properties: { sessionID: "parent-session" } },
     );
@@ -3746,10 +3780,10 @@ test("rehydratePendingNotifications rejects a notificationPath outside the run d
     assert.equal(summary.rehydrated, 0);
     assert.ok(summary.skipped >= 1);
     // The tampered out-of-run path must never enter the delivery queue.
-    assert.equal(__test.pendingNotificationPaths.has(escapedPath), false);
+    assert.equal(pendingNotificationPaths.has(escapedPath), false);
   } finally {
-    __test.pendingNotificationPaths.clear();
-    for (const value of savedPending) __test.pendingNotificationPaths.add(value);
+    pendingNotificationPaths.clear();
+    for (const value of savedPending) pendingNotificationPaths.add(value);
     await fs.rm(directory, { recursive: true, force: true });
     await fs.rm(escapeRoot, { recursive: true, force: true });
   }
@@ -3784,7 +3818,7 @@ test("foreground workflow_run omits oversized inline results and points to resul
   const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }));
   try {
     const source = `export const meta = { name: "large-inline-result" };
-return { marker: "large-inline-result", blob: "x".repeat(${__test.MAX_INLINE_RESULT_BYTES + 2048}) };`;
+return { marker: "large-inline-result", blob: "x".repeat(${MAX_INLINE_RESULT_BYTES + 2048}) };`;
     const output = await runApproved(tools, context, source);
 
     assert.match(output, /Result omitted from workflow_run: redacted JSON is \d+ bytes, above inline cap \d+\./);
@@ -3802,7 +3836,7 @@ return { marker: "large-inline-result", blob: "x".repeat(${__test.MAX_INLINE_RES
 
     const status = JSON.parse(await tools.workflow_status.execute({ runId: runIdFrom(output), format: "json", detail: "result" }, context));
     assert.equal(status.result.output.marker, "large-inline-result");
-    assert.equal(status.result.output.blob.length, __test.MAX_INLINE_RESULT_BYTES + 2048);
+    assert.equal(status.result.output.blob.length, MAX_INLINE_RESULT_BYTES + 2048);
     assert.equal(status.resultReadback.mode, "full");
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
@@ -3832,7 +3866,7 @@ return { status: "ok", summary: "hello", stats: { a: 1, b: 2 }, artifacts: { dir
 });
 
 test("ux.6: compact status meta is an allowlisted projection; sensitive/free-form keys are dropped", () => {
-  const oversized = "x".repeat(__test.MAX_STATUS_STRING_CHARS + 500);
+  const oversized = "x".repeat(MAX_STATUS_STRING_CHARS + 500);
   const entry = {
     id: "compact-redaction-run",
     root: "/runs",
@@ -3854,7 +3888,7 @@ test("ux.6: compact status meta is an allowlisted projection; sensitive/free-for
       error: oversized,
     },
   };
-  const compact = __test.compactStatusForEntry(entry);
+  const compact = compactStatusForEntry(entry);
   const json = JSON.stringify(compact);
   // Compact meta is an allowlisted projection: sensitive/free-form keys are DROPPED (not
   // merely redacted); the full frontmatter remains on detail:"full" (see the 3741 test).
@@ -3873,7 +3907,7 @@ test("ux.6: compact status meta is an allowlisted projection; sensitive/free-for
   assert.ok(!json.includes("COMPACT-PW-9000"), "raw nested password leaked into compact status");
   assert.ok(!json.includes(oversized), "unbounded oversized string leaked into compact status");
   // errorSummary is bounded too.
-  assert.ok(compact.errorSummary.length <= __test.MAX_STATUS_STRING_CHARS, "oversized errorSummary not bounded");
+  assert.ok(compact.errorSummary.length <= MAX_STATUS_STRING_CHARS, "oversized errorSummary not bounded");
   assert.match(compact.errorSummary, /\[truncated \d+ chars\]/);
 });
 
@@ -3896,7 +3930,7 @@ test("ux.6: compact status omits raw prompts, tool outputs, and lane results not
       laneResults: [{ output: "RAW-LANE-RESULT-CONTENT" }],
     },
   };
-  const compact = __test.compactStatusForEntry(entry);
+  const compact = compactStatusForEntry(entry);
   const json = JSON.stringify(compact);
   assert.equal(compact.transcript, undefined);
   assert.equal(compact.prompt, undefined);
@@ -3918,11 +3952,11 @@ test("ux.6: workflow_status detail=full redacts sensitive meta, bounds oversized
   const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }));
   try {
     const runId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
-    const root = __test.runRoot(context);
-    const dir = __test.runDirForRoot(root, runId);
+    const root = runRoot(context);
+    const dir = runDirForRoot(root, runId);
     await fs.mkdir(dir, { recursive: true });
-    const oversized = "y".repeat(__test.MAX_STATUS_STRING_CHARS + 400);
-    await __test.writeJsonAtomic(path.join(dir, "state.json"), {
+    const oversized = "y".repeat(MAX_STATUS_STRING_CHARS + 400);
+    await writeJsonAtomic(path.join(dir, "state.json"), {
       id: runId,
       status: "completed",
       meta: {
@@ -3947,9 +3981,9 @@ test("ux.6: workflow_status detail=full redacts sensitive meta, bounds oversized
     assert.ok(!json.includes("FULL-CREDENTIAL-VALUE"), "raw credential leaked into full status");
     assert.ok(!json.includes("FULL-NESTED-APIKEY-VALUE"), "raw nested apiKey leaked into full status");
     // Oversized meta strings and errorSummary are bounded.
-    assert.ok(status.meta.nested.blurb.length <= __test.MAX_STATUS_STRING_CHARS, "oversized full meta string not bounded");
+    assert.ok(status.meta.nested.blurb.length <= MAX_STATUS_STRING_CHARS, "oversized full meta string not bounded");
     assert.match(status.meta.nested.blurb, /\[truncated \d+ chars\]/);
-    assert.ok(status.errorSummary.length <= __test.MAX_STATUS_STRING_CHARS, "oversized full errorSummary not bounded");
+    assert.ok(status.errorSummary.length <= MAX_STATUS_STRING_CHARS, "oversized full errorSummary not bounded");
     assert.match(status.errorSummary, /\[truncated \d+ chars\]/);
     assert.ok(!json.includes(oversized), "unbounded oversized string leaked into full status");
     // Raw lane/tool/transcript evidence is never projected into the full view.
@@ -3972,12 +4006,12 @@ test("costTrackingWarning surfaces in compact and full status only when maxCost 
   const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }));
   try {
     const runId = "cost-unreliable-run";
-    const root = __test.runRoot(context);
-    const dir = __test.runDirForRoot(root, runId);
+    const root = runRoot(context);
+    const dir = runDirForRoot(root, runId);
     await fs.mkdir(dir, { recursive: true });
 
     async function statusFor(budgetCeilings) {
-      await __test.writeJsonAtomic(path.join(dir, "state.json"), {
+      await writeJsonAtomic(path.join(dir, "state.json"), {
         id: runId,
         status: "completed",
         meta: { name: "cost-unreliable" },
@@ -4009,7 +4043,7 @@ test("costTrackingWarning surfaces in compact and full status only when maxCost 
 test("workflow_status detail=result preserves full-fidelity strings when the readback fits", async () => {
   const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }));
   try {
-    const oversizedLen = __test.MAX_STATUS_STRING_CHARS + 500;
+    const oversizedLen = MAX_STATUS_STRING_CHARS + 500;
     const source = `export const meta = { name: "oversized-result" };
 return { blob: "z".repeat(${oversizedLen}), nested: { note: "z".repeat(${oversizedLen}) } };`;
     const output = await runApproved(tools, context, source);
@@ -4027,19 +4061,19 @@ test("workflow_status detail=result returns partial readback for oversized resul
   const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }));
   try {
     const runId = "oversized-result-readback";
-    const root = __test.runRoot(context);
-    const dir = __test.runDirForRoot(root, runId);
+    const root = runRoot(context);
+    const dir = runDirForRoot(root, runId);
     const resultPath = path.join(dir, "result.json");
-    const blob = "q".repeat(__test.MAX_RESULT_READBACK_BYTES + 5000);
+    const blob = "q".repeat(MAX_RESULT_READBACK_BYTES + 5000);
     await fs.mkdir(dir, { recursive: true });
-    await __test.writeJsonAtomic(resultPath, {
+    await writeJsonAtomic(resultPath, {
       output: {
         blob,
         stable: "kept",
         apiKey: "SHOULD-NOT-LEAK",
       },
     });
-    await __test.writeJsonAtomic(path.join(dir, "state.json"), {
+    await writeJsonAtomic(path.join(dir, "state.json"), {
       id: runId,
       status: "completed",
       resultPath,
@@ -4047,7 +4081,7 @@ test("workflow_status detail=result returns partial readback for oversized resul
 
     const status = JSON.parse(await tools.workflow_status.execute({ runId, format: "json", detail: "result" }, context));
 
-    assert.ok(status.resultFileBytes > __test.MAX_RESULT_BYTES);
+    assert.ok(status.resultFileBytes > MAX_RESULT_BYTES);
     assert.equal(status.resultError, undefined);
     assert.equal(status.result.output.stable, "kept");
     assert.equal(status.result.output.apiKey, "[redacted]");
@@ -4112,7 +4146,7 @@ test("ux.4: compact status carries bounded operator nextActions for every run li
     ["pending-approval", {}, [/approve=true/]],
   ];
   for (const [status, stateExtra, patterns] of expectations) {
-    const compact = __test.compactStatusForEntry(ux4Entry(status, stateExtra));
+    const compact = compactStatusForEntry(ux4Entry(status, stateExtra));
     assert.ok(Array.isArray(compact.nextActions), `${status} nextActions must be an array`);
     assert.ok(compact.nextActions.length >= 1, `${status} must offer at least one next action`);
     assert.ok(compact.nextActions.length <= 5, `${status} nextActions must stay bounded`);
@@ -4123,12 +4157,12 @@ test("ux.4: compact status carries bounded operator nextActions for every run li
       assert.ok(compact.nextActions.some((a) => pattern.test(a)), `${status} nextActions missing ${pattern}`);
     }
   }
-  const timedOut = __test.compactStatusForEntry(ux4Entry("timed-out"));
+  const timedOut = compactStatusForEntry(ux4Entry("timed-out"));
   assert.ok(!timedOut.nextActions.some((a) => /workflow_run resumeRunId=/.test(a)), "timed-out runs must not advertise resume");
 });
 
 test("ux.4: review-required without an applyable diff plan does not recommend workflow_apply", () => {
-  const compact = __test.compactStatusForEntry(ux4Entry("review-required", {
+  const compact = compactStatusForEntry(ux4Entry("review-required", {
     integrationPlan: {
       integrationResult: {
         status: "review-required",
@@ -4141,12 +4175,12 @@ test("ux.4: review-required without an applyable diff plan does not recommend wo
 });
 
 test("ux.4: awaiting-diff-approval with an applyable diff plan recommends workflow_apply", () => {
-  const compact = __test.compactStatusForEntry(ux4Entry("awaiting-diff-approval", ux4ApplyableDiffPlan()));
+  const compact = compactStatusForEntry(ux4Entry("awaiting-diff-approval", ux4ApplyableDiffPlan()));
   assert.ok(compact.nextActions.some((a) => /workflow_apply runId=/.test(a)), "applyable awaiting-diff-approval must advertise workflow_apply");
 });
 
 test("ux.4: failed retryable lanes recommend resume while terminal schema lanes require fix-inspect first", () => {
-  const retryable = __test.compactStatusForEntry(ux4Entry("failed", {
+  const retryable = compactStatusForEntry(ux4Entry("failed", {
     laneRecords: [{
       callId: "lane:retryable",
       outcome: "failure",
@@ -4157,7 +4191,7 @@ test("ux.4: failed retryable lanes recommend resume while terminal schema lanes 
   }));
   assert.ok(retryable.nextActions.some((a) => /workflow_run resumeRunId=/.test(a)), "retryable failure must advertise resume");
 
-  const terminal = __test.compactStatusForEntry(ux4Entry("failed", {
+  const terminal = compactStatusForEntry(ux4Entry("failed", {
     laneRecords: [{
       callId: "lane:schema",
       outcome: "failure",
@@ -4171,20 +4205,20 @@ test("ux.4: failed retryable lanes recommend resume while terminal schema lanes 
 });
 
 test("ux.4: partial and corrupt run entries still receive bounded recovery nextActions", () => {
-  const partial = __test.compactStatusForEntry({ id: "p", root: "/runs", dir: "/runs/p", status: "partial", kind: "partial", error: "Missing state.json" });
+  const partial = compactStatusForEntry({ id: "p", root: "/runs", dir: "/runs/p", status: "partial", kind: "partial", error: "Missing state.json" });
   assert.ok(partial.nextActions.some((a) => /workflow_cleanup dryRun=true/.test(a)), "partial must suggest cleanup review");
   assert.ok(partial.nextActions.length <= 5);
-  const corrupt = __test.compactStatusForEntry({ id: "c", root: "/runs", dir: "/runs/c", status: "corrupt", kind: "corrupt", error: "bad json" });
+  const corrupt = compactStatusForEntry({ id: "c", root: "/runs", dir: "/runs/c", status: "corrupt", kind: "corrupt", error: "bad json" });
   assert.ok(corrupt.nextActions.some((a) => /workflow_cleanup dryRun=true/.test(a)), "corrupt must suggest cleanup review");
   assert.ok(corrupt.nextActions.length <= 5);
 });
 
 test("ux.4: stale/interrupted runs with salvage candidates recommend recovery then salvage", () => {
-  const stale = __test.compactStatusForEntry(ux4Entry("stale-active", {}, { salvageCandidates: [{ callId: "lane:orphan", hint: "running lane with transcript" }] }));
+  const stale = compactStatusForEntry(ux4Entry("stale-active", {}, { salvageCandidates: [{ callId: "lane:orphan", hint: "running lane with transcript" }] }));
   assert.ok(stale.nextActions.some((a) => /workflow_reconcile runId=/.test(a)), "stale must recommend reconcile");
   assert.ok(stale.nextActions.some((a) => /workflow_salvage runId=/.test(a)), "stale+salvage must recommend salvage");
 
-  const interrupted = __test.compactStatusForEntry(ux4Entry("interrupted", {}, { salvageCandidates: [{ callId: "lane:orphan", hint: "running lane with transcript" }] }));
+  const interrupted = compactStatusForEntry(ux4Entry("interrupted", {}, { salvageCandidates: [{ callId: "lane:orphan", hint: "running lane with transcript" }] }));
   assert.ok(interrupted.nextActions.some((a) => /workflow_run resumeRunId=/.test(a)), "interrupted must recommend resume");
   assert.ok(interrupted.nextActions.some((a) => /workflow_salvage runId=/.test(a)), "interrupted+salvage must recommend salvage");
 });
@@ -4200,7 +4234,7 @@ test("ux.4: nextActions never echo prompts, tool output, lane results, meta, or 
   };
   const leaks = ["UX4-SECRET-APIKEY", "UX4-RAW-PROMPT", "UX4-RAW-ERROR-DETAIL", "UX4-RAW-TRANSCRIPT", "UX4-RAW-TOOL-OUTPUT", "UX4-RAW-LANE-RESULT"];
   for (const status of ["completed", "failed", "awaiting-diff-approval", "apply-failed", "cancelled", "running"]) {
-    const compact = __test.compactStatusForEntry(ux4Entry(status, hostile));
+    const compact = compactStatusForEntry(ux4Entry(status, hostile));
     const json = JSON.stringify(compact.nextActions);
     for (const leak of leaks) {
       assert.ok(!json.includes(leak), `${status} nextActions leaked ${leak}`);
@@ -4214,7 +4248,7 @@ test("ux.4: summarizeEntries text view appends bounded next: lines without leaki
     ux4Entry("completed", { resultPath: "/runs/ux4/result.json", laneOutcomes: { success: 2 } }),
     { id: "broken", root: "/runs", dir: "/runs/broken", status: "corrupt", kind: "corrupt", error: "bad json" },
   ];
-  const text = __test.summarizeEntries(entries);
+  const text = summarizeEntries(entries);
   assert.match(text, /next: workflow_status runId=.* detail=full/);
   assert.match(text, /next: workflow_pause runId=/);
   assert.match(text, /next: workflow_cleanup dryRun=true/);
@@ -4245,12 +4279,12 @@ test("workflow notification timeout clears sending state and remains recoverable
   const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }));
   try {
     const runId = "33333333-3333-4333-8333-333333333333";
-    const root = __test.runRoot(context);
-    const dir = __test.runDirForRoot(root, runId);
+    const root = runRoot(context);
+    const dir = runDirForRoot(root, runId);
     const notificationPath = path.join(dir, "notification.json");
     await fs.mkdir(dir, { recursive: true });
-    await __test.writeJsonAtomic(path.join(dir, "state.json"), { id: runId, status: "completed", notification: { notificationPath } });
-    await __test.writeJsonAtomic(notificationPath, {
+    await writeJsonAtomic(path.join(dir, "state.json"), { id: runId, status: "completed", notification: { notificationPath } });
+    await writeJsonAtomic(notificationPath, {
       stateVersion: 1,
       runId,
       status: "completed",
@@ -4261,9 +4295,9 @@ test("workflow notification timeout clears sending state and remains recoverable
       sentAt: null,
       delivery: { attempts: 0, lastAttemptAt: null, sendingAt: null, lastError: null },
     });
-    __test.pendingNotificationPaths.add(notificationPath);
+    pendingNotificationPaths.add(notificationPath);
 
-    const result = await __test.deliverWorkflowNotifications({ __workflowNotificationTimeoutMs: 1, client: { session: { promptAsync: async () => await new Promise(() => {}) } } }, { type: "session.idle", properties: { sessionID: "parent-session" } });
+    const result = await deliverWorkflowNotifications({ __workflowNotificationTimeoutMs: 1, client: { session: { promptAsync: async () => await new Promise(() => {}) } } }, { type: "session.idle", properties: { sessionID: "parent-session" } });
     const record = JSON.parse(await fs.readFile(notificationPath, "utf8"));
     const status = JSON.parse(await tools.workflow_status.execute({ runId, format: "json", detail: "full" }, context));
 
@@ -4296,10 +4330,10 @@ test("completion notification redacts secrets from run error before persistence 
       },
     };
 
-    const notification = await __test.writeCompletionNotification(run);
+    const notification = await writeCompletionNotification(run);
     assert.match(notification.errorSummary, /\[REDACTED:secret\]/);
     assert.doesNotMatch(notification.errorSummary, new RegExp(secret));
-    assert.doesNotMatch(__test.workflowNotificationPrompt(notification), new RegExp(secret));
+    assert.doesNotMatch(workflowNotificationPrompt(notification), new RegExp(secret));
     const persisted = JSON.parse(await fs.readFile(path.join(runDir, "notification.json"), "utf8"));
     assert.doesNotMatch(persisted.errorSummary, new RegExp(secret));
   } finally {
@@ -4311,7 +4345,7 @@ test("workflow notification stale sending state is retried", async () => {
   const directory = await tempDir();
   const notificationPath = path.join(directory, "notification.json");
   try {
-    await __test.writeJsonAtomic(notificationPath, {
+    await writeJsonAtomic(notificationPath, {
       stateVersion: 1,
       runId: "stale-notification-run",
       status: "completed",
@@ -4322,9 +4356,9 @@ test("workflow notification stale sending state is retried", async () => {
       sentAt: null,
       delivery: { attempts: 1, lastAttemptAt: "2026-06-16T00:00:00.000Z", sendingAt: "2026-06-16T00:00:00.000Z", lastError: null },
     });
-    __test.pendingNotificationPaths.add(notificationPath);
+    pendingNotificationPaths.add(notificationPath);
 
-    const result = await __test.deliverWorkflowNotifications({ client: { session: { promptAsync: async () => ({ data: { id: "async-1" } }) } } }, { type: "session.idle", properties: { sessionID: "parent-session" } });
+    const result = await deliverWorkflowNotifications({ client: { session: { promptAsync: async () => ({ data: { id: "async-1" } }) } } }, { type: "session.idle", properties: { sessionID: "parent-session" } });
     const record = JSON.parse(await fs.readFile(notificationPath, "utf8"));
 
     assert.equal(result.delivered, 1);
@@ -4334,7 +4368,7 @@ test("workflow notification stale sending state is retried", async () => {
     assert.equal(typeof record.delivery.staleAt, "string");
     assert.ok(record.sentAt);
   } finally {
-    __test.pendingNotificationPaths.delete(notificationPath);
+    pendingNotificationPaths.delete(notificationPath);
     await fs.rm(directory, { recursive: true, force: true });
   }
 });
@@ -4342,14 +4376,14 @@ test("workflow notification stale sending state is retried", async () => {
 test("notification sending staleness covers boundary and invalid timestamps", () => {
   const nowMs = Date.parse("2026-06-16T00:01:00.000Z");
 
-  assert.equal(__test.notificationSendingIsStale({ delivery: { sendingAt: null } }, nowMs), false);
-  assert.equal(__test.notificationSendingIsStale({ delivery: { sendingAt: "not-a-date" } }, nowMs), false);
+  assert.equal(notificationSendingIsStale({ delivery: { sendingAt: null } }, nowMs), false);
+  assert.equal(notificationSendingIsStale({ delivery: { sendingAt: "not-a-date" } }, nowMs), false);
   assert.equal(
-    __test.notificationSendingIsStale({ delivery: { sendingAt: "2026-06-16T00:00:00.001Z" } }, nowMs),
+    notificationSendingIsStale({ delivery: { sendingAt: "2026-06-16T00:00:00.001Z" } }, nowMs),
     false,
   );
   assert.equal(
-    __test.notificationSendingIsStale({ delivery: { sendingAt: "2026-06-16T00:00:00.000Z" } }, nowMs),
+    notificationSendingIsStale({ delivery: { sendingAt: "2026-06-16T00:00:00.000Z" } }, nowMs),
     true,
   );
 });
@@ -4360,7 +4394,7 @@ test("workflow notification with not-yet-stale sending state is skipped", async 
   const sendingAt = new Date().toISOString();
   let promptCalls = 0;
   try {
-    await __test.writeJsonAtomic(notificationPath, {
+    await writeJsonAtomic(notificationPath, {
       stateVersion: 1,
       runId: "fresh-sending-notification-run",
       status: "completed",
@@ -4371,9 +4405,9 @@ test("workflow notification with not-yet-stale sending state is skipped", async 
       sentAt: null,
       delivery: { attempts: 1, lastAttemptAt: sendingAt, sendingAt, lastError: null },
     });
-    __test.pendingNotificationPaths.add(notificationPath);
+    pendingNotificationPaths.add(notificationPath);
 
-    const result = await __test.deliverWorkflowNotifications({ client: { session: { promptAsync: async () => { promptCalls += 1; return { data: { id: "unexpected" } }; } } } }, { type: "session.idle", properties: { sessionID: "parent-session" } });
+    const result = await deliverWorkflowNotifications({ client: { session: { promptAsync: async () => { promptCalls += 1; return { data: { id: "unexpected" } }; } } } }, { type: "session.idle", properties: { sessionID: "parent-session" } });
     const record = JSON.parse(await fs.readFile(notificationPath, "utf8"));
 
     assert.equal(result.delivered, 0);
@@ -4385,7 +4419,7 @@ test("workflow notification with not-yet-stale sending state is skipped", async 
     assert.equal(record.delivery.sendingAt, sendingAt);
     assert.equal(record.delivery.lastError, null);
   } finally {
-    __test.pendingNotificationPaths.delete(notificationPath);
+    pendingNotificationPaths.delete(notificationPath);
     await fs.rm(directory, { recursive: true, force: true });
   }
 });
@@ -4393,10 +4427,10 @@ test("workflow notification with not-yet-stale sending state is skipped", async 
 test("concurrent notification delivery sends the completion prompt exactly once", async () => {
   const directory = await tempDir();
   const notificationPath = path.join(directory, "notification.json");
-  const savedDelivering = new Set(__test.deliveringNotificationPaths);
-  __test.deliveringNotificationPaths.clear();
+  const savedDelivering = new Set(deliveringNotificationPaths);
+  deliveringNotificationPaths.clear();
   try {
-    await __test.writeJsonAtomic(notificationPath, {
+    await writeJsonAtomic(notificationPath, {
       stateVersion: 1,
       runId: "concurrent-notification-run",
       status: "completed",
@@ -4407,7 +4441,7 @@ test("concurrent notification delivery sends the completion prompt exactly once"
       sentAt: null,
       delivery: { attempts: 0, lastAttemptAt: null, sendingAt: null, lastError: null },
     });
-    __test.pendingNotificationPaths.add(notificationPath);
+    pendingNotificationPaths.add(notificationPath);
 
     // Count promptAsync invocations. The mock yields to the microtask queue before
     // resolving so a second concurrent caller can interleave at the record-read step
@@ -4429,8 +4463,8 @@ test("concurrent notification delivery sends the completion prompt exactly once"
     // Two concurrent callers both observe sendingAt=null in the persisted record; the
     // synchronous in-process mutex must ensure only one actually delivers.
     const [first, second] = await Promise.all([
-      __test.deliverWorkflowNotifications(pluginContext, idleEvent),
-      __test.deliverWorkflowNotifications(pluginContext, idleEvent),
+      deliverWorkflowNotifications(pluginContext, idleEvent),
+      deliverWorkflowNotifications(pluginContext, idleEvent),
     ]);
 
     assert.equal(promptCalls, 1, "completion prompt is sent exactly once across concurrent callers");
@@ -4441,87 +4475,87 @@ test("concurrent notification delivery sends the completion prompt exactly once"
     assert.equal(typeof record.sentAt, "string");
     assert.equal(record.delivery.attempts, 1, "the record is only attempted once");
     assert.equal(record.delivery.sendingAt, null);
-    assert.equal(__test.deliveringNotificationPaths.size, 0, "the in-process mutex is released");
+    assert.equal(deliveringNotificationPaths.size, 0, "the in-process mutex is released");
   } finally {
-    __test.pendingNotificationPaths.delete(notificationPath);
-    __test.deliveringNotificationPaths.clear();
-    for (const entry of savedDelivering) __test.deliveringNotificationPaths.add(entry);
+    pendingNotificationPaths.delete(notificationPath);
+    deliveringNotificationPaths.clear();
+    for (const entry of savedDelivering) deliveringNotificationPaths.add(entry);
     await fs.rm(directory, { recursive: true, force: true });
   }
 });
 
 test("updateNotificationIdleState clears the idle flag on any non-status activity event", () => {
   const sessionID = "idle-clear-session";
-  const savedIdle = new Set(__test.idleNotificationSessions);
-  __test.idleNotificationSessions.clear();
+  const savedIdle = new Set(idleNotificationSessions);
+  idleNotificationSessions.clear();
   try {
     // An idle event flags the session as idle.
-    __test.updateNotificationIdleState({ type: "session.idle", properties: { sessionID } });
-    assert.equal(__test.idleNotificationSessions.has(sessionID), true, "idle event flags the session");
+    updateNotificationIdleState({ type: "session.idle", properties: { sessionID } });
+    assert.equal(idleNotificationSessions.has(sessionID), true, "idle event flags the session");
 
     // A non-status activity event carrying the sessionID must clear the idle flag.
     // Regression for R24: previously only a session.status event cleared it, so a
     // session whose idle->active transition arrived via another event type stayed
     // falsely flagged and a later completion delivered a continuation prompt into a
     // possibly-busy session.
-    __test.updateNotificationIdleState({ type: "message.updated", properties: { sessionID } });
-    assert.equal(__test.idleNotificationSessions.has(sessionID), false, "non-status activity clears the idle flag");
+    updateNotificationIdleState({ type: "message.updated", properties: { sessionID } });
+    assert.equal(idleNotificationSessions.has(sessionID), false, "non-status activity clears the idle flag");
 
     // A different active event shape (sessionID nested under message.info) also clears.
-    __test.updateNotificationIdleState({ type: "session.idle", properties: { sessionID } });
-    assert.equal(__test.idleNotificationSessions.has(sessionID), true);
-    __test.updateNotificationIdleState({ type: "message.part.updated", properties: { message: { info: { sessionID } } } });
-    assert.equal(__test.idleNotificationSessions.has(sessionID), false, "nested-sessionID activity clears the idle flag");
+    updateNotificationIdleState({ type: "session.idle", properties: { sessionID } });
+    assert.equal(idleNotificationSessions.has(sessionID), true);
+    updateNotificationIdleState({ type: "message.part.updated", properties: { message: { info: { sessionID } } } });
+    assert.equal(idleNotificationSessions.has(sessionID), false, "nested-sessionID activity clears the idle flag");
 
     // A non-idle session.status event still clears (no regression on the original path).
-    __test.updateNotificationIdleState({ type: "session.idle", properties: { sessionID } });
-    assert.equal(__test.idleNotificationSessions.has(sessionID), true);
-    __test.updateNotificationIdleState({ type: "session.status", properties: { sessionID, status: "active" } });
-    assert.equal(__test.idleNotificationSessions.has(sessionID), false, "non-idle session.status still clears");
+    updateNotificationIdleState({ type: "session.idle", properties: { sessionID } });
+    assert.equal(idleNotificationSessions.has(sessionID), true);
+    updateNotificationIdleState({ type: "session.status", properties: { sessionID, status: "active" } });
+    assert.equal(idleNotificationSessions.has(sessionID), false, "non-idle session.status still clears");
 
     // An event without a resolvable sessionID is a no-op (no spurious deletes/adds).
-    __test.updateNotificationIdleState({ type: "session.idle", properties: { sessionID } });
-    assert.equal(__test.idleNotificationSessions.has(sessionID), true);
-    __test.updateNotificationIdleState({ type: "message.updated", properties: {} });
-    assert.equal(__test.idleNotificationSessions.has(sessionID), true, "event without a sessionID leaves other sessions flagged");
+    updateNotificationIdleState({ type: "session.idle", properties: { sessionID } });
+    assert.equal(idleNotificationSessions.has(sessionID), true);
+    updateNotificationIdleState({ type: "message.updated", properties: {} });
+    assert.equal(idleNotificationSessions.has(sessionID), true, "event without a sessionID leaves other sessions flagged");
   } finally {
-    __test.idleNotificationSessions.clear();
-    for (const entry of savedIdle) __test.idleNotificationSessions.add(entry);
+    idleNotificationSessions.clear();
+    for (const entry of savedIdle) idleNotificationSessions.add(entry);
   }
 });
 
 test("notification runtime tracking is bounded and cleared on plugin dispose", async () => {
-  const savedPending = new Set(__test.pendingNotificationPaths);
-  const savedDelivering = new Set(__test.deliveringNotificationPaths);
-  const savedIdle = new Set(__test.idleNotificationSessions);
-  __test.pendingNotificationPaths.clear();
-  __test.deliveringNotificationPaths.clear();
-  __test.idleNotificationSessions.clear();
+  const savedPending = new Set(pendingNotificationPaths);
+  const savedDelivering = new Set(deliveringNotificationPaths);
+  const savedIdle = new Set(idleNotificationSessions);
+  pendingNotificationPaths.clear();
+  deliveringNotificationPaths.clear();
+  idleNotificationSessions.clear();
   try {
-    for (let i = 0; i < __test.NOTIFICATION_TRACKING_MAX + 5; i += 1) {
-      __test.pendingNotificationPaths.add(`/tmp/notification-${i}.json`);
-      __test.idleNotificationSessions.add(`session-${i}`);
+    for (let i = 0; i < NOTIFICATION_TRACKING_MAX + 5; i += 1) {
+      pendingNotificationPaths.add(`/tmp/notification-${i}.json`);
+      idleNotificationSessions.add(`session-${i}`);
     }
-    __test.deliveringNotificationPaths.add("/tmp/in-flight-notification.json");
+    deliveringNotificationPaths.add("/tmp/in-flight-notification.json");
 
-    assert.equal(__test.pendingNotificationPaths.size, __test.NOTIFICATION_TRACKING_MAX);
-    assert.equal(__test.pendingNotificationPaths.has("/tmp/notification-0.json"), false);
-    assert.equal(__test.idleNotificationSessions.size, __test.NOTIFICATION_TRACKING_MAX);
-    assert.equal(__test.idleNotificationSessions.has("session-0"), false);
+    assert.equal(pendingNotificationPaths.size, NOTIFICATION_TRACKING_MAX);
+    assert.equal(pendingNotificationPaths.has("/tmp/notification-0.json"), false);
+    assert.equal(idleNotificationSessions.size, NOTIFICATION_TRACKING_MAX);
+    assert.equal(idleNotificationSessions.has("session-0"), false);
 
     const hooks = await workflowPlugin({ client: {} }, { extensions: [] });
     assert.equal(typeof hooks.dispose, "function");
     await hooks.dispose();
-    assert.equal(__test.pendingNotificationPaths.size, 0);
-    assert.equal(__test.deliveringNotificationPaths.size, 0);
-    assert.equal(__test.idleNotificationSessions.size, 0);
+    assert.equal(pendingNotificationPaths.size, 0);
+    assert.equal(deliveringNotificationPaths.size, 0);
+    assert.equal(idleNotificationSessions.size, 0);
   } finally {
-    __test.pendingNotificationPaths.clear();
-    __test.deliveringNotificationPaths.clear();
-    __test.idleNotificationSessions.clear();
-    for (const entry of savedPending) __test.pendingNotificationPaths.add(entry);
-    for (const entry of savedDelivering) __test.deliveringNotificationPaths.add(entry);
-    for (const entry of savedIdle) __test.idleNotificationSessions.add(entry);
+    pendingNotificationPaths.clear();
+    deliveringNotificationPaths.clear();
+    idleNotificationSessions.clear();
+    for (const entry of savedPending) pendingNotificationPaths.add(entry);
+    for (const entry of savedDelivering) deliveringNotificationPaths.add(entry);
+    for (const entry of savedIdle) idleNotificationSessions.add(entry);
   }
 });
 
@@ -4530,15 +4564,15 @@ test("workflow notifications rehydrate from persisted run roots after simulated 
   // Simulate a fresh plugin/module instance: the in-memory pending queue starts empty
   // even though unsent notification.json records remain on disk. Snapshot+restore so
   // the shared singleton does not leak state into other tests in this process.
-  const savedPending = new Set(__test.pendingNotificationPaths);
-  __test.pendingNotificationPaths.clear();
+  const savedPending = new Set(pendingNotificationPaths);
+  pendingNotificationPaths.clear();
   try {
-    const root = __test.runRoot({ directory: project, worktree: project });
+    const root = runRoot({ directory: project, worktree: project });
 
-    const unsentDir = __test.runDirForRoot(root, "11111111-1111-4111-8111-111111111111");
+    const unsentDir = runDirForRoot(root, "11111111-1111-4111-8111-111111111111");
     const unsentPath = path.join(unsentDir, "notification.json");
     await fs.mkdir(unsentDir, { recursive: true });
-    await __test.writeJsonAtomic(unsentPath, {
+    await writeJsonAtomic(unsentPath, {
       stateVersion: 1,
       runId: "11111111-1111-4111-8111-111111111111",
       status: "completed",
@@ -4551,10 +4585,10 @@ test("workflow notifications rehydrate from persisted run roots after simulated 
     });
 
     // Already-sent record: must remain idempotently skipped after rehydration.
-    const sentDir = __test.runDirForRoot(root, "22222222-2222-4222-8222-222222222222");
+    const sentDir = runDirForRoot(root, "22222222-2222-4222-8222-222222222222");
     const sentPath = path.join(sentDir, "notification.json");
     await fs.mkdir(sentDir, { recursive: true });
-    await __test.writeJsonAtomic(sentPath, {
+    await writeJsonAtomic(sentPath, {
       stateVersion: 1,
       runId: "22222222-2222-4222-8222-222222222222",
       status: "completed",
@@ -4567,15 +4601,15 @@ test("workflow notifications rehydrate from persisted run roots after simulated 
     });
 
     // Malformed JSON: skipped safely rather than poisoning the delivery queue.
-    const malformedDir = __test.runDirForRoot(root, "33333333-3333-4333-8333-333333333333");
+    const malformedDir = runDirForRoot(root, "33333333-3333-4333-8333-333333333333");
     await fs.mkdir(malformedDir, { recursive: true });
     await fs.writeFile(path.join(malformedDir, "notification.json"), "{ not valid json", "utf8");
 
     // Unrelated session: skipped because delivery is scoped to the idle session.
-    const unrelatedDir = __test.runDirForRoot(root, "44444444-4444-4444-8444-444444444444");
+    const unrelatedDir = runDirForRoot(root, "44444444-4444-4444-8444-444444444444");
     const unrelatedPath = path.join(unrelatedDir, "notification.json");
     await fs.mkdir(unrelatedDir, { recursive: true });
-    await __test.writeJsonAtomic(unrelatedPath, {
+    await writeJsonAtomic(unrelatedPath, {
       stateVersion: 1,
       runId: "44444444-4444-4444-8444-444444444444",
       status: "completed",
@@ -4587,7 +4621,7 @@ test("workflow notifications rehydrate from persisted run roots after simulated 
       delivery: { attempts: 0, lastAttemptAt: null, sendingAt: null, lastError: null },
     });
 
-    assert.equal(__test.pendingNotificationPaths.size, 0, "simulated restart leaves in-memory queue empty");
+    assert.equal(pendingNotificationPaths.size, 0, "simulated restart leaves in-memory queue empty");
 
     const pluginContext = {
       directory: project,
@@ -4596,12 +4630,12 @@ test("workflow notifications rehydrate from persisted run roots after simulated 
     };
     const idleEvent = { type: "session.idle", properties: { sessionID: "parent-session" } };
 
-    const rehydrateResult = await __test.rehydratePendingNotifications(pluginContext, idleEvent);
+    const rehydrateResult = await rehydratePendingNotifications(pluginContext, idleEvent);
     assert.equal(rehydrateResult.rehydrated, 1, "only the unsent matching record is rehydrated");
     assert.equal(rehydrateResult.skipped, 3, "sent + malformed + unrelated records are skipped");
-    assert.deepEqual([...__test.pendingNotificationPaths], [unsentPath]);
+    assert.deepEqual([...pendingNotificationPaths], [unsentPath]);
 
-    const deliverResult = await __test.deliverWorkflowNotifications(pluginContext, idleEvent);
+    const deliverResult = await deliverWorkflowNotifications(pluginContext, idleEvent);
     assert.equal(deliverResult.delivered, 1);
     const delivered = JSON.parse(await fs.readFile(unsentPath, "utf8"));
     assert.equal(typeof delivered.sentAt, "string");
@@ -4609,16 +4643,16 @@ test("workflow notifications rehydrate from persisted run roots after simulated 
     const stillSent = JSON.parse(await fs.readFile(sentPath, "utf8"));
     assert.equal(stillSent.sentAt, "2026-06-16T00:00:00.000Z");
     assert.equal(stillSent.delivery.attempts, 1, "already-sent record is untouched");
-    assert.equal(__test.pendingNotificationPaths.size, 0, "queue drains after successful delivery");
+    assert.equal(pendingNotificationPaths.size, 0, "queue drains after successful delivery");
 
     // Idempotent re-delivery: a subsequent idle event must not resend the now-sent record.
-    const secondDeliver = await __test.deliverWorkflowNotifications(pluginContext, idleEvent);
+    const secondDeliver = await deliverWorkflowNotifications(pluginContext, idleEvent);
     assert.equal(secondDeliver.delivered, 0);
-    const secondRehydrate = await __test.rehydratePendingNotifications(pluginContext, idleEvent);
+    const secondRehydrate = await rehydratePendingNotifications(pluginContext, idleEvent);
     assert.equal(secondRehydrate.rehydrated, 0);
   } finally {
-    __test.pendingNotificationPaths.clear();
-    for (const entry of savedPending) __test.pendingNotificationPaths.add(entry);
+    pendingNotificationPaths.clear();
+    for (const entry of savedPending) pendingNotificationPaths.add(entry);
     await fs.rm(project, { recursive: true, force: true });
   }
 });
@@ -4628,8 +4662,8 @@ test("workflow run lookup and cleanup protect symlinked run directories", async 
   const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }));
   try {
     const runId = "symlink-run";
-    const root = __test.runRoot(context);
-    const linkPath = __test.runDirForRoot(root, runId);
+    const root = runRoot(context);
+    const linkPath = runDirForRoot(root, runId);
     await fs.mkdir(root, { recursive: true });
     await fs.writeFile(path.join(escapeRoot, "state.json"), JSON.stringify({ id: runId, status: "completed" }), "utf8");
     await fs.symlink(escapeRoot, linkPath, "dir");
@@ -4650,12 +4684,12 @@ test("workflow run lookup and cleanup protect symlinked run directories", async 
 test("workflow_cleanup reports protected reasons and deletes only safe terminal runs", async () => {
   const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }));
   try {
-    const root = __test.runRoot(context);
+    const root = runRoot(context);
     await fs.mkdir(root, { recursive: true });
     async function writeRun(id, state) {
-      const dir = __test.runDirForRoot(root, id);
+      const dir = runDirForRoot(root, id);
       await fs.mkdir(dir, { recursive: true });
-      await __test.writeJsonAtomic(path.join(dir, "state.json"), { id, startedAt: "2026-06-16T00:00:00.000Z", ...state });
+      await writeJsonAtomic(path.join(dir, "state.json"), { id, startedAt: "2026-06-16T00:00:00.000Z", ...state });
       return dir;
     }
     const safeDir = await writeRun("cleanup-safe", { status: "completed" });
@@ -4671,12 +4705,12 @@ test("workflow_cleanup reports protected reasons and deletes only safe terminal 
     // apply-running owned by a live process resolves to active-unknown and is protected
     // via the active-status branch (distinct from the dead-process interrupted path).
     await writeRun("cleanup-apply-running", { status: "apply-running", process: { pid: process.pid } });
-    const corruptDir = __test.runDirForRoot(root, "cleanup-corrupt");
+    const corruptDir = runDirForRoot(root, "cleanup-corrupt");
     await fs.mkdir(corruptDir, { recursive: true });
     await fs.writeFile(path.join(corruptDir, "state.json"), "{not json", "utf8");
     const malformedDir = path.join(root, "!bad-run-id");
     await fs.mkdir(malformedDir, { recursive: true });
-    await __test.writeJsonAtomic(path.join(malformedDir, "state.json"), { id: "!bad-run-id", status: "completed" });
+    await writeJsonAtomic(path.join(malformedDir, "state.json"), { id: "!bad-run-id", status: "completed" });
 
     const dryRun = JSON.parse(await tools.workflow_cleanup.execute({ dryRun: true, keep: 0 }, context));
     const reasons = Object.fromEntries(dryRun.protectedRuns.map((entry) => [entry.id, entry.reason]));
@@ -4696,13 +4730,13 @@ test("workflow_cleanup reports protected reasons and deletes only safe terminal 
     assert.equal(await fileExists(safeDir), false);
     assert.equal(await fileExists(corruptDir), true);
     assert.equal(await fileExists(malformedDir), true);
-    assert.equal(await fileExists(__test.runDirForRoot(root, "cleanup-apply-failed")), true);
-    assert.equal(await fileExists(__test.runDirForRoot(root, "cleanup-failed")), true);
-    assert.equal(await fileExists(__test.runDirForRoot(root, "cleanup-budget-stopped")), true);
-    assert.equal(await fileExists(__test.runDirForRoot(root, "cleanup-review")), true);
-    assert.equal(await fileExists(__test.runDirForRoot(root, "cleanup-running")), true);
-    assert.equal(await fileExists(__test.runDirForRoot(root, "cleanup-pinned")), true);
-    assert.equal(await fileExists(__test.runDirForRoot(root, "cleanup-apply-running")), true);
+    assert.equal(await fileExists(runDirForRoot(root, "cleanup-apply-failed")), true);
+    assert.equal(await fileExists(runDirForRoot(root, "cleanup-failed")), true);
+    assert.equal(await fileExists(runDirForRoot(root, "cleanup-budget-stopped")), true);
+    assert.equal(await fileExists(runDirForRoot(root, "cleanup-review")), true);
+    assert.equal(await fileExists(runDirForRoot(root, "cleanup-running")), true);
+    assert.equal(await fileExists(runDirForRoot(root, "cleanup-pinned")), true);
+    assert.equal(await fileExists(runDirForRoot(root, "cleanup-apply-running")), true);
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }
@@ -4711,12 +4745,12 @@ test("workflow_cleanup reports protected reasons and deletes only safe terminal 
 test("workflow_cleanup protects paused runs from deletion (resumable)", async () => {
   const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }));
   try {
-    const root = __test.runRoot(context);
-    const pausedDir = __test.runDirForRoot(root, "cleanup-paused");
+    const root = runRoot(context);
+    const pausedDir = runDirForRoot(root, "cleanup-paused");
     await fs.mkdir(pausedDir, { recursive: true });
     // A paused run releases its run.lock and leaves the in-memory map, so it has no live
     // lock and is not active-in-process; only the explicit paused guard keeps it.
-    await __test.writeJsonAtomic(path.join(pausedDir, "state.json"), { id: "cleanup-paused", status: "paused", startedAt: "2026-06-16T00:00:00.000Z" });
+    await writeJsonAtomic(path.join(pausedDir, "state.json"), { id: "cleanup-paused", status: "paused", startedAt: "2026-06-16T00:00:00.000Z" });
 
     const dryRun = JSON.parse(await tools.workflow_cleanup.execute({ dryRun: true, keep: 0 }, context));
     const reasons = Object.fromEntries(dryRun.protectedRuns.map((entry) => [entry.id, entry.reason]));
@@ -4741,11 +4775,11 @@ test("workflow_reconcile reclaims the stranded worktree and branch of a crashed 
   assert.equal(await fileExists(wtPath), true, "lane worktree exists before the crash");
   const { tools, context, directory } = await makeHarness({ directory: repoDir });
   try {
-    const root = __test.runRoot(context);
-    const runDir = __test.runDirForRoot(root, "kill-run");
+    const root = runRoot(context);
+    const runDir = runDirForRoot(root, "kill-run");
     await fs.mkdir(runDir, { recursive: true });
     // A run that was active (running) with a now-dead process — simulates SIGKILL mid-run.
-    await __test.writeJsonAtomic(path.join(runDir, "state.json"), {
+    await writeJsonAtomic(path.join(runDir, "state.json"), {
       id: "kill-run",
       status: "running",
       process: { pid: 999999999, startTime: 1 },
@@ -4777,10 +4811,10 @@ test("workflow_reconcile preserves a dirty stranded worktree (conservative)", as
   await fs.writeFile(path.join(wtPath, "uncommitted.txt"), "in-flight lane work\n", "utf8");
   const { tools, context, directory } = await makeHarness({ directory: repoDir });
   try {
-    const root = __test.runRoot(context);
-    const runDir = __test.runDirForRoot(root, "kill-dirty");
+    const root = runRoot(context);
+    const runDir = runDirForRoot(root, "kill-dirty");
     await fs.mkdir(runDir, { recursive: true });
-    await __test.writeJsonAtomic(path.join(runDir, "state.json"), {
+    await writeJsonAtomic(path.join(runDir, "state.json"), {
       id: "kill-dirty",
       status: "running",
       process: { pid: 999999999, startTime: 1 },
@@ -4802,13 +4836,13 @@ test("workflow_reconcile preserves a dirty stranded worktree (conservative)", as
 test("workflow_cleanup reaps an interrupted run past the TTL but protects a fresh one", async () => {
   const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }));
   try {
-    const root = __test.runRoot(context);
+    const root = runRoot(context);
     await fs.mkdir(root, { recursive: true });
     async function writeInterrupted(id, lastProgressAt) {
-      const dir = __test.runDirForRoot(root, id);
+      const dir = runDirForRoot(root, id);
       await fs.mkdir(dir, { recursive: true });
       // status:running + a dead pid → reconcile (run during cleanup) flips it to interrupted.
-      await __test.writeJsonAtomic(path.join(dir, "state.json"), {
+      await writeJsonAtomic(path.join(dir, "state.json"), {
         id,
         status: "running",
         process: { pid: 999999999, startTime: 1 },
@@ -4840,11 +4874,11 @@ test("workflow_cleanup reaps an interrupted run past the TTL but protects a fres
 test("workflow_cleanup interruptedTtlMs arg makes the TTL configurable", async () => {
   const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }));
   try {
-    const root = __test.runRoot(context);
+    const root = runRoot(context);
     await fs.mkdir(root, { recursive: true });
-    const dir = __test.runDirForRoot(root, "ttl-config");
+    const dir = runDirForRoot(root, "ttl-config");
     await fs.mkdir(dir, { recursive: true });
-    await __test.writeJsonAtomic(path.join(dir, "state.json"), {
+    await writeJsonAtomic(path.join(dir, "state.json"), {
       id: "ttl-config",
       status: "running",
       process: { pid: 999999999, startTime: 1 },
@@ -4867,24 +4901,24 @@ test("workflow_cleanup skips a run that re-acquires its lock between enumeration
   const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }));
   const originalRm = fs.rm;
   try {
-    const root = __test.runRoot(context);
+    const root = runRoot(context);
     // Two deletable runs. Cleanup processes them newest-first; the decoy is deleted first and
     // its fs.rm is the seam where we simulate a concurrent resume acquiring the target's lock
     // BEFORE cleanup's per-entry re-validation re-reads the target. Patching the shared
     // node:fs/promises namespace intercepts the plugin's own fs.rm (same module singleton).
-    const decoyDir = __test.runDirForRoot(root, "cleanup-decoy");
+    const decoyDir = runDirForRoot(root, "cleanup-decoy");
     await fs.mkdir(decoyDir, { recursive: true });
-    await __test.writeJsonAtomic(path.join(decoyDir, "state.json"), { id: "cleanup-decoy", status: "completed", startedAt: "2026-06-17T00:00:00.000Z" });
-    const racedDir = __test.runDirForRoot(root, "cleanup-raced");
+    await writeJsonAtomic(path.join(decoyDir, "state.json"), { id: "cleanup-decoy", status: "completed", startedAt: "2026-06-17T00:00:00.000Z" });
+    const racedDir = runDirForRoot(root, "cleanup-raced");
     await fs.mkdir(racedDir, { recursive: true });
-    await __test.writeJsonAtomic(path.join(racedDir, "state.json"), { id: "cleanup-raced", status: "completed", startedAt: "2026-06-16T00:00:00.000Z" });
+    await writeJsonAtomic(path.join(racedDir, "state.json"), { id: "cleanup-raced", status: "completed", startedAt: "2026-06-16T00:00:00.000Z" });
 
     let injected = false;
     fs.rm = async (target, ...rest) => {
       if (!injected && typeof target === "string" && target === decoyDir) {
         // Concurrent resume re-acquires the target's run.lock (as workflow_resume would).
         injected = true;
-        await __test.writeJsonAtomic(path.join(racedDir, "run.lock"), { operation: "run", runId: "cleanup-raced", process: { pid: process.pid } });
+        await writeJsonAtomic(path.join(racedDir, "run.lock"), { operation: "run", runId: "cleanup-raced", process: { pid: process.pid } });
       }
       return originalRm(target, ...rest);
     };
@@ -4910,11 +4944,11 @@ test("workflow status exposes stale locks and reconcile clears them explicitly",
   const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }));
   try {
     const runId = "stale-lock-run";
-    const root = __test.runRoot(context);
-    const dir = __test.runDirForRoot(root, runId);
+    const root = runRoot(context);
+    const dir = runDirForRoot(root, runId);
     await fs.mkdir(dir, { recursive: true });
-    await __test.writeJsonAtomic(path.join(dir, "state.json"), { id: runId, status: "completed", startedAt: "2026-06-16T00:00:00.000Z" });
-    await __test.writeJsonAtomic(path.join(dir, "run.lock"), { operation: "run", runId, process: { pid: 999999999, startTime: 1 } });
+    await writeJsonAtomic(path.join(dir, "state.json"), { id: runId, status: "completed", startedAt: "2026-06-16T00:00:00.000Z" });
+    await writeJsonAtomic(path.join(dir, "run.lock"), { operation: "run", runId, process: { pid: 999999999, startTime: 1 } });
 
     const status = JSON.parse(await tools.workflow_status.execute({ runId, format: "json", detail: "full" }, context));
     assert.equal(status.locks.run.stale, true);
@@ -4941,12 +4975,12 @@ test("workflow_run resume fails clearly when an active run lock exists", async (
     const runId = "locked-resume-run";
     const source = `export const meta = { name: "locked-resume" };
 return "resumed";`;
-    const root = __test.runRoot(context);
-    const dir = __test.runDirForRoot(root, runId);
+    const root = runRoot(context);
+    const dir = runDirForRoot(root, runId);
     await fs.mkdir(dir, { recursive: true });
     await fs.writeFile(path.join(dir, "script.js"), source, "utf8");
-    await __test.writeJsonAtomic(path.join(dir, "state.json"), { id: runId, status: "paused", sourceHash: __test.hash(source), sourcePath: "<inline>" });
-    await __test.writeJsonAtomic(path.join(dir, "run.lock"), { operation: "run", runId, process: { pid: process.pid } });
+    await writeJsonAtomic(path.join(dir, "state.json"), { id: runId, status: "paused", sourceHash: hash(source), sourcePath: "<inline>" });
+    await writeJsonAtomic(path.join(dir, "run.lock"), { operation: "run", runId, process: { pid: process.pid } });
 
     await assert.rejects(runApprovedRequest(tools, context, { resumeRunId: runId }), /Workflow run lock is already held \(active\)/);
   } finally {
@@ -4958,10 +4992,10 @@ test("workflow_cancel and workflow_pause persist requests for runs owned by anot
   const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }));
   try {
     const runId = "remote-lifecycle-run";
-    const root = __test.runRoot(context);
-    const dir = __test.runDirForRoot(root, runId);
+    const root = runRoot(context);
+    const dir = runDirForRoot(root, runId);
     await fs.mkdir(dir, { recursive: true });
-    await __test.writeJsonAtomic(path.join(dir, "state.json"), { id: runId, status: "running", process: { pid: 999999999, startTime: 1 } });
+    await writeJsonAtomic(path.join(dir, "state.json"), { id: runId, status: "running", process: { pid: 999999999, startTime: 1 } });
 
     assert.match(await tools.workflow_cancel.execute({ runId }, context), /cancel-request\.json/);
     assert.match(await tools.workflow_pause.execute({ runId }, context), /pause-request\.json/);
@@ -4977,9 +5011,9 @@ test("workflow_cancel and workflow_pause persist requests for runs owned by anot
 test("workflow_cancel and workflow_pause reject corrupt or partial run entries", async () => {
   const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }));
   try {
-    const root = __test.runRoot(context);
+    const root = runRoot(context);
     const partialRunId = "partial-lifecycle-run";
-    await fs.mkdir(__test.runDirForRoot(root, partialRunId), { recursive: true });
+    await fs.mkdir(runDirForRoot(root, partialRunId), { recursive: true });
 
     await assert.rejects(
       tools.workflow_cancel.execute({ runId: partialRunId }, context),
@@ -4987,7 +5021,7 @@ test("workflow_cancel and workflow_pause reject corrupt or partial run entries",
     );
 
     const corruptRunId = "corrupt-lifecycle-run";
-    const corruptDir = __test.runDirForRoot(root, corruptRunId);
+    const corruptDir = runDirForRoot(root, corruptRunId);
     await fs.mkdir(corruptDir, { recursive: true });
     await fs.writeFile(path.join(corruptDir, "state.json"), "{not-json", "utf8");
 
@@ -5057,16 +5091,16 @@ test("workflow_cancel and workflow_pause interrupt in-memory runs", async () => 
   }
 
   try {
-    const root = __test.runRoot(context);
+    const root = runRoot(context);
 
     const cancelRunId = "in-memory-cancel-run";
-    const cancelDir = __test.runDirForRoot(root, cancelRunId);
+    const cancelDir = runDirForRoot(root, cancelRunId);
     await fs.mkdir(cancelDir, { recursive: true });
     const cancelRejects = [];
     const cancelRun = makeInMemoryRun(cancelRunId, cancelDir, {
       waitingAgents: [{ reject(error) { cancelRejects.push(error); } }],
     });
-    __test.runs.set(cancelRunId, cancelRun);
+    runs.set(cancelRunId, cancelRun);
 
     assert.match(await tools.workflow_cancel.execute({ runId: cancelRunId }, context), /Cancellation requested/);
     assert.equal(cancelRun.abortController.signal.aborted, true);
@@ -5076,13 +5110,13 @@ test("workflow_cancel and workflow_pause interrupt in-memory runs", async () => 
     assert.ok(toastCalls.some((body) => body.variant === "warning" && /^⚠ in-memory-cancel-run cancelling/.test(body.title) && /inspect: workflow_status/.test(body.message)), "missing cancel terminal-style toast card");
 
     const pauseRunId = "in-memory-pause-run";
-    const pauseDir = __test.runDirForRoot(root, pauseRunId);
+    const pauseDir = runDirForRoot(root, pauseRunId);
     await fs.mkdir(pauseDir, { recursive: true });
     const pauseRejects = [];
     const pauseRun = makeInMemoryRun(pauseRunId, pauseDir, {
       waitingAgents: [{ reject(error) { pauseRejects.push(error); } }],
     });
-    __test.runs.set(pauseRunId, pauseRun);
+    runs.set(pauseRunId, pauseRun);
 
     // This in-memory run has no background execution promise (run.done), so the settle wait
     // returns immediately with run.status still transitional ("pausing") -- the alive-but-not-
@@ -5101,8 +5135,8 @@ test("workflow_cancel and workflow_pause interrupt in-memory runs", async () => 
     assert.ok(toastCalls.every((body) => !/agents \d+ active|cache|concurrency/.test(body.message)), "legacy lifecycle toast body leaked");
     assert.deepEqual(abortCalls.map((input) => input.path.id), [`${cancelRunId}-child`, `${pauseRunId}-child`]);
   } finally {
-    __test.runs.delete("in-memory-cancel-run");
-    __test.runs.delete("in-memory-pause-run");
+    runs.delete("in-memory-cancel-run");
+    runs.delete("in-memory-pause-run");
     await fs.rm(directory, { recursive: true, force: true });
   }
 });
@@ -5173,15 +5207,15 @@ test("workflow_cancel and workflow_kill do not wedge when child session abort ha
   const cancelRunId = "hung-abort-cancel-run";
   const killRunId = "hung-abort-kill-run";
   try {
-    const root = __test.runRoot(context);
-    const cancelDir = __test.runDirForRoot(root, cancelRunId);
-    const killDir = __test.runDirForRoot(root, killRunId);
+    const root = runRoot(context);
+    const cancelDir = runDirForRoot(root, cancelRunId);
+    const killDir = runDirForRoot(root, killRunId);
     await fs.mkdir(cancelDir, { recursive: true });
     await fs.mkdir(killDir, { recursive: true });
     const cancelRun = makeInMemoryRun(cancelRunId, cancelDir);
     const killRun = makeInMemoryRun(killRunId, killDir);
-    __test.runs.set(cancelRunId, cancelRun);
-    __test.runs.set(killRunId, killRun);
+    runs.set(cancelRunId, cancelRun);
+    runs.set(killRunId, killRun);
 
     const cancelBegin = Date.now();
     assert.match(await tools.workflow_cancel.execute({ runId: cancelRunId }, context), /Cancellation requested/);
@@ -5194,8 +5228,8 @@ test("workflow_cancel and workflow_kill do not wedge when child session abort ha
     assert.equal(JSON.parse(await fs.readFile(path.join(killDir, "state.json"), "utf8")).status, "interrupted");
     assert.deepEqual(abortCalls.map((input) => input.path.id), [`${cancelRunId}-child`, `${killRunId}-child`]);
   } finally {
-    __test.runs.delete(cancelRunId);
-    __test.runs.delete(killRunId);
+    runs.delete(cancelRunId);
+    runs.delete(killRunId);
     await fs.rm(directory, { recursive: true, force: true });
   }
 });
@@ -5235,7 +5269,7 @@ return true;`;
     assert.doesNotMatch(pauseMessage, /^Pause requested for workflow [0-9a-f-]+\. Resume with/, "must not emit the old optimistic resume-now line");
 
     // The on-disk state is still transitional; an immediate resume must return settle guidance.
-    const transitionalState = JSON.parse(await fs.readFile(path.join(__test.runDirForRoot(__test.runRoot(context), runId), "state.json"), "utf8"));
+    const transitionalState = JSON.parse(await fs.readFile(path.join(runDirForRoot(runRoot(context), runId), "state.json"), "utf8"));
     assert.equal(transitionalState.status, "pausing");
     await assert.rejects(
       tools.workflow_run.execute({ resumeRunId: runId }, context),
@@ -5248,7 +5282,7 @@ return true;`;
   } finally {
     // Force-terminate the wedged run and remove the in-memory handle so it does not linger.
     if (runId) { try { await tools.workflow_kill.execute({ runId }, context); } catch {} }
-    if (runId) __test.runs.delete(runId);
+    if (runId) runs.delete(runId);
     await fs.rm(directory, { recursive: true, force: true });
   }
 });
@@ -5259,9 +5293,9 @@ return true;`;
 test("jbs3.7: resuming a settling run returns poll guidance; a terminal non-resumable status still rejects", async () => {
   const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }));
   try {
-    const root = __test.runRoot(context);
+    const root = runRoot(context);
     async function writeStateFor(runId, status) {
-      const dir = __test.runDirForRoot(root, runId);
+      const dir = runDirForRoot(root, runId);
       await fs.mkdir(dir, { recursive: true });
       await fs.writeFile(path.join(dir, "state.json"), JSON.stringify({ status }), "utf8");
       return runId;
@@ -5313,7 +5347,7 @@ test("mfv9.6: wide/deep/long runs default to background while explicit and resum
     assert.match(started, /started in background/);
     assert.match(started, /session\.promptAsync is unavailable/);
     const wideRunId = runIdFrom(started);
-    await __test.runs.get(wideRunId)?.done;
+    await runs.get(wideRunId)?.done;
     const wideStatus = JSON.parse(await tools.workflow_status.execute({ runId: wideRunId, format: "json", detail: "full" }, context));
     assert.equal(wideStatus.background, true);
 
@@ -5499,13 +5533,13 @@ test("workflow_status exposes write-capable timeout recovery blocked reasons", a
     "domain-ledger": { records: 0, phases: {} },
     "apply-ledger": { records: 0, phases: {} },
   });
-  const readOnlyAuthority = __test.resolveRunAuthority({ profile: "read-only-review" }, {});
-  const editAuthority = __test.resolveRunAuthority({ authority: { edit: true } }, {});
-  const integrationAuthority = __test.resolveRunAuthority({ authority: { integration: true } }, {});
+  const readOnlyAuthority = resolveRunAuthority({ profile: "read-only-review" }, {});
+  const editAuthority = resolveRunAuthority({ authority: { edit: true } }, {});
+  const integrationAuthority = resolveRunAuthority({ authority: { integration: true } }, {});
   async function writeRun(id, state) {
-    const dir = __test.runDirForRoot(__test.runRoot(context), id);
+    const dir = runDirForRoot(runRoot(context), id);
     await fs.mkdir(dir, { recursive: true });
-    await __test.writeJsonAtomic(path.join(dir, "state.json"), {
+    await writeJsonAtomic(path.join(dir, "state.json"), {
       id,
       status: "timed-out",
       maxRuntimeMs: 500,
@@ -5548,10 +5582,10 @@ test("workflow_status exposes write-capable timeout recovery blocked reasons", a
       },
     });
     const lockedDir = await writeRun("timeout-active-lock", {});
-    await __test.writeJsonAtomic(path.join(lockedDir, "run.lock"), {
+    await writeJsonAtomic(path.join(lockedDir, "run.lock"), {
       operation: "run",
       runId: "timeout-active-lock",
-      process: { pid: process.pid, startTime: await __test.selfProcessStartTime() },
+      process: { pid: process.pid, startTime: await selfProcessStartTime() },
     });
 
     const expectations = [
@@ -5588,11 +5622,11 @@ test("workflow_kill force-terminates an in-memory run promptly and keeps run loc
   const runId = "kill-in-memory-run";
   let rawReleaseRunLock;
   try {
-    const root = __test.runRoot(context);
-    const dir = __test.runDirForRoot(root, runId);
+    const root = runRoot(context);
+    const dir = runDirForRoot(root, runId);
     await fs.mkdir(dir, { recursive: true });
-    const lockPath = __test.lockPathForRun(dir, "run");
-    rawReleaseRunLock = await __test.acquireWorkflowLock(lockPath, { operation: "run", runId });
+    const lockPath = lockPathForRun(dir, "run");
+    rawReleaseRunLock = await acquireWorkflowLock(lockPath, { operation: "run", runId });
     assert.equal(await fileExists(lockPath), true);
 
     let releaseCalled = false;
@@ -5615,7 +5649,7 @@ test("workflow_kill force-terminates an in-memory run promptly and keeps run loc
       done: new Promise(() => {}),
       releaseRunLock: async () => { releaseCalled = true; await rawReleaseRunLock(); },
     };
-    __test.runs.set(runId, run);
+    runs.set(runId, run);
 
     const begin = Date.now();
     const message = await tools.workflow_kill.execute({ runId }, context);
@@ -5636,7 +5670,7 @@ test("workflow_kill force-terminates an in-memory run promptly and keeps run loc
     assert.match(message, /will release run\.lock/);
   } finally {
     try { await rawReleaseRunLock?.(); } catch {}
-    __test.runs.delete(runId);
+    runs.delete(runId);
     await fs.rm(directory, { recursive: true, force: true });
   }
 });
@@ -5660,10 +5694,10 @@ return "should-not-complete";`;
     const approvalHash = preview.match(/approvalHash: ([a-f0-9]{64})/)[1];
     const started = await tools.workflow_run.execute({ source, background: true, approve: true, approvalHash }, context);
     runId = runIdFrom(started);
-    const run = __test.runs.get(runId);
+    const run = runs.get(runId);
     assert.ok(run, "background run should be in-memory before kill");
-    const dir = __test.runDirForRoot(__test.runRoot(context), runId);
-    const lockPath = __test.lockPathForRun(dir, "run");
+    const dir = runDirForRoot(runRoot(context), runId);
+    const lockPath = lockPathForRun(dir, "run");
 
     await laneStartedP;
     await tools.workflow_kill.execute({ runId }, context);
@@ -5677,7 +5711,7 @@ return "should-not-complete";`;
     assert.equal(state.status, "interrupted", "late sandbox success must not overwrite kill state as completed");
     assert.equal(await fileExists(lockPath), false, "runWorkflowExecution finally releases the lock after settle");
   } finally {
-    if (runId) __test.runs.delete(runId);
+    if (runId) runs.delete(runId);
     await fs.rm(directory, { recursive: true, force: true });
   }
 });
@@ -5689,12 +5723,12 @@ test("workflow_kill on a run owned by another process writes a durable kill requ
   const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }));
   const runId = "kill-foreign-run";
   try {
-    const root = __test.runRoot(context);
-    const dir = __test.runDirForRoot(root, runId);
+    const root = runRoot(context);
+    const dir = runDirForRoot(root, runId);
     await fs.mkdir(dir, { recursive: true });
-    await __test.writeJsonAtomic(path.join(dir, "state.json"), { id: runId, status: "running", process: { pid: 999999999, startTime: 1 } });
+    await writeJsonAtomic(path.join(dir, "state.json"), { id: runId, status: "running", process: { pid: 999999999, startTime: 1 } });
     // A run lock held by a dead PID is stale and must be cleared immediately by kill.
-    await __test.writeJsonAtomic(__test.lockPathForRun(dir, "run"), { operation: "run", runId, process: { pid: 999999999, startTime: 1 } });
+    await writeJsonAtomic(lockPathForRun(dir, "run"), { operation: "run", runId, process: { pid: 999999999, startTime: 1 } });
 
     const message = await tools.workflow_kill.execute({ runId }, context);
     assert.match(message, /Force-terminate requested/i);
@@ -5702,12 +5736,12 @@ test("workflow_kill on a run owned by another process writes a durable kill requ
 
     const killRequest = JSON.parse(await fs.readFile(path.join(dir, "kill-request.json"), "utf8"));
     assert.equal(killRequest.type, "kill");
-    assert.equal(await fileExists(__test.lockPathForRun(dir, "run")), false, "stale lock must be cleared");
+    assert.equal(await fileExists(lockPathForRun(dir, "run")), false, "stale lock must be cleared");
 
     const status = JSON.parse(await tools.workflow_status.execute({ runId, format: "json", detail: "full" }, context));
     assert.equal(status.lifecycleRequests.kill.type, "kill");
   } finally {
-    __test.runs.delete(runId);
+    runs.delete(runId);
     await fs.rm(directory, { recursive: true, force: true });
   }
 });
@@ -5726,7 +5760,7 @@ test("run finalization releases run lock when cleanup state persistence fails", 
   let awaitingDiffWrites = 0;
   try {
     await initGitRepo(directory);
-    __test.__setWriteStateTestHook(({ state }) => {
+    __setWriteStateTestHook(({ state }) => {
       if (state.status !== "awaiting-diff-approval") return;
       awaitingDiffWrites += 1;
       if (awaitingDiffWrites === 2) throw new Error("injected cleanup state write failure");
@@ -5740,11 +5774,11 @@ return await agent("edit", { edit: true, schema: { type: "object", properties: {
     const runId = runIdFrom(output);
     const status = JSON.parse(await tools.workflow_status.execute({ runId, format: "json", detail: "full" }, context));
     assert.equal(status.status, "awaiting-diff-approval");
-    assert.equal(await fileExists(__test.lockPathForRun(status.dir, "run")), false, "run.lock must be released despite cleanup write failure");
-    assert.equal(__test.runs.has(runId), false, "in-memory run must be deleted despite cleanup write failure");
+    assert.equal(await fileExists(lockPathForRun(status.dir, "run")), false, "run.lock must be released despite cleanup write failure");
+    assert.equal(runs.has(runId), false, "in-memory run must be deleted despite cleanup write failure");
     assert.equal(await fileExists(path.join(status.dir, "events.jsonl")), true, "finalization cleanup diagnostic should be best-effort only");
   } finally {
-    __test.__setWriteStateTestHook(undefined);
+    __setWriteStateTestHook(undefined);
     await fs.rm(directory, { recursive: true, force: true });
   }
 });
@@ -5772,9 +5806,9 @@ await agent("second lane");`;
 
     await firstPromptStarted;
     const status = JSON.parse(await tools.workflow_status.execute({ runId, format: "json", detail: "full" }, context));
-    await __test.writeJsonAtomic(path.join(status.dir, "pause-request.json"), { type: "pause", requestedAt: new Date().toISOString(), reason: "test durable pause" });
+    await writeJsonAtomic(path.join(status.dir, "pause-request.json"), { type: "pause", requestedAt: new Date().toISOString(), reason: "test durable pause" });
     releaseFirstPrompt();
-    await __test.runs.get(runId).done;
+    await runs.get(runId).done;
     const finalStatus = JSON.parse(await tools.workflow_status.execute({ runId, format: "json", detail: "full" }, context));
 
     assert.deepEqual(prompts, ["first lane"]);
@@ -5819,14 +5853,14 @@ await agent("only lane");`;
     return await realAppendFile.call(fs, filePath, ...rest);
   };
   try {
-    assert.equal(__test.runs.has(knownRunId), false, "precondition: run-map must not already hold the id");
+    assert.equal(runs.has(knownRunId), false, "precondition: run-map must not already hold the id");
     await assert.rejects(
       tools.workflow_run.execute(args, context),
       /injected events\.jsonl write failure/,
     );
     assert.equal(consumedRunId, true, "the stub must have supplied the run id");
     assert.equal(
-      __test.runs.has(knownRunId),
+      runs.has(knownRunId),
       false,
       "the failed setup must not leave a phantom run-map entry (runs.delete in catch)",
     );
@@ -5956,16 +5990,16 @@ test("modelTiers resolves lane models and is covered by the approval hash", asyn
 test("resolveLaneModel: precedence, tier map, graceful fallback, validation", () => {
   const run = { defaultChildModel: "zai-coding-plan/glm-5.2", modelTiers: { fast: "zai-coding-plan/glm-5.2", deep: "zai-coding-plan/glm-5.2-max" } };
   // explicit model wins over everything
-  assert.equal(__test.resolveLaneModel(run, { model: "openai/gpt-5.5", tier: "deep" }), "openai/gpt-5.5");
+  assert.equal(resolveLaneModel(run, { model: "openai/gpt-5.5", tier: "deep" }), "openai/gpt-5.5");
   // tier resolves from the map
-  assert.equal(__test.resolveLaneModel(run, { tier: "fast" }), "zai-coding-plan/glm-5.2");
-  assert.equal(__test.resolveLaneModel(run, { tier: "deep" }), "zai-coding-plan/glm-5.2-max");
+  assert.equal(resolveLaneModel(run, { tier: "fast" }), "zai-coding-plan/glm-5.2");
+  assert.equal(resolveLaneModel(run, { tier: "deep" }), "zai-coding-plan/glm-5.2-max");
   // tier with no map entry falls back to the default
-  assert.equal(__test.resolveLaneModel({ defaultChildModel: "openai/gpt-5.5" }, { tier: "deep" }), "openai/gpt-5.5");
+  assert.equal(resolveLaneModel({ defaultChildModel: "openai/gpt-5.5" }, { tier: "deep" }), "openai/gpt-5.5");
   // no tier, no model => default (unchanged legacy behavior)
-  assert.equal(__test.resolveLaneModel(run, {}), "zai-coding-plan/glm-5.2");
+  assert.equal(resolveLaneModel(run, {}), "zai-coding-plan/glm-5.2");
   // invalid tier is a hard error
-  assert.throws(() => __test.resolveLaneModel(run, { tier: "medium" }), /tier/);
+  assert.throws(() => resolveLaneModel(run, { tier: "medium" }), /tier/);
 });
 
 // --- jbs3.3: edit-and-resume (prefix reuse) over the REAL runWorkflowExecution path ---------

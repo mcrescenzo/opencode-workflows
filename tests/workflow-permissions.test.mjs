@@ -2,7 +2,6 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 
-import workflowPlugin from "../workflow-kernel/index.js";
 import {
   assertWriteWorkflowAllowed,
   configureWorkflowPermissions,
@@ -10,9 +9,8 @@ import {
   WORKFLOW_MUTATING_TOOLS,
   WORKFLOW_TOOLS,
 } from "../workflow-kernel/authority-policy.js";
+import { sessionPermissionEchoStatus } from "../workflow-kernel/child-agent-runner.js";
 import { makeHarness } from "./helpers/harness.mjs";
-
-const { __test } = workflowPlugin;
 
 async function runApproved(tools, context, source) {
   const preview = await tools.workflow_run.execute({ source }, context);
@@ -171,7 +169,7 @@ test("real child lane surfaces no-echo permission runtime without blocking compa
 test("sessionPermissionEchoStatus treats extra broad grants as a mismatch", () => {
   const expected = [{ permission: "bash", pattern: "*", action: "deny" }];
   const actual = { data: { id: "child", permission: [...expected, { permission: "edit", pattern: "*", action: "allow" }] } };
-  const status = __test.sessionPermissionEchoStatus(actual, expected);
+  const status = sessionPermissionEchoStatus(actual, expected);
 
   assert.equal(status.state, "mismatch");
   assert.deepEqual(status.unexpected, [{ permission: "edit", pattern: "*", action: "allow" }]);

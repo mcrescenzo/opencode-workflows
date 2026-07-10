@@ -5,6 +5,11 @@ import os from "node:os";
 import path from "node:path";
 
 import WorkflowPlugin from "../workflow-kernel/index.js";
+import { acquireWorkflowLock, lockPathForRun } from "../workflow-kernel/run-store-locks.js";
+import { boundedSchemaSnapshot } from "../workflow-kernel/structured-output.js";
+import { readLaneProjections, writeLaneCheckpoint, writeLaneProjection } from "../workflow-kernel/run-store-projections.js";
+import { runDirForRoot, writeJsonAtomic } from "../workflow-kernel/run-store-fs.js";
+import { loadJournal } from "../workflow-kernel/event-journal.js";
 
 const { __test } = WorkflowPlugin;
 const salvageRun = __test.salvageRun;
@@ -19,7 +24,7 @@ function runRootFor(tempDir) {
 }
 
 function runDirFor(tempDir, runId) {
-  return __test.runDirForRoot(runRootFor(tempDir), runId);
+  return runDirForRoot(runRootFor(tempDir), runId);
 }
 
 function contextFor(tempDir) {
@@ -45,15 +50,15 @@ async function snapshotTree(dir) {
 }
 
 function writeState(dir, state) {
-  return __test.writeJsonAtomic(path.join(dir, "state.json"), state);
+  return writeJsonAtomic(path.join(dir, "state.json"), state);
 }
 
 async function writeLane(dir, runId, callId, projection) {
-  await __test.writeLaneProjection({ id: runId, dir, laneRecords: new Map() }, callId, projection);
+  await writeLaneProjection({ id: runId, dir, laneRecords: new Map() }, callId, projection);
 }
 
 async function writeRequestCheckpoint(dir, lane, schemaSnapshot) {
-  await __test.writeLaneCheckpoint(dir, lane.callId, "request", {
+  await writeLaneCheckpoint(dir, lane.callId, "request", {
     callId: lane.callId,
     childID: lane.childID,
     signatureHash: lane.signatureHash,
@@ -175,7 +180,7 @@ test("salvage rejects a run that still holds an active run lock", async () => {
     startedAt: "2026-06-24T00:00:00.000Z",
     laneRecords: [],
   });
-  const release = await __test.acquireWorkflowLock(__test.lockPathForRun(dir, "run"), { operation: "run", runId });
+  const release = await acquireWorkflowLock(lockPathForRun(dir, "run"), { operation: "run", runId });
   try {
     await assert.rejects(
       salvageRun(mockPluginContext({ [VALID.childID]: validTranscript() }), contextFor(root), { runId }),
@@ -230,7 +235,7 @@ test("approve with matching hash writes tagged synthetic journal entries for sch
   assert.equal(entry.salvageValidation.schemaSnapshotStatus, "absent");
   assert.equal(entry.salvageValidation.schemaVerdict, "not-checked");
 
-  const lanes = await __test.readLaneProjections(dir, { laneRecords: [] });
+  const lanes = await readLaneProjections(dir, { laneRecords: [] });
   const lane = lanes.find((record) => record.callId === VALID.callId);
   assert.equal(lane.status, "completed");
   assert.equal(lane.outcome, "success");
@@ -244,7 +249,7 @@ test("schema-present salvage validates recovered JSON against stored schema", as
     required: ["findings"],
     properties: { findings: { type: "array", items: { type: "string" } } },
   };
-  const snapshot = __test.boundedSchemaSnapshot(schema);
+  const snapshot = boundedSchemaSnapshot(schema);
   await writeRequestCheckpoint(dir, VALID, snapshot);
   const pluginContext = mockPluginContext({ [VALID.childID]: validTranscript() });
 
@@ -273,7 +278,7 @@ test("schema-present salvage rejects JSON that does not match stored schema", as
     required: ["findings"],
     properties: { findings: { type: "array", items: { type: "string" } } },
   };
-  const snapshot = __test.boundedSchemaSnapshot(schema);
+  const snapshot = boundedSchemaSnapshot(schema);
   await writeRequestCheckpoint(dir, lane, snapshot);
   const pluginContext = mockPluginContext({ [lane.childID]: { data: [assistantMessage(JSON.stringify({ findings: "not-array" }))] } });
 
@@ -295,7 +300,7 @@ test("schema-present salvage rejects JSON that does not match stored schema", as
 
 test("oversized schema snapshots salvage as explicit JSON-only recovery", async () => {
   const { root, runId, dir } = await setupInterruptedRun("salvage-schema-oversized", [VALID]);
-  const snapshot = __test.boundedSchemaSnapshot({ type: "object", description: "x".repeat(100) }, 50);
+  const snapshot = boundedSchemaSnapshot({ type: "object", description: "x".repeat(100) }, 50);
   await writeRequestCheckpoint(dir, VALID, snapshot);
   const pluginContext = mockPluginContext({ [VALID.childID]: validTranscript() });
 
@@ -368,7 +373,7 @@ test("schema-mismatch (non-JSON final message) yields outcome failure", async ()
   assert.equal(entry.result, undefined);
   assert.ok(typeof entry.errorSummary === "string" && entry.errorSummary.length > 0);
 
-  const lanes = await __test.readLaneProjections(dir, { laneRecords: [] });
+  const lanes = await readLaneProjections(dir, { laneRecords: [] });
   const proj = lanes.find((record) => record.callId === lane.callId);
   assert.equal(proj.outcome, "failure");
 });
@@ -382,7 +387,7 @@ test("salvage never calls integrate/runAutoApply: state.json, worktrees, and int
   const statePath = path.join(dir, "state.json");
   const worktreesPath = path.join(dir, "worktrees.json");
   const integLedgerPath = path.join(dir, "integration-ledger.jsonl");
-  await __test.writeJsonAtomic(worktreesPath, { runId, edit: [], integration: [], lanes: [] });
+  await writeJsonAtomic(worktreesPath, { runId, edit: [], integration: [], lanes: [] });
   await fs.writeFile(integLedgerPath, '{"phase":"lane-committed","callId":"unrelated"}\n', "utf8");
 
   const stateBefore = await readFileText(statePath);
@@ -420,7 +425,7 @@ test("resumed run cache-hits salvaged entries when a signature is available; leg
   //   cached?.signatureHash === sig && cached.outcome === "success"  -> return cached.result
   // A salvaged entry with a persisted signatureHash satisfies it exactly; a legacy entry (no
   // signatureHash) does not, so resume would re-run it rather than trust the salvage.
-  const journal = await __test.loadJournal(dir);
+  const journal = await loadJournal(dir);
   const cachedValid = journal.get(VALID.callId);
   const sig = VALID.signatureHash;
   assert.equal(cachedValid.salvagedFromTranscript, true);

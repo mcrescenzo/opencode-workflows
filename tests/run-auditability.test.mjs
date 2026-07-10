@@ -7,12 +7,12 @@ import path from "node:path";
 import { setTimeout as setTimeoutP } from "node:timers/promises";
 import { promisify } from "node:util";
 
-import workflowPlugin from "../workflow-kernel/index.js";
+import { PRIVATE_FILE_MODE, runRoot, runDirForRoot, writeJsonAtomic } from "../workflow-kernel/run-store-fs.js";
+import { pendingNotificationPaths, deliverWorkflowNotifications } from "../workflow-kernel/lifecycle-control.js";
 import { analyzeRuns } from "../scripts/analyze-runs.mjs";
 import { makeHarness } from "./helpers/harness.mjs";
 
 const execFileAsync = promisify(execFile);
-const { __test } = workflowPlugin;
 
 async function initGitRepo(directory) {
   await execFileAsync("git", ["init"], { cwd: directory });
@@ -112,7 +112,7 @@ return await agent("inspect token=sk-proj-abcdefghijklmnop", {
     assert.doesNotMatch(transcript, /abcdefghijklmnop/);
     assert.match(transcript, /\[REDACTED:secret\]/);
     const mode = (await fs.stat(path.join(debugLaneDir, "prompt.md"))).mode & 0o777;
-    assert.equal(mode, __test.PRIVATE_FILE_MODE);
+    assert.equal(mode, PRIVATE_FILE_MODE);
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }
@@ -146,11 +146,11 @@ return await parallel([
 test("workflow_events filters, pages, and reports corrupt trailing lines", async () => {
   const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }));
   try {
-    const root = __test.runRoot(context);
+    const root = runRoot(context);
     const runId = "events-run";
-    const dir = __test.runDirForRoot(root, runId);
+    const dir = runDirForRoot(root, runId);
     await fs.mkdir(dir, { recursive: true });
-    await __test.writeJsonAtomic(path.join(dir, "state.json"), { id: runId, status: "completed", startedAt: "2026-07-07T00:00:00.000Z" });
+    await writeJsonAtomic(path.join(dir, "state.json"), { id: runId, status: "completed", startedAt: "2026-07-07T00:00:00.000Z" });
     await fs.writeFile(path.join(dir, "events.jsonl"), [
       JSON.stringify({ ts: "2026-07-07T00:00:01.000Z", type: "run.started" }),
       JSON.stringify({ ts: "2026-07-07T00:00:02.000Z", type: "cache.hit", callId: "a" }),
@@ -213,21 +213,21 @@ return await agent("edit file", { edit: true, schema: { type: "object", properti
 
 test("workflow_status full exposes notification delivery latency and delivery event is recorded", async () => {
   const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }));
-  const savedPending = new Set(__test.pendingNotificationPaths);
-  __test.pendingNotificationPaths.clear();
+  const savedPending = new Set(pendingNotificationPaths);
+  pendingNotificationPaths.clear();
   try {
-    const root = __test.runRoot(context);
+    const root = runRoot(context);
     const runId = "notification-latency";
-    const dir = __test.runDirForRoot(root, runId);
+    const dir = runDirForRoot(root, runId);
     const notificationPath = path.join(dir, "notification.json");
     await fs.mkdir(dir, { recursive: true });
-    await __test.writeJsonAtomic(path.join(dir, "state.json"), {
+    await writeJsonAtomic(path.join(dir, "state.json"), {
       id: runId,
       status: "completed",
       startedAt: "2026-07-07T00:00:00.000Z",
       notification: { notificationPath },
     });
-    await __test.writeJsonAtomic(notificationPath, {
+    await writeJsonAtomic(notificationPath, {
       stateVersion: 1,
       runId,
       status: "completed",
@@ -239,8 +239,8 @@ test("workflow_status full exposes notification delivery latency and delivery ev
       delivery: { attempts: 0, lastAttemptAt: null, lastError: null },
       notificationPath,
     });
-    __test.pendingNotificationPaths.add(notificationPath);
-    const delivered = await __test.deliverWorkflowNotifications({
+    pendingNotificationPaths.add(notificationPath);
+    const delivered = await deliverWorkflowNotifications({
       client: { session: { promptAsync: async () => ({ data: { id: "async-1" } }) } },
     }, { type: "session.idle", properties: { sessionID: "parent-session" } });
     assert.equal(delivered.delivered, 1);
@@ -249,8 +249,8 @@ test("workflow_status full exposes notification delivery latency and delivery ev
     const events = JSON.parse(await tools.workflow_events.execute({ runId, format: "json", typePrefix: "notification." }, context));
     assert.equal(events.events[0].type, "notification.delivered");
   } finally {
-    __test.pendingNotificationPaths.clear();
-    for (const value of savedPending) __test.pendingNotificationPaths.add(value);
+    pendingNotificationPaths.clear();
+    for (const value of savedPending) pendingNotificationPaths.add(value);
     await fs.rm(directory, { recursive: true, force: true });
   }
 });
@@ -262,8 +262,8 @@ test("analyze-runs aggregates partial run directories without mutation", async (
     const runB = path.join(root, "run-b");
     await fs.mkdir(path.join(runA, "lanes"), { recursive: true });
     await fs.mkdir(path.join(runB, "lanes"), { recursive: true });
-    await __test.writeJsonAtomic(path.join(runA, "state.json"), { id: "run-a", status: "completed", meta: { name: "wf-a" }, defaultChildModel: "test/model-a" });
-    await __test.writeJsonAtomic(path.join(runA, "lanes", "lane_1.json"), {
+    await writeJsonAtomic(path.join(runA, "state.json"), { id: "run-a", status: "completed", meta: { name: "wf-a" }, defaultChildModel: "test/model-a" });
+    await writeJsonAtomic(path.join(runA, "lanes", "lane_1.json"), {
       callId: "lane:1",
       role: "finder",
       model: "test/model-a",
@@ -274,8 +274,8 @@ test("analyze-runs aggregates partial run directories without mutation", async (
       queueWaitMs: 12,
     });
     await fs.writeFile(path.join(runA, "events.jsonl"), `${JSON.stringify({ type: "cache.hit" })}\n{bad`, "utf8");
-    await __test.writeJsonAtomic(path.join(runB, "state.json"), { id: "run-b", status: "failed", meta: { name: "wf-b" }, defaultChildModel: "test/model-b" });
-    await __test.writeJsonAtomic(path.join(runB, "lanes", "lane_2.json"), {
+    await writeJsonAtomic(path.join(runB, "state.json"), { id: "run-b", status: "failed", meta: { name: "wf-b" }, defaultChildModel: "test/model-b" });
+    await writeJsonAtomic(path.join(runB, "lanes", "lane_2.json"), {
       callId: "lane:2",
       role: "verifier",
       model: "test/model-b",

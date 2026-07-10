@@ -15,14 +15,7 @@ import {
   MAX_LANE_RETRY_DELAY_MS,
 } from "../workflow-kernel/errors.js";
 import { laneAuthorityInstruction } from "../workflow-kernel/authority-policy.js";
-
-// Direct unit coverage for the pure/semi-pure lane-scoped helpers exported from
-// workflow-kernel/child-agent-runner.js: the resume cache-hit and checkpoint-hit discriminators,
-// the lane task-summary chooser, the integration-lane lookup, and the edit-patch normalizer +
-// edit-plan accumulator. runChildAgent itself is the heavy child-session lifecycle (create/prompt/
-// retry/integrate) and is intentionally not exercised here; it is covered indirectly by the
-// drain/workflow suites.
-const {
+import {
   classifyResumeCacheHit,
   checkpointHitForSignature,
   laneTaskSummary,
@@ -32,18 +25,26 @@ const {
   runChildAgent,
   sessionDirectoryEchoStatus,
   createEditWorktree,
-  writeLaneCheckpoint,
+} from "../workflow-kernel/child-agent-runner.js";
+import { writeLaneCheckpoint } from "../workflow-kernel/run-store-projections.js";
+import {
   applyLaneEffortParams,
   clearLaneEffort,
   laneEffortPolicies,
   laneEffortPolicyForChild,
   laneEffortPolicyForModel,
-  loadRoleDefaultsManifest,
-  mergeRoleDefaults,
   normalizeLaneEffort,
   registerLaneEffort,
-  resolveRole,
-} = WorkflowPlugin.__test;
+} from "../workflow-kernel/lane-effort-policy.js";
+import { loadRoleDefaultsManifest, mergeRoleDefaults, resolveRole } from "../workflow-kernel/role-template-loading.js";
+import { checkBudgetBeforeLaunch } from "../workflow-kernel/budget-accounting.js";
+
+// Direct unit coverage for the pure/semi-pure lane-scoped helpers exported from
+// workflow-kernel/child-agent-runner.js: the resume cache-hit and checkpoint-hit discriminators,
+// the lane task-summary chooser, the integration-lane lookup, and the edit-patch normalizer +
+// edit-plan accumulator. runChildAgent itself is the heavy child-session lifecycle (create/prompt/
+// retry/integrate) and is intentionally not exercised here; it is covered indirectly by the
+// drain/workflow suites.
 
 async function tempRunDir(prefix) {
   const root = await fs.mkdtemp(path.join("/tmp", `${prefix}-`));
@@ -1247,7 +1248,7 @@ test("runChildAgent reserves in-flight lane budget so concurrent lanes cannot ov
     assert.equal(run.reservedLanes, 4, "all four in-flight lanes hold a reservation");
     assert.ok(run.reservedCost >= 1 - 1e-9, "reservations consumed the full cost headroom while lanes are in-flight");
     assert.throws(
-      () => WorkflowPlugin.__test.checkBudgetBeforeLaunch(run),
+      () => checkBudgetBeforeLaunch(run),
       (error) => error?.code === "WORKFLOW_BUDGET_STOPPED",
       "a fifth concurrent launch must be gated by the in-flight reservations, not allowed to overshoot",
     );
