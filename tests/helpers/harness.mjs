@@ -55,7 +55,7 @@ function defaultSession(prompt, options, calls) {
   };
 }
 
-function defaultWorktree(options, calls) {
+function defaultWorktree(calls) {
   return {
     async create(input) {
       calls.worktreeCreate.push(input);
@@ -151,7 +151,7 @@ async function makeHarness(promptOrOptions, maybeOptions = {}) {
   } else if (options.worktree) {
     worktree = options.worktree;
   } else {
-    worktree = defaultWorktree(options, calls);
+    worktree = defaultWorktree(calls);
   }
 
   let tui;

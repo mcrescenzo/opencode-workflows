@@ -7,6 +7,23 @@ and uses semantic versioning for published package releases.
 
 ## [Unreleased]
 
+### Added
+- Trusted drain-adapter factories now receive a run-bound `stageDomainMutation`
+  capability so `close` and `createFollowup` can durably stage domain intent for
+  finalization only after the verified primary-tree apply.
+
+### Changed
+- Removed obsolete probe-era helpers, a superseded toast-formatting island, dead
+  test scaffolding, and redundant kernel facades while preserving the owning
+  module exports through the kernel barrel.
+
+### Fixed
+- Resuming without an explicit args override now restores the approved runtime
+  args, model tiers, and guest deadline from durable state instead of silently
+  replanning with a null args payload or current defaults.
+- Current-facing docs now describe the bundled `deep-research` workflow/command,
+  text-only schema validation, package contents, and historical plans accurately.
+
 ## [0.4.0] - 2026-07-09
 
 ### Added

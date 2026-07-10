@@ -1,6 +1,8 @@
 # Deep-Research Hardening Implementation Plan
 
-> Status: Approved plan (2026-07-09) — implementation pending. Baseline: main @ 9b6d067, suite 709/709 green. Sources: first live /deep-research run transcript review + 4-lane audit + 5-lane feasibility/fresh-eyes review (both adversarially grounded, file:line-cited).
+> Status: **historical implemented plan**. The hardening batch shipped in 0.4.0;
+> the baseline, task list, and source references below preserve the implementation
+> record rather than describe pending work.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 

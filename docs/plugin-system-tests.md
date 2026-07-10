@@ -75,9 +75,9 @@ A valid smoke run must exercise and capture evidence for, at minimum:
 - child ID, PID, port, and trust mode
 - project directory and explicit plugin path (`opencode-workflows.js`)
 - startup health and OpenCode version
-- command registry entries: the core package ships zero bundled commands, so
-  confirm no plugin-bundled entries appear unless an operator-configured
-  extension or a project/global `commands/` file contributes one
+- command registry entries: confirm the bundled `deep-research` command appears;
+  operator-configured extensions and project/global `commands/` files may add
+  other entries
 - tool registry entries (at least `workflow_run`, `workflow_status`, and
   `workflow_list`)
 - a deterministic workflow tool execution (the child-session tool smoke below)
@@ -112,9 +112,9 @@ Manual fallback path:
    discovery when startup import/lifecycle is the behavior under test.
 3. Inspect child health, PID, port, trust mode, startup logs, command registry,
    tool registry, and plugin command entries.
-4. Verify the command registry contains zero plugin-bundled entries: the core
-   package ships no bundled commands, so any commands present must come from
-   an operator-configured extension or a project/global `commands/` file.
+4. Verify the command registry contains the bundled `deep-research` entry.
+   Additional commands may come from an operator-configured extension or a
+   project/global `commands/` file.
 5. Stop the child and verify cleanup evidence shows the process is gone, such as
    `processAlive: false` or an equivalent disposed-child status.
 
@@ -122,9 +122,9 @@ Current OpenCode child safe/pure mode can hide config-hook command/tool
 registration even when the explicit plugin path is present. If the safe child is
 healthy but workflow tools are absent, record that as a safe-mode registration
 limitation, not as release evidence. Use an inherited child for the actual
-plugin registration proof, then verify that `/command` contains no
-plugin-bundled entries (only whatever an operator-configured extension or
-project/global `commands/` file contributes, if anything) and that
+plugin registration proof, then verify that `/command` contains the bundled
+`deep-research` entry (plus any configured extension or project/global
+additions) and that
 `/experimental/tool/ids` contains workflow tools such as `workflow_run`,
 `workflow_status`, and `workflow_list`.
 

@@ -4,9 +4,7 @@ import {
   assertContainedRealPath,
   createRawWorktree,
   hasWorkingTreeChanges,
-  isPathInside,
   listWorktrees,
-  parseWorktreeList,
   realpathPartial,
   requireGitRepo,
   worktreeStatus,
@@ -260,8 +258,6 @@ async function createWorktreeAdapter(options = {}) {
 export {
   CommitHookError,
   createWorktreeAdapter,
-  isPathInside,
-  parseWorktreeList,
   requireGitRepo,
   safeSlug,
   worktreeStatus,

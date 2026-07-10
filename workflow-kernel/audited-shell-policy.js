@@ -8,9 +8,8 @@
 // dependency trees without shell-level mutation or network access.
 //
 // This module is PURE (no fs/shell/network) so the policy is fully unit-testable without a real
-// repo. It supplies the allowlist/denylist that resolveRunAuthority (authority-policy.js) turns
-// into the runtime permission ruleset for the inspect-with-shell profile — the lists are never
-// duplicated between the two.
+// repo. It supplies the allowlist and runtime deny patterns that resolveRunAuthority
+// (authority-policy.js) turns into the permission ruleset for the inspect-with-shell profile.
 
 export const AUDITED_SHELL_ALLOWLIST = Object.freeze([
   // Read-only manifest/tree/listing commands only. Each entry is a command-prefix (program + the
@@ -23,63 +22,40 @@ export const AUDITED_SHELL_ALLOWLIST = Object.freeze([
   { id: "go-list", prefix: ["go", "list"], note: "go module list (local)" },
 ]);
 
-// Forbidden substrings/tokens — any command matching one of these is REJECTED even if its prefix is
-// allowlisted. These are the install / audit-network / mutation / shell-meta dangers.
-export const AUDITED_SHELL_DENY = Object.freeze([
-  { id: "install", test: /\b(npm|yarn|pnpm)\s+(install|i|add)\b|\bpip3?\s+install\b|\binstall-packages\b|\bpip-install\b/i, reason: "package installation is a mutation" },
-  { id: "yarn-add", test: /\byarn\s+add\b/i, reason: "yarn add is a mutation" },
-  { id: "npm-audit", test: /\bnpm\s+audit\b/i, reason: "npm audit reaches the network; use network-advisory mode for advisories" },
-  { id: "pip-audit", test: /\bpip-?audit\b/i, reason: "pip-audit reaches the network" },
-  { id: "npm-publish", test: /\b(npm\s+publish|publish)\b/i, reason: "publishing is a mutation" },
-  { id: "git-mutation", test: /\bgit\s+(commit|push|merge|rebase|reset|checkout|switch|stash|cherry-pick|tag)\b/i, reason: "git mutation" },
-  { id: "go-get", test: /\bgo\s+get\b/i, reason: "go get mutates modules / reaches the network" },
-  { id: "go-install", test: /\bgo\s+install\b/i, reason: "go install mutates the local toolchain/module cache" },
-  { id: "cargo-add", test: /\bcargo\s+add\b/i, reason: "cargo add is a mutation" },
-  { id: "cargo-install", test: /\bcargo\s+install\b/i, reason: "cargo install mutates the local toolchain cache" },
-  { id: "redirect", test: /(^|\s)(>|>>|\||&&|;|\|\|)\s*/, reason: "shell redirection/chaining is forbidden" },
-  { id: "substitution", test: /(\$\(|`|<\()/, reason: "shell command/process substitution is forbidden" },
-  { id: "rm-mutation", test: /\b(rm|mv|cp|mkdir|rmdir|chmod|chown|touch|tee)\b/i, reason: "filesystem mutation" },
-  { id: "curl-wget", test: /\b(curl|wget|nc|ssh|scp|rsync)\b/i, reason: "network fetch belongs in network-advisory mode, not audited-shell" },
-]);
-
-// OpenCode permission-rule wildcard deny patterns that translate the AUDITED_SHELL_DENY concerns into
-// the runtime permission ruleset. These are positioned AFTER the allow patterns in the generated
+// OpenCode permission-rule wildcard deny patterns for the audited-shell danger classes. These are
+// positioned AFTER the allow patterns in the generated
 // rules (last-match-wins), so a dangerous argument tacked onto an allowlisted command is still
 // denied (e.g. `git ls-files && rm x` matches `*&&*`). Patterns use OpenCode simple wildcards:
 // `*` = zero-or-more of any char, `?` = exactly one char, all else literal.
-//
-// Kept in lock-step with AUDITED_SHELL_DENY above so the runtime permission ruleset enforces the
-// SAME dangerous classes documented there.
 export const SHELL_PERMISSION_DENY_PATTERNS = Object.freeze([
   // Shell chaining / pipes / redirection — a read-only inspection shell never composes or redirects.
   "*&&*", "*||*", "*;*", "*|*", "*>*", "*<*",
-  // Command/process substitution (AUDITED_SHELL_DENY "substitution").
+  // Command/process substitution.
   "*$(*", "*`*",
-  // Filesystem mutation (AUDITED_SHELL_DENY "rm-mutation").
+  // Filesystem mutation.
   "*rm *", "*rmdir *", "*mv *", "*cp *", "*mkdir *", "*chmod *", "*chown *", "*touch *", "*tee *",
-  // Network fetch (AUDITED_SHELL_DENY "curl-wget") — belongs in network-advisory, not audited-shell.
+  // Network fetch belongs in network-advisory, not audited-shell.
   "*curl*", "*wget*", "*nc *", "*ssh *", "*scp *", "*rsync *",
-  // Package install / add / publish (AUDITED_SHELL_DENY "install"/"yarn-add"/"cargo-add"/"go-get"/"go-install"/"npm-publish").
+  // Package install / add / publish.
   "npm install", "npm install *", "npm i", "npm i *", "npm add", "npm add *",
   "pnpm install", "pnpm install *", "pnpm add", "pnpm add *",
   "yarn install", "yarn install *", "yarn add", "yarn add *",
   "pip install", "pip install *", "pip3 install", "pip3 install *", "*install-packages*", "*pip-install*",
   "go get", "go get *", "go install", "go install *", "cargo add", "cargo add *", "cargo install", "cargo install *", "*publish*",
-  // Networked audit tools (AUDITED_SHELL_DENY "npm-audit"/"pip-audit").
+  // Networked audit tools.
   "*npm audit*", "*pip-audit*", "*pip audit*",
-  // Git mutation (AUDITED_SHELL_DENY "git-mutation").
+  // Git mutation.
   "*git commit*", "*git push*", "*git merge*", "*git rebase*", "*git reset*", "*git checkout*", "*git switch*", "*git stash*", "*git cherry-pick*", "*git tag*",
 ]);
 
-// Translate the audited-shell allowlist + denylist into OpenCode permission-rule wildcard patterns
+// Translate the audited-shell allowlist and deny patterns into OpenCode permission-rule wildcard patterns
 // ({ allow: [...], deny: [...] }). Each allowlisted command prefix becomes TWO patterns — the exact
 // prefix (matches the bare command, e.g. `git ls-files`) and a trailing " *" variant (matches the
 // command with arguments, e.g. `git ls-files path/to/dir`). The deny patterns (above) are returned
 // as-is; the caller pushes allow THEN deny so last-match-wins keeps dangerous arguments denied.
 //
 // Pure + deterministic; reused by resolveRunAuthority for the inspect-with-shell profile so the
-// runtime permission ruleset enforces the SAME allowlist documented above — the lists are never
-// duplicated.
+// runtime permission ruleset enforces the allowlist documented above.
 export function auditedShellPermissionPatterns() {
   const allow = [];
   for (const entry of AUDITED_SHELL_ALLOWLIST) {

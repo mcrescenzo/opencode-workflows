@@ -4,7 +4,8 @@
 > current shipped behavior is defined by source, tests, README, and `docs/workflow-plugin.md`.
 > Note: the beads domain (Phases 9–10) and the live-gate subsystem described below
 > were implemented and later **removed** (see CHANGELOG 0.2.0); the plugin now
-> ships zero bundled domains, workflows, and commands.
+> ships zero bundled domain adapters or domain drain workflows, plus one
+> domain-neutral bundled workflow and command (`deep-research`).
 
 This plan describes the moonshot target for evolving the local OpenCode workflow system into a generic autonomous execution harness, then implementing `beads-drain` as the first serious domain adapter and reusable workflow.
 

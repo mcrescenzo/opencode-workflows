@@ -36,7 +36,7 @@ function runIdFrom(output) {
   return match[1];
 }
 
-function sessionWithMessages(prompt, options, calls) {
+function sessionWithMessages(prompt, _options, calls) {
   return {
     async create(input) {
       calls.create.push(input);

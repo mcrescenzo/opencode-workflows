@@ -1,7 +1,6 @@
 import {
   MAX_INLINE_RESULT_BYTES,
   MAX_RESULT_READBACK_BYTES,
-  MAX_RESULT_READ_FILE_BYTES,
 } from "./constants.js";
 import { redactValue } from "./text-json.js";
 

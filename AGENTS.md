@@ -7,7 +7,7 @@
 
 - This is an independently publishable opencode plugin package (`@mcrescenzo/opencode-workflows`) that can also be developed inside a private parent monorepo checkout. Runtime package dependencies are declared in `package.json`; parent-tree integrations are optional test/dev conveniences, not required package metadata.
 - Plugin entrypoint is `opencode-workflows.js`, which re-exports the plugin factory via the kernel barrel `workflow-kernel/index.js` (which in turn exports the default from `workflow-kernel/workflow-plugin.js`).
-- Intentional source lives in `.github/`, `docs/`, `skills/`, `tests/`, `workflow-kernel/`, `opencode-workflows.js`, `package.json`, `README.md`, and the other root package/community files. The plugin ships zero bundled `workflows/` or `commands/`; those directories no longer exist in this repo.
+- Intentional source lives in `.github/`, `commands/`, `docs/`, `skills/`, `tests/`, `workflow-kernel/`, `workflows/`, `opencode-workflows.js`, `package.json`, `README.md`, and the other root package/community files. The plugin ships one domain-neutral bundled workflow (`deep-research`) and its `/deep-research` command.
 - `.opencode/`, `.beads/`, `.remember/`, `node_modules/`, logs, and child runtime registries are local runtime state; do not commit or publish them.
 
 ## Verification Commands
@@ -27,7 +27,7 @@
 
 ## Workflow Boundaries
 
-- The plugin bundles zero workflows. The core kernel ships no domain drain workflow; a drain workflow (`harness: "drain"`) is contributed by a configured trusted extension and invoked by name with `workflow_run({ name: "<drain-workflow>", ... })`, not by path. The generic drain mechanism is exercised in-tree by the synthetic `fixture-drain` extension under `tests/fixtures/drain-extension/`.
+- The plugin bundles one domain-neutral, read-only workflow (`deep-research`). The core kernel ships no domain drain workflow or domain extension; a drain workflow (`harness: "drain"`) is contributed by a configured trusted extension and invoked by name with `workflow_run({ name: "<drain-workflow>", ... })`, not by path. The generic drain mechanism is exercised in-tree by the synthetic `fixture-drain` extension under `tests/fixtures/drain-extension/`.
 - Empty or omitted drain args default to safe dry-run behavior. Non-null args must be a JSON object; strings and arrays are rejected before approval preview.
 - A non-dry drain (`mode: "autonomous-local"`) requires a one-time launch approval; the kernel verifies the server version floor (`GET /global/health`, minimum opencode 1.17.13) and asserts lane rooting/permissions deterministically at launch — there is no live-gate preflight step.
 - Normal edit/integration workflows stop at the hash-gated `workflow_apply` boundary. The intentional exception is a successful non-dry drain workflow, whose launch approval authorizes in-run local primary-tree apply and domain-mutation finalization.

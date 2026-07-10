@@ -27,7 +27,7 @@ import { makeHarness, makeTempDir, HARNESS_DEFAULT_MODEL } from "./helpers/harne
 import { createWorktreeAdapter } from "../workflow-kernel/worktree-adapter.js";
 import { fakeDrainAdapter, emptyDrainAdapter } from "./helpers/fake-drain-adapter.mjs";
 import { makeExtensionDir, writeFakeExtension } from "./helpers/fake-extension.mjs";
-import { metaDiagnostics, validateMeta, laneBlueprint, collectDiagnostics, validateMetaLanes, mergeLaneDeclarations } from "../workflow-kernel/workflow-source.js";
+import { metaDiagnostics, validateMeta, laneBlueprint, collectDiagnostics, validateMetaLanes } from "../workflow-kernel/workflow-source.js";
 import { WORKFLOW_INSPECT_TOOLS, WORKFLOW_MUTATING_TOOLS } from "../workflow-kernel/authority-policy.js";
 const execFileAsync = promisify(execFile);
 const { __test } = workflowPlugin;
@@ -185,17 +185,6 @@ async function readResult(output) {
   return JSON.parse(await fs.readFile(resultPath(output), "utf8"));
 }
 
-async function refreshDomainManifest(status) {
-  const planPath = path.join(status.dir, "diff-plan.json");
-  const plan = JSON.parse(await fs.readFile(planPath, "utf8"));
-  plan.domainMutationManifest = await __test.stagedDomainMutationManifest(status.dir);
-  plan.domainMutationHash = __test.computeDomainMutationHash(plan.domainMutationManifest);
-  plan.diffPlanHash = __test.computeDiffPlanHash(plan);
-  await __test.writeJsonAtomic(planPath, plan);
-  status.editPlan = { ...status.editPlan, domainMutationManifest: plan.domainMutationManifest, domainMutationHash: plan.domainMutationHash, diffPlanHash: plan.diffPlanHash };
-  return status;
-}
-
 const EXTERNAL_WORKFLOW_SOURCE = `export const meta = { name: "external-source", profile: "read-only-review" };
 return true;`;
 
@@ -323,7 +312,7 @@ test("server fingerprint is memoized per serverUrl until __resetFingerprintCache
   const tooOldHealth = { data: { healthy: true, version: "1.0.0" } };
   const okHealth = { data: { healthy: true, version: "1.17.13" } };
 
-  async function launchApplyApprovedPlan(directory, tools, context, name) {
+  async function launchApplyApprovedPlan(tools, context, name) {
     const source = `export const meta = { name: "${name}", profile: "apply-approved-plan" };
 return true;`;
     return await runApproved(tools, context, source);
@@ -337,7 +326,7 @@ return true;`;
   try {
     await initGitRepo(first.directory);
     await assert.rejects(
-      launchApplyApprovedPlan(first.directory, first.tools, first.context, "memo-1"),
+      launchApplyApprovedPlan(first.tools, first.context, "memo-1"),
       /requires opencode server >= /,
     );
   } finally {
@@ -353,14 +342,14 @@ return true;`;
   try {
     await initGitRepo(second.directory);
     await assert.rejects(
-      launchApplyApprovedPlan(second.directory, second.tools, second.context, "memo-2"),
+      launchApplyApprovedPlan(second.tools, second.context, "memo-2"),
       /requires opencode server >= /,
     );
 
     // Clearing the cache forces a fresh health read on the next launch against the same
     // serverUrl, which now resolves to the (still-forced) good version and succeeds.
     __resetFingerprintCacheForTests();
-    const output = await launchApplyApprovedPlan(second.directory, second.tools, second.context, "memo-3");
+    const output = await launchApplyApprovedPlan(second.tools, second.context, "memo-3");
     assert.match(output, /completed/);
   } finally {
     await fs.rm(second.directory, { recursive: true, force: true });
@@ -1397,6 +1386,51 @@ test("jbs3.4: a runtime-args change that invalidates cached lanes warns 'N lanes
     // The unchanged-args resume of the same run shows zero re-run.
     const clean = await tools.workflow_run.execute({ resumeRunId: runId, args: { mode: "first" } }, context);
     assert.match(clean, /Resume replay: 0 lanes will re-run, ~\$0 re-spend \(2 completed lanes replay from cache/);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("resume without overrides preserves the approved runtime args, model tiers, and guest deadline", async () => {
+  let promptAttempt = 0;
+  const seenModels = [];
+  const { tools, context, directory } = await makeHarness(async (input) => {
+    promptAttempt += 1;
+    const model = input?.body?.model;
+    seenModels.push(model ? `${model.providerID}/${model.modelID}` : "none");
+    if (promptAttempt === 1) {
+      const error = new Error("first segment terminal lane failure");
+      error.status = 400;
+      throw error;
+    }
+    return { data: { parts: [{ type: "text", text: "recovered" }], info: { tokens: { input: 1, output: 1, reasoning: 0 }, cost: 0 } } };
+  });
+  try {
+    const name = "resume-approved-envelope";
+    const source = `export const meta = { name: ${JSON.stringify(name)}, profile: "read-only-review", maxAgents: 1 };
+const lane = await agent("fail once, then recover", { tier: "deep", retryCount: 0 });
+return { seen: args?.value ?? null, lane };`;
+    const runtimeArgs = { value: "must-survive" };
+    const childModel = "zai-coding-plan/glm-5.2";
+    const modelTiers = { fast: childModel, deep: "zai-coding-plan/glm-5.2-max" };
+    const guestDeadlineMs = 4_321;
+
+    await assert.rejects(
+      runApprovedRequest(tools, context, { source, args: runtimeArgs, childModel, modelTiers, guestDeadlineMs, background: false }),
+      /first segment terminal lane failure/,
+    );
+    const failed = await statusByName(tools, context, name);
+    assert.equal(failed.status, "failed");
+
+    const preview = JSON.parse(await tools.workflow_run.execute({ resumeRunId: failed.id, format: "json" }, context));
+    assert.match(preview.runtimeArgsPreview, /"value": "must-survive"/);
+    assert.deepEqual(preview.modelPlan, { defaultChildModel: childModel, ...modelTiers });
+    assert.equal(preview.laneBudget.guestDeadlineMs, guestDeadlineMs);
+
+    const output = await tools.workflow_run.execute({ resumeRunId: failed.id, approve: true, approvalHash: preview.approvalHash }, context);
+    const result = await readResult(output);
+    assert.equal(result.output.seen, "must-survive");
+    assert.equal(seenModels.at(-1), modelTiers.deep);
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }
@@ -2475,7 +2509,7 @@ test("inspect-with-shell profile's command scoping is enforced by the permission
   // verified per-lane by sessionPermissionEchoStatus — covered end-to-end in
   // workflow-permissions.test.mjs. This proves the ruleset itself: broad bash denied, only the
   // audited read-only prefixes allowed.
-  const { tools, context, directory, calls } = await makeHarness(async () => ({ data: { parts: [], info: {} } }));
+  const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }));
   try {
     const source = `export const meta = { name: "shell-profile", profile: "inspect-with-shell" };
 return true;`;
@@ -2543,6 +2577,110 @@ test("drain-autonomous-local profile completes with the git-based integration wo
     assert.equal(status.integrationPlan.lanes.length, 1);
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("configured drain extensions can stage domain mutations for finalization after workflow_apply", async () => {
+  const extensionDir = await makeExtensionDir("wf-staged-domain-");
+  const markerPath = path.join(extensionDir, "finalized.jsonl");
+  const extensionSource = `import { appendFile } from "node:fs/promises";
+
+export default {
+  id: "staged-domain-fixture",
+  assetDirs: { workflows: "./workflows" },
+  drainAdapters: {
+    staged: {
+      supportsAutoApply: false,
+      mutationOperations: ["fixture.close"],
+      createAdapter: ({ stageDomainMutation }) => {
+        let closed = false;
+        const item = { id: "item-1", title: "stage one mutation", status: "open", issue_type: "task" };
+        return {
+          name: "staged",
+          async discover() { return closed ? [] : [item]; },
+          async classify() { return { status: "ready", reason: "fixture ready" }; },
+          async claim() { return { id: item.id, status: "in_progress" }; },
+          async buildLanePacket() { return { item, instructions: ["write the requested fixture file"] }; },
+          async validate(_item, integrationState) {
+            return {
+              itemId: item.id,
+              accepted: integrationState.status === "integrated",
+              reason: "fixture accepted",
+              diffScopeOk: true,
+              followupsHandled: true,
+              acceptanceChecklist: ["fixture patch integrated"],
+              validationCommands: ["fixture validation"],
+              followups: [],
+            };
+          },
+          async close() {
+            await stageDomainMutation({
+              mutationKey: "fixture-close:item-1",
+              operation: "fixture.close",
+              payload: { issueId: item.id, markerPath: ${JSON.stringify(markerPath)} },
+            });
+            closed = true;
+            return { id: item.id, status: "staged-close" };
+          },
+          async createFollowup() { throw new Error("fixture followups are not expected"); },
+          async proveDry() { return { dry: closed }; },
+        };
+      },
+    },
+  },
+  mutationHandlers: {
+    "fixture.close": async ({ operation, idempotencyKey, issueId, markerPath }) => {
+      await appendFile(markerPath, JSON.stringify({ operation, idempotencyKey, issueId }) + "\\n", "utf8");
+      return { issueId, status: "closed" };
+    },
+  },
+};
+`;
+  const workflowSource = `export const meta = { name: "staged-domain-drain", harness: "drain", adapter: "staged", profile: "drain-autonomous-local", maxAgents: 1 };
+return await drain({ adapter: "staged", dryRun: false, maxWaves: 2, maxAttempts: 1 });`;
+  const extensionPath = await writeFakeExtension(extensionDir, {
+    source: extensionSource,
+    assetDirs: { workflows: "./workflows" },
+    workflows: { "staged-domain-drain": workflowSource },
+  });
+  const { tools, context, directory } = await makeHarness(portPrompt({
+    writeFile: { name: "staged-domain-change.txt", body: "applied before domain finalization\n" },
+  }), { extensions: [extensionPath] });
+  try {
+    await initGitRepo(directory);
+    const output = await runApprovedRequest(tools, context, {
+      name: "staged-domain-drain",
+      args: { mode: "autonomous-local" },
+      background: false,
+    });
+    const runId = runIdFrom(output);
+    const status = JSON.parse(await tools.workflow_status.execute({ runId, format: "json", detail: "full" }, context));
+
+    assert.equal(status.status, "awaiting-diff-approval");
+    assert.equal(status.editPlan.domainMutationManifest.length, 1);
+    await assert.rejects(fs.access(markerPath), { code: "ENOENT" }, "the domain handler must not run before primary apply");
+
+    const applied = await tools.workflow_apply.execute({
+      runId,
+      applyBundle: status.editPlan.applyBundle,
+      approvalIntent: "apply",
+    }, context);
+    assert.match(applied, /applied 1 patches and finalized 1 domain mutations/);
+    assert.equal(await fs.readFile(path.join(directory, "staged-domain-change.txt"), "utf8"), "applied before domain finalization\n");
+
+    const records = (await fs.readFile(markerPath, "utf8")).trim().split(/\r?\n/).map((line) => JSON.parse(line));
+    assert.equal(records.length, 1);
+    assert.deepEqual(records[0], {
+      operation: "fixture.close",
+      idempotencyKey: __test.domainMutationIdempotencyKey("fixture-close:item-1"),
+      issueId: "item-1",
+    });
+
+    assert.match(await tools.workflow_apply.execute({ runId, applyBundle: status.editPlan.applyBundle, approvalIntent: "apply" }, context), /already applied/);
+    assert.equal((await fs.readFile(markerPath, "utf8")).trim().split(/\r?\n/).length, 1, "replay must not duplicate the mutation");
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+    await fs.rm(extensionDir, { recursive: true, force: true });
   }
 });
 
@@ -4973,7 +5111,7 @@ test("workflow_cancel and workflow_kill do not wedge when child session abort ha
   const abortCalls = [];
   const { tools, context, directory } = await makeHarness(async () => ({ data: { parts: [], info: {} } }), {
     pluginContext: { __workflowChildAbortTimeoutMs: 20, __workflowLifecycleSettleTimeoutMs: 20 },
-    session(prompt, options, calls) {
+    session(prompt, _options, calls) {
       return {
         async create(input) {
           calls.create.push(input);
@@ -6372,7 +6510,7 @@ return agent({ role: "x" });`;
   const envelope = JSON.parse(preview);
   // The approvalHash from the preview must NOT contain summary content: mutate the display-only
   // fields and confirm approvalEnvelope() (recomputed) is identical, proving they are not hashed.
-  const { approvalEnvelope, approvalHash } = await import("../workflow-kernel/approval-hashing.js");
+  const { approvalHash } = await import("../workflow-kernel/approval-hashing.js");
   const baseHash = approvalHash(runLikeEnvelope(envelope));
   const mutated = runLikeEnvelope(envelope);
   // approvalEnvelope ignores unknown keys, so adding summary fields cannot change the hash.

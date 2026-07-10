@@ -303,7 +303,7 @@ async function deliverWorkflowNotifications(pluginContext, event) {
         await writeNotificationRecord(notification);
         failed += 1;
       }
-    } catch (error) {
+    } catch {
       // A writeNotificationRecord failure (transient disk error, or the run
       // directory being concurrently removed by workflow_cleanup) must not abort
       // delivery for the other still-pending notifications in this same pass.

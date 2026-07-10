@@ -1,7 +1,9 @@
 # Port `repo-bughunt` to the OpenCode Workflow System — Implementation Plan
 
 > Status: **historical implementation plan**. Retained for provenance; the shipped
-> behavior is now in `workflows/repo-bughunt.js`, command docs, and tests.
+> bundled workflow described below was later removed from this package during the
+> pure-architecture extraction. This file preserves the original implementation
+> record; it is not a current package inventory.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 

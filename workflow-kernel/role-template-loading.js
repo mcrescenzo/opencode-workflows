@@ -14,9 +14,6 @@ import { normalizeLaneEffort } from "./lane-effort-policy.js";
 import { parseWorkflowSource, projectWorkflowDir, workflowFileName } from "./workflow-source.js";
 import { pathExists, readJsonFile, writeJsonAtomic } from "./run-store-status.js";
 
-const ROLE_MANIFEST = path.join(ROLE_DIR, "manifest.json");
-const ROLE_DEFAULTS_MANIFEST = path.join(ROLE_DIR, "roles.json");
-
 const DEFAULT_ROLES = {
   explorer: "Explore the assigned surface area. Return concrete files, facts, and uncertainty, not guesses.",
   skeptic: "Challenge assumptions and look for failure modes, regressions, security issues, and missing verification.",
@@ -594,8 +591,6 @@ async function knownRoleNames(roleDir = ROLE_DIR) {
 }
 
 export {
-  ROLE_MANIFEST,
-  ROLE_DEFAULTS_MANIFEST,
   DEFAULT_ROLES,
   DEFAULT_ROLE_DEFAULTS,
   ALLOWED_ROLE_DEFAULT_KEYS,

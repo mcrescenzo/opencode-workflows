@@ -1,6 +1,8 @@
 # Agent-Surface Docs Accuracy Implementation Plan
 
-> Status: Active plan (2026-07-08). Fixes all findings from the 2026-07-08 agent-surface review (groups A–D).
+> Status: **historical implemented plan**. The agent-surface corrections shipped;
+> task instructions, baselines, and source references below are retained for
+> provenance and are not a current work queue.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 

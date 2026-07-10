@@ -1,6 +1,9 @@
 # Pure-Architecture Extraction Implementation Plan
 
-> Status: Active implementation plan (2026-07-08). Executed on branch `pure-architecture-extraction`.
+> Status: **historical implemented plan, later partially superseded**. The
+> pure-architecture extraction shipped in 0.2.0; 0.3.0 later added the one
+> domain-neutral bundled `deep-research` workflow and command. The body below is
+> the original implementation record, not the current package inventory.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 

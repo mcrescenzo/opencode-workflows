@@ -5,13 +5,11 @@ import * as kernel from "./index.js";
 export { default } from "./workflow-plugin.js";
 export {
   acquireAgentSlot,
-  addEditPlanFromResult,
   applyWorkflow,
   approvalSummary,
   assertGitCleanAtBase,
   cleanupWorktrees,
   configureWorkflowEntrypoints,
-  createEditWorktree,
   executeSandbox,
   gitHead,
   gitOutput,
@@ -21,8 +19,6 @@ export {
   planWorkflowEnvelope,
   releaseAgentSlot,
   rollbackPatches,
-  runChildAgent,
-  runNestedWorkflow,
   runWorkflowExecution,
   salvageRun,
   startWorkflow,
@@ -61,6 +57,7 @@ export * from "./structured-output.js";
 export * from "./text-json.js";
 export * from "./workflow-source.js";
 export * from "./worktree-adapter.js";
+export { isPathInside, parseWorktreeList } from "./worktree-git.js";
 
 // Test-only surface. The orchestrator's WorkflowPlugin.__test carries only its core
 // (sandbox/run/child/apply/git/lane) symbols; the extracted modules own everything else.

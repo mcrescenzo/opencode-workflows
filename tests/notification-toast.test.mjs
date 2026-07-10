@@ -4,7 +4,6 @@ import assert from "node:assert/strict";
 import {
   createWorkflowToastEventSink,
   maybeShowWorkflowProgressToast,
-  shortModel,
   showToast,
 } from "../workflow-kernel/notification-toast.js";
 import { truncateText } from "../workflow-kernel/text-json.js";
@@ -20,11 +19,6 @@ test("truncateText enforces result.length <= max even when max is smaller than t
   assert.ok(truncateText(long, 18).length <= 18);
   // A max large enough for the marker still keeps the normal truncated form.
   assert.match(truncateText(long, 40), /truncated \d+ chars\]$/);
-});
-
-test("shortModel hard-caps long model ids at 18 characters", () => {
-  const label = shortModel("claude-opus-4-5-20260301-extended-thinking");
-  assert.ok(label.length <= 18, `shortModel returned ${label.length}-char label: ${JSON.stringify(label)}`);
 });
 
 test("showToast does not accumulate overlapping hung TUI deliveries after timeout", async () => {

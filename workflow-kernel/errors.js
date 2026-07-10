@@ -34,20 +34,6 @@ export class WorkflowAuthorityError extends Error {
   }
 }
 
-// Structural failure of a live capability probe (e.g. the OpenCode session API
-// returned a success-shaped response without a child session id). This is NOT
-// evidence that a permission was denied — it means the probe could not run — so
-// denialProbeResult must classify it as a non-verified (blocked) gate BEFORE the
-// denial-text regex, never as observed denial.
-export class WorkflowProbeStructuralError extends Error {
-  constructor(message) {
-    super(message);
-    this.name = "WorkflowProbeStructuralError";
-    this.code = "WORKFLOW_PROBE_STRUCTURAL";
-    this.outcome = "failure";
-  }
-}
-
 // --- lane failure taxonomy: transient (retryable) vs terminal (fail-fast) ----------------
 //
 // classifyLaneError partitions a thrown lane error into "transient" (a provider
@@ -62,14 +48,12 @@ export class WorkflowProbeStructuralError extends Error {
 // the clearly-transient signals below.
 
 // Workflow control-flow errors are never a lane-network retry candidate: cancellation,
-// budget stops, authority violations, lane-deadline timeouts, and probe-structural
-// failures must propagate immediately.
+// budget stops, authority violations, and lane-deadline timeouts must propagate immediately.
 const NON_RETRYABLE_ERROR_CODES = new Set([
   "WORKFLOW_CANCELLED",
   "WORKFLOW_TIMEOUT",
   "WORKFLOW_BUDGET_STOPPED",
   "WORKFLOW_AUTHORITY_VIOLATION",
-  "WORKFLOW_PROBE_STRUCTURAL",
 ]);
 
 // HTTP statuses that mark a transient upstream condition (rate limit / overload /

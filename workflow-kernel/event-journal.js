@@ -239,10 +239,6 @@ async function readJsonlLedger(filePath) {
   return records;
 }
 
-function ledgerHasCompleted(records, key, keyField = "mutationKey") {
-  return records.some((record) => record?.[keyField] === key && record.phase === "completed");
-}
-
 function completedLedgerRecord(records, key, keyField = "mutationKey") {
   for (const record of [...records].reverse()) {
     if (record?.[keyField] === key && record.phase === "completed") return record;
@@ -461,7 +457,6 @@ export {
   ledgerFilePath,
   appendLedger,
   readJsonlLedger,
-  ledgerHasCompleted,
   completedLedgerRecord,
   latestLedgerRecord,
   incompleteLedgerKeys,

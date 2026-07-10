@@ -83,7 +83,7 @@ test("workflow permission config preserves plan inspect-only safety without requ
 
 test("real child lane records verified permission echo before prompting", async () => {
   const { tools, context, directory, calls } = await makeHarness(async () => textPromptResult(), {
-    session: (prompt, options, callLog) => ({
+    session: (_prompt, _options, callLog) => ({
       async create(input) {
         callLog.create.push(input);
         return { data: { id: "child-verified", permission: input.body.permission.map((rule) => ({ ...rule })) } };
@@ -114,7 +114,7 @@ test("real child lane records verified permission echo before prompting", async 
 
 test("real child lane fails closed on explicit permission echo mismatch before prompt", async () => {
   const { tools, context, directory, calls } = await makeHarness(async () => textPromptResult(), {
-    session: (prompt, options, callLog) => ({
+    session: (_prompt, _options, callLog) => ({
       async create(input) {
         callLog.create.push(input);
         return { data: { id: "child-mismatch", permission: [{ permission: "bash", pattern: "*", action: "allow" }] } };

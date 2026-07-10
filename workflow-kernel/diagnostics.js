@@ -148,5 +148,3 @@ export async function emitWorkflowDiagnostic(run, event) {
     // Diagnostics are best effort and must never affect workflow execution.
   }
 }
-
-export const __test = { redactText, redactValue, projectFromRunDir, EVENT_MAP };

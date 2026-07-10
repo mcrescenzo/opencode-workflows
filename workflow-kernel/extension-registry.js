@@ -38,7 +38,7 @@ export function createExtensionRegistry() {
     const baseDir = opts.baseDir;
 
     const drainAdapters = asPlainObject(def.drainAdapters, `${id}.drainAdapters`);
-    for (const [name, adapter] of Object.entries(drainAdapters)) {
+    for (const name of Object.keys(drainAdapters)) {
       const existing = adapters.get(name);
       if (existing && existing.__extId !== id) {
         throw new Error(`duplicate drain adapter "${name}" (already registered by extension "${existing.__extId}")`);

@@ -388,7 +388,7 @@ test("runtime does not complete when final dry proof fails", async () => {
 });
 
 test("one-wave successful non-dry drain with dry proof reports complete, not max_waves_exceeded", async () => {
-  const { adapter, state } = fakeAdapter([{ id: "x", classification: "ready" }], {
+  const { adapter } = fakeAdapter([{ id: "x", classification: "ready" }], {
     async proveDry() {
       return { dry: true };
     },
@@ -419,15 +419,11 @@ test("max_waves_exceeded reserved for remaining work after the last allowed wave
       },
     },
   );
-  let closedCount = 0;
   const report = await drain({
     adapter,
     maxWaves: 1,
     integrate: async () => ({ status: "integrated", laneReports: [] }),
-    runLane: async (packet) => {
-      closedCount += 1;
-      return laneReport(packet.itemId);
-    },
+    runLane: async (packet) => laneReport(packet.itemId),
   });
 
   assert.equal(report.failed.length, 0);
@@ -697,11 +693,11 @@ test("runtime enters a second wave and records the resnapshot phase", async () =
     { id: "item-1", classification: "ready" },
     { id: "item-2", classification: "ready" },
   ], {
-    async discover(scope, context) {
+    async discover(_scope, context) {
       state.calls.discover += 1;
       return context.waveNumber === 1 ? [state.items[0]] : [state.items[1]];
     },
-    async proveDry(scope, context) {
+    async proveDry(_scope, context) {
       return { dry: context.report.closed.length === 2 };
     },
   });

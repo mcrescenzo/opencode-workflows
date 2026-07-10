@@ -167,11 +167,12 @@ redefined from workflow source.
 
 ## Schema Lanes
 
-Use `schema` when a lane result must be structured. Native structured output is
-used when available; otherwise the kernel uses structured-text instructions plus
-Ajv validation. Correctable schema/text failures can retry in the same child
-session according to `correctiveRetries`, and exhausted validation failures are
-journaled distinctly from transient provider errors.
+Use `schema` when a lane result must be structured. Schema output is text-only:
+the kernel appends a JSON-schema instruction to the system prompt, parses the
+reply text as JSON, and validates it with Ajv. Correctable parse or validation
+failures can retry in the same child session according to `correctiveRetries`,
+and exhausted validation failures are journaled distinctly from transient
+provider errors.
 
 ## Nested Workflows
 
@@ -234,7 +235,7 @@ that can finalize in-run after its launch approval is a successful non-dry
 drain workflow from a trusted source: a host-configured extension workflow
 directory whose registered drain adapter declares `supportsAutoApply: true`.
 The plugin ships one bundled workflow (`deep-research`), which is read-only and
-stages no writes. Project- and global-saved workflows always stop at
+stages no writes. Edit-producing project- and global-saved workflows stop at
 `awaiting-diff-approval` and finalize through `workflow_apply`.
 
 ## Review Checklist

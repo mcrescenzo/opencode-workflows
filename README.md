@@ -8,7 +8,8 @@ plan before anything runs, inspect persisted status, resume after an
 interruption, and apply edits to your repo only through a reviewed, hash-gated
 boundary.
 
-It is the **engine and harness** — you bring the workflows.
+It is the **engine and harness**, with one flagship workflow included; you bring
+the rest.
 
 ## Why use it
 
@@ -190,11 +191,11 @@ for saved and bundled workflow names, args schemas, examples, authority profile,
 model-tier hints, and safe readback steps. The docs below are operator guidance,
 technical contracts, or historical context.
 
-**Packaged vs GitHub-only.** Under the `files[]` policy, a doc ships inside the
-published npm tarball only when it is load-bearing for the kernel API a shipped
-skill or extension directly depends on, not merely cited in a code comment or
-this README's own prose. `docs/workflow-plugin.md` is the only doc that clears
-that bar today: it is the canonical `workflow_*` tool reference
+**Packaged vs GitHub-only.** The tarball includes the runtime plugin, its bundled
+workflow and command, all bundled skills, root package/community documents, and
+`docs/workflow-plugin.md`. Within the `docs/` tree,
+`docs/workflow-plugin.md` is the only packaged file: it is the canonical
+`workflow_*` tool reference
 (`docs/workflow-plugin.md#workflow-tool-reference`) that every extension,
 skill, or agent invoking `workflow_run`/`workflow_apply`/`workflow_status`
 depends on — independent of any bundled command beyond the one flagship workflow and command pair (`deep-research`).
@@ -203,11 +204,11 @@ source checkout, or follow the GitHub links in the table.
 
 | Category | Documents | Packaged? |
 | --- | --- | --- |
-| Ships with the npm package | `docs/workflow-plugin.md` | **Yes** |
-| Active operator references (GitHub only) | `README.md`, `skills/*/SKILL.md`, [docs/workflow-recipes.md](https://github.com/mcrescenzo/opencode-workflows/blob/main/docs/workflow-recipes.md), [docs/plugin-system-tests.md](https://github.com/mcrescenzo/opencode-workflows/blob/main/docs/plugin-system-tests.md), [docs/run-audit-playbook.md](https://github.com/mcrescenzo/opencode-workflows/blob/main/docs/run-audit-playbook.md), [docs/goal-supervision-autonomous-drains.md](https://github.com/mcrescenzo/opencode-workflows/blob/main/docs/goal-supervision-autonomous-drains.md) | No (`README.md` itself ships) |
+| Packaged reference surfaces | `README.md`, `skills/*/SKILL.md`, `docs/workflow-plugin.md` | **Yes** |
+| Active operator references (GitHub only) | [docs/workflow-recipes.md](https://github.com/mcrescenzo/opencode-workflows/blob/main/docs/workflow-recipes.md), [docs/plugin-system-tests.md](https://github.com/mcrescenzo/opencode-workflows/blob/main/docs/plugin-system-tests.md), [docs/run-audit-playbook.md](https://github.com/mcrescenzo/opencode-workflows/blob/main/docs/run-audit-playbook.md), [docs/goal-supervision-autonomous-drains.md](https://github.com/mcrescenzo/opencode-workflows/blob/main/docs/goal-supervision-autonomous-drains.md) | No |
 | Active technical contracts (GitHub only) | [docs/workflow-extensions.md](https://github.com/mcrescenzo/opencode-workflows/blob/main/docs/workflow-extensions.md) | No |
-| Historical snapshots / audits (GitHub only) | `docs/release-gate-validation-2026-06-16.md`, `docs/dogfood-rollout-2026-06-16.md`, `docs/workflow-autonomous-harness-design.md`, `docs/review-2026-06-19-bug-robustness-remediation-plan.md`, `docs/superpowers/plans/2026-06-23-port-repo-bughunt-to-opencode.md`, `docs/superpowers/plans/2026-06-23-session-aware-model-tiering-plan.md`, `docs/general-purpose-harness-extraction-plan.md`, `docs/superpowers/plans/2026-07-07-design-c-gate-simplification.md`, `docs/superpowers/specs/2026-07-08-pure-architecture-extraction-design.md`, `docs/superpowers/plans/2026-07-08-pure-architecture-extraction.md` | No |
-| Roadmap / planning (GitHub only) | `docs/workflow-autonomous-harness-plan.md`, `docs/claude-parity-roadmap.md`, `docs/superpowers/specs/2026-06-23-session-aware-model-tiering-design.md`, `docs/superpowers/specs/2026-07-07-toast-status-cards-design.md`, `docs/superpowers/plans/2026-07-08-agent-surface-docs-accuracy.md` | No |
+| Historical snapshots / audits / completed plans (GitHub only) | `docs/release-gate-validation-2026-06-16.md`, `docs/dogfood-rollout-2026-06-16.md`, `docs/workflow-autonomous-harness-design.md`, `docs/review-2026-06-19-bug-robustness-remediation-plan.md`, `docs/general-purpose-harness-extraction-plan.md`, `docs/superpowers/specs/2026-06-23-session-aware-model-tiering-design.md`, `docs/superpowers/plans/2026-06-23-session-aware-model-tiering-plan.md`, `docs/superpowers/plans/2026-06-23-port-repo-bughunt-to-opencode.md`, `docs/superpowers/specs/2026-07-07-toast-status-cards-design.md`, `docs/superpowers/plans/2026-07-07-design-c-gate-simplification.md`, `docs/superpowers/plans/2026-07-08-agent-surface-docs-accuracy.md`, `docs/superpowers/specs/2026-07-08-deep-research-bundled-workflow-design.md`, `docs/superpowers/plans/2026-07-08-deep-research-bundled-workflow.md`, `docs/superpowers/plans/2026-07-08-inline-approval-rekey-hardening.md`, `docs/superpowers/specs/2026-07-08-pure-architecture-extraction-design.md`, `docs/superpowers/plans/2026-07-08-pure-architecture-extraction.md`, `docs/superpowers/plans/2026-07-09-deep-research-hardening.md` | No |
+| Roadmap / planning (GitHub only) | `docs/workflow-autonomous-harness-plan.md`, `docs/claude-parity-roadmap.md` | No |
 
 Canonical safety references — apply authority and primary-tree writes, the
 raw-artifact source-of-truth hierarchy, lifecycle recovery and cleanup, and the
@@ -217,14 +218,14 @@ complete `workflow_*` tool table is in
 
 ## Source Checkout Verification
 
-The npm package ships the runtime plugin and skills — the plugin bundles exactly one workflow and one command (`deep-research` — see "What it is *not*" above) — plus the "Active
-operator references" / "Active technical contracts" docs listed in the
-Documentation Map above (see `files` in `package.json` for the exact
-list). It does not ship this repository's `tests/`, `scripts/`, or reference
-extension source. It also does not ship the "Historical snapshots / audits" or
-"Roadmap / planning" docs — those stay in git for contributors but are not part
-of the published tarball. The `npm run ...` verification commands below are for
-a source checkout or contributor clone, not for an installed package tarball.
+The npm package ships the runtime plugin, all bundled skills, exactly one
+workflow and command (`deep-research`), root package/community documents, and
+`docs/workflow-plugin.md` (see `files` in `package.json` for the exact list).
+The other active operator and technical docs are GitHub-only. It does not ship the "Historical snapshots / audits" or
+"Roadmap / planning" docs; completed
+plans stay with those historical sources. It also does not ship this repository's `tests/`, `scripts/`, or reference
+extension source. The `npm run ...` verification commands below
+are for a source checkout or contributor clone, **not for an installed package tarball**.
 
 Run the nested repo workflow regression wrapper from this directory:
 

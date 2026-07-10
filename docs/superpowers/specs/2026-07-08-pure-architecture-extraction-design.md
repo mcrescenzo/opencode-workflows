@@ -1,6 +1,9 @@
 # Pure-Architecture Extraction — Design
 
-> Status: Approved design (2026-07-08). Implemented on branch `pure-architecture-extraction`.
+> Status: **historical implemented design, later partially superseded**. The
+> extraction shipped in 0.2.0; 0.3.0 later added the one domain-neutral bundled
+> `deep-research` workflow and command. Zero-domain-extension decisions remain
+> current, but the zero-bundled-workflow stance below does not.
 
 **Date:** 2026-07-08
 **Status:** Approved

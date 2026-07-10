@@ -6,11 +6,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { setTimeout as setTimeoutP } from "node:timers/promises";
 import { promisify } from "node:util";
 import workflowPlugin from "../workflow-kernel/index.js";
 import { encodeApplyBundle, decodeApplyBundle } from "../workflow-kernel/approval-hashing.js";
@@ -78,34 +76,10 @@ async function runApproved(tools, context, source) {
   return await tools.workflow_run.execute(await approvalArgs(tools, context, source), context);
 }
 
-async function runApprovedRequest(tools, context, request) {
-  const preview = await tools.workflow_run.execute(request, context);
-  const match = preview.match(/approvalHash: ([a-f0-9]{64})/);
-  assert.ok(match, `missing approvalHash in preview: ${preview}`);
-  return await tools.workflow_run.execute({ ...request, approve: true, approvalHash: match[1] }, context);
-}
-
 function runIdFrom(output) {
   const match = output.match(/Workflow ([0-9a-f-]{36}) (?:completed|started|awaiting diff approval)/);
   assert.ok(match, `missing run id in output: ${output}`);
   return match[1];
-}
-
-function resultPath(output) {
-  const match = output.match(/Result file: (.+)/);
-  assert.ok(match, `missing result path in output: ${output}`);
-  return match[1].trim();
-}
-
-async function statusByName(tools, context, name) {
-  const statuses = JSON.parse(await tools.workflow_status.execute({ format: "json", detail: "compact", limit: 100 }, context));
-  const status = statuses.find((entry) => entry.meta?.name === name);
-  assert.ok(status, `missing workflow status for ${name}`);
-  return JSON.parse(await tools.workflow_status.execute({ runId: status.id, format: "json", detail: "full" }, context));
-}
-
-async function readResult(output) {
-  return JSON.parse(await fs.readFile(resultPath(output), "utf8"));
 }
 
 async function rejectJson(promise) {
@@ -127,17 +101,6 @@ async function refreshDomainManifest(status) {
   status.editPlan = { ...status.editPlan, domainMutationManifest: plan.domainMutationManifest, domainMutationHash: plan.domainMutationHash, diffPlanHash: plan.diffPlanHash };
   return status;
 }
-
-const EXTERNAL_WORKFLOW_SOURCE = `export const meta = { name: "external-source", profile: "read-only-review" };
-return true;`;
-
-async function writeExternalWorkflow() {
-  const outsideDir = await tempDir();
-  const externalFile = path.join(outsideDir, "external-workflow.js");
-  await fs.writeFile(externalFile, EXTERNAL_WORKFLOW_SOURCE, "utf8");
-  return { outsideDir, externalFile };
-}
-
 
 test("workflow_apply finalizes staged domain mutations after patch apply", async () => {
   const toastCalls = [];

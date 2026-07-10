@@ -4,7 +4,6 @@ import {
   compareServerVersion,
   classifyHealthResult,
   assertServerSupportsElevatedAuthority,
-  __resetFingerprintCacheForTests,
 } from "../workflow-kernel/server-fingerprint.js";
 import { MIN_OPENCODE_SERVER_VERSION } from "../workflow-kernel/constants.js";
 

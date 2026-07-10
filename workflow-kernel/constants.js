@@ -95,7 +95,6 @@ export function resolveHardConcurrencyLimit(env = process.env, fallback = DEFAUL
 // live here was deleted with the probe subsystem — see Design C, 2026-07-07).
 export const DEFAULT_CONCURRENCY = 4;
 export const HARD_CONCURRENCY_LIMIT = resolveHardConcurrencyLimit();
-export const DEFAULT_CONCURRENCY_PROBE_LIMIT = 16;
 export const DEFAULT_RETRY_COUNT = 1;
 export const DEFAULT_CORRECTIVE_RETRY_COUNT = 1;
 export const MAX_CORRECTIVE_RETRY_COUNT = 2;

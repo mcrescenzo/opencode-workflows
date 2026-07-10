@@ -1,6 +1,8 @@
 # Deep-Research Bundled Workflow Implementation Plan
 
-> Status: Ready to execute (verified by adversarial claim-grounding pass, 2026-07-08).
+> Status: **historical implemented plan**. The bundled `deep-research` workflow
+> and command shipped in 0.3.0; the task list and baselines below preserve the
+> implementation record. Later hardening shipped in 0.4.0.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 

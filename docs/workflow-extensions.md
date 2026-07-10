@@ -1,8 +1,8 @@
 # Workflow Extensions (Trusted Domain Adapters)
 
-> Status: **implemented** (the generic-harness extraction shipped; the core package
-> ships zero bundled domain extensions as of the pure-architecture cut). The core
-> plugin is a domain-neutral workflow harness; domain-specific autonomous-drain
+> Status: **implemented** (the generic-harness extraction shipped). The package
+> bundles one domain-neutral guest workflow and command (`deep-research`) but zero
+> domain extensions or domain drain workflows. Domain-specific autonomous-drain
 > behavior (e.g. a ticket-tracker backlog drain) is supplied by **trusted
 > extensions** loaded by explicit config.
 
@@ -10,9 +10,9 @@
 
 `where a file lives` is independent of `how much the kernel trusts it`:
 
-1. **Untrusted guest workflows** — the scripts resolved from project, global, or
-   extension `workflows/` directories (the bundled tier remains a resolution
-   mechanism for downstream packagers; this repo ships none there). They run
+1. **Untrusted guest workflows** — the scripts resolved from project, global,
+   extension, or bundled `workflows/` directories. This package's domain-neutral
+   `deep-research` workflow uses the bundled tier. All guest workflows run
    in a sandboxed QuickJS VM with only injected globals
    (`args`, `agent`, `parallel`, `pipeline`, `phase`, `log`, `budget`, `workflow`,
    `drain`, `persistArtifacts`, `inventoryFiles`). No `fs`, `bd`, `child_process`,
@@ -57,11 +57,16 @@ export default {
   id: "my-domain",
   drainAdapters: {
     "my-domain": {
-      // Called by the host with the live run context; build your adapter from it.
-      createAdapter: ({ pluginContext, toolContext, run, options }) => ({
-        ...createMyAdapter({ /* cwd, actor, scope, signal, ... */ }),
-      }),
-      supportsAutoApply: true,        // opt into in-run auto-apply (autonomous-local)
+      // stageDomainMutation is bound to this run's durable mutation ledger.
+      createAdapter: ({ pluginContext, toolContext, run, options, stageDomainMutation }) =>
+        createMyAdapter({
+          pluginContext,
+          toolContext,
+          run,
+          options,
+          stageDomainMutation,
+        }),
+      supportsAutoApply: false,       // stop for hash-gated workflow_apply
       // Informational only: the kernel never reads this field. Finalizers are
       // resolved by the exact operation-name keys in mutationHandlers below.
       mutationOperations: ["my-domain.close", "my-domain.note"],
@@ -74,6 +79,40 @@ export default {
   },
 };
 ```
+
+Pass the injected staging function into the adapter rather than importing kernel
+internals. `close` and `createFollowup` should record intent with stable mutation
+keys; they must not mutate the domain store directly:
+
+```js
+export function createMyAdapter({ stageDomainMutation /* ... */ }) {
+  return {
+    // discover / classify / claim / buildLanePacket / validate / proveDry ...
+    async close(item) {
+      return await stageDomainMutation({
+        mutationKey: `close:${item.id}`,
+        operation: "my-domain.close",
+        payload: { itemId: item.id },
+      });
+    },
+    async createFollowup(item, followup) {
+      return await stageDomainMutation({
+        mutationKey: `followup:${item.id}:${followup.key}`,
+        operation: "my-domain.note",
+        payload: { itemId: item.id, followup },
+      });
+    },
+  };
+}
+```
+
+Staging is durable and idempotent by `mutationKey`; it does not call a mutation
+handler. For a normal edit-producing drain, the kernel includes the staged
+mutation manifest in the approval hashes and invokes the exact operation handler
+only after the verified patch is written by hash-gated `workflow_apply`. A trusted
+autonomous-local drain with `supportsAutoApply: true` uses the same verified
+apply-and-finalize path in-run under its launch approval. If apply fails, the
+domain mutations remain staged.
 
 The adapter instance must implement the drain contract validated by
 `drain-runtime.js:validateAdapter()`: `discover`, `classify`, `claim`,
@@ -196,8 +235,9 @@ form).
   requires: `harness === "drain"`, autonomous-local authority (read from persisted
   state — resume-safe), a **trusted source** (core-bundled or extension-registered,
   not a project/global shadow), and `supportsAutoApply: true`.
-- Domain mutations are staged and finalized only after a successful primary apply,
-  through a durable idempotent ledger.
+- Domain mutations are staged through the run-bound `stageDomainMutation`
+  capability and finalized only after a successful primary apply, through a
+  durable idempotent ledger.
 
 ## The in-tree reference example
 

@@ -92,7 +92,6 @@ import {
   computeDomainMutationHash,
   countNonEmptyLines,
   domainMutationApprovalManifestForRun,
-  domainMutationManifest,
   finalizeStagedDomainMutations,
   loadJournal,
   stagedDomainMutationManifest,
@@ -148,7 +147,6 @@ import {
   normalizeAutoApproveTier,
   parseRuntimeArgsString,
   resolveDrainMode,
-  resolveLaneModel,
   resolveRequestedModel,
   resolveRunAuthority,
 } from "./authority-policy.js";
@@ -174,18 +172,12 @@ import {
 } from "./role-template-loading.js";
 import { readJsonFile } from "./run-store-status.js";
 import { ajv, compileSchemaWithIdentity, validateStructuredResult } from "./structured-output.js";
-// Re-exported below (and surfaced through index.js + the kernel barrel) so the public
-// workflow-plugin export contract and the __test surface are preserved after the
-// child-agent-runner / sandbox-executor extraction.
 import {
-  addEditPlanFromResult,
   checkpointHitForSignature,
   classifyResumeCacheHit,
-  createEditWorktree,
   normalizePatches,
-  runChildAgent,
 } from "./child-agent-runner.js";
-import { executeSandbox, runNestedWorkflow } from "./sandbox-executor.js";
+import { executeSandbox } from "./sandbox-executor.js";
 import { inlineResultProjection } from "./result-readback.js";
 
 const execFileAsync = promisify(execFile);
@@ -464,7 +456,7 @@ function backgroundSignalsText(heuristic) {
   return (heuristic?.signals ?? []).join(", ");
 }
 
-function workflowBackgroundDecision(meta = {}, sourcePath = "", args = {}, priorState = null, sizing = {}) {
+function workflowBackgroundDecision(meta = {}, args = {}, priorState = null, sizing = {}) {
   if (priorState && typeof priorState.background === "boolean") {
     return { enabled: priorState.background, source: "resume" };
   }
@@ -487,10 +479,6 @@ function workflowBackgroundDecision(meta = {}, sourcePath = "", args = {}, prior
   const heuristic = backgroundHeuristic(sizing);
   if (heuristic.recommended) return { enabled: true, source: "heuristic", heuristic };
   return { enabled: false, source: "foreground-default", heuristic };
-}
-
-function effectiveWorkflowBackground(meta = {}, sourcePath = "", args = {}, priorState = null, sizing = {}) {
-  return workflowBackgroundDecision(meta, sourcePath, args, priorState, sizing).enabled;
 }
 
 // Returns an advisory background-recommendation line for the approval preview, or undefined when
@@ -783,7 +771,6 @@ function plainEnglishSummaryText(run) {
   const lanes = (run.laneBlueprint ?? { lanes: [] }).lanes ?? [];
   const cons = consequenceStatements(run);
   const name = run.meta?.name || "this workflow";
-  const authorityClass = authorityClassText(run);
   const fixedCount = lanes.filter((l) => !l.fanOut).length;
   const fanOutCount = lanes.filter((l) => l.fanOut).length;
   const laneParts = [];
@@ -1132,7 +1119,7 @@ function liftImportantResultLines(redacted) {
   return lines;
 }
 
-function workflowInlineResultLines(run, output) {
+function workflowInlineResultLines(output) {
   const projection = inlineResultProjection(output);
   const lifted = liftImportantResultLines(projection.result);
   const body = projection.inline
@@ -1447,7 +1434,7 @@ async function runWorkflowExecution(pluginContext, toolContext, run, body, args)
         await writeState(run);
         await maybeDeliverCompletionNotification(pluginContext, notification);
         await showWorkflowRunToast(pluginContext, run, "terminal");
-        const inline = workflowInlineResultLines(run, output);
+        const inline = workflowInlineResultLines(output);
         return [
           `Workflow ${run.id} review-required.`,
           ...inline.lifted,
@@ -1512,7 +1499,7 @@ async function runWorkflowExecution(pluginContext, toolContext, run, body, args)
     await writeState(run);
     await maybeDeliverCompletionNotification(pluginContext, notification);
     await showWorkflowRunToast(pluginContext, run, "terminal");
-    const inline = workflowInlineResultLines(run, output);
+    const inline = workflowInlineResultLines(output);
     return [
       `Workflow ${run.id} ${run.status === "awaiting-diff-approval" ? "awaiting diff approval" : run.status === "failed-with-diff-plan" ? "failed with diff plan for review" : run.status === "apply-failed" ? "auto-apply failed" : run.status === "failed" ? "failed" : "completed"}.`,
       ...inline.lifted,
@@ -1646,7 +1633,7 @@ function resumeReplayLine(preview) {
   return `Resume replay: 0 lanes will re-run, ~$0 re-spend (${preview.completed} completed lanes replay from cache at no new spend).`;
 }
 
-function assertResumeEnvelopeUnchanged(args, prior, requested, opts = {}) {
+function assertResumeEnvelopeUnchanged(args, prior, opts = {}) {
   if (!prior) return;
   if (Object.hasOwn(args, "maxAgents") && args.maxAgents !== prior.maxAgents) throw new Error(`resumeRunId cannot change maxAgents from ${prior.maxAgents} to ${args.maxAgents}`);
   // jbs3.4: the model envelope is pinned to the prior segment (defaultChildModel/modelTiers above).
@@ -1932,6 +1919,12 @@ async function planWorkflowEnvelope(pluginContext, toolContext, args) {
   const sourceHash = hash(source);
   const { meta, body } = parseWorkflowSource(source);
   const sourceMetadata = sourcePreviewMetadata(source, sourcePath, args);
+  // Omitting `args` on resume means "reuse the approved payload", not "replace it with null".
+  // Restore it before drain/string canonicalization and args-schema validation so every planning
+  // decision, approval hash, lane signature, and the guest body sees the same persisted value.
+  if (resumeEntry && !Object.hasOwn(args, "args") && Object.hasOwn(priorState ?? {}, "runtimeArgs")) {
+    args = { ...args, args: priorState.runtimeArgs };
+  }
   // Canonicalize drain invocations (profile<->mode reconciliation, plus one-shot parse of a
   // model-emitted JSON string for the args bag) BEFORE the meta argsSchema check, authority,
   // background, and hash so all of them — and the workflow body — see one consistent args object.
@@ -2063,7 +2056,7 @@ async function planWorkflowEnvelope(pluginContext, toolContext, args) {
     maxAgentsSignal: Number.isInteger(args.maxAgents),
     maxRuntimeSignal: Number.isInteger(args.maxRuntimeMs) || Number.isInteger(meta.maxRuntimeMs),
   };
-  const backgroundDecision = workflowBackgroundDecision(meta, sourcePath, args, priorState, { maxAgents, concurrency, maxRuntimeMs, ...backgroundSizingSignals });
+  const backgroundDecision = workflowBackgroundDecision(meta, args, priorState, { maxAgents, concurrency, maxRuntimeMs, ...backgroundSizingSignals });
   const background = backgroundDecision.enabled;
   const notificationDelivery = { promptAsyncAvailable: sessionApi(pluginContext).has("promptAsync") };
   const requestedDebugCapture = args.debugCapture === true || truthyEnvFlag(process.env[OPENCODE_WORKFLOWS_DEBUG_CAPTURE_ENV]);
@@ -2073,7 +2066,7 @@ async function planWorkflowEnvelope(pluginContext, toolContext, args) {
   const debugCaptureSource = debugCapture
     ? (args.debugCapture === true ? "workflow_run" : truthyEnvFlag(process.env[OPENCODE_WORKFLOWS_DEBUG_CAPTURE_ENV]) ? OPENCODE_WORKFLOWS_DEBUG_CAPTURE_ENV : "resume")
     : "off";
-  assertResumeEnvelopeUnchanged(args, priorState, { defaultChildModel, authority, budgetCeilings, maxAgents }, { allowBudgetRaise: resumingBudgetStopped });
+  assertResumeEnvelopeUnchanged(args, priorState, { allowBudgetRaise: resumingBudgetStopped });
   const resumePreview = await computeResumeReplayPreview(resumeEntry, priorState, { sourceHash, runtimeArgs: args.args ?? null, defaultChildModel, modelTiers, editAndResume: args.editAndResume === true });
   const externalSource = sourcePath !== "<inline>" && !isTrustedWorkflowPath(sourcePath, toolContext, extWfDirs);
   const autoApprove = workflowAutoApprovePreview(pluginContext, args, authority);
@@ -2341,7 +2334,7 @@ async function startWorkflow(pluginContext, toolContext, args) {
   await writeState(run);
 
   if (run.background) {
-    run.done = runWorkflowExecution(pluginContext, toolContext, run, body, runtimeArgs).catch((_error) => {
+    run.done = runWorkflowExecution(pluginContext, toolContext, run, body, runtimeArgs).catch(() => {
       // Background run error after state-write attempt: best effort.
     });
     void run.done;
@@ -2590,7 +2583,7 @@ function computeSalvageApprovalHash(runId, payload) {
 // transcript. Edit/integration lanes are reported but never salvaged (no worktree commit
 // exists; integrate() requires lane.committed). Read-only lanes are JSON-structurally
 // validated against their final assistant message.
-async function computeSalvagePreview(pluginContext, runDir, state, runId) {
+async function computeSalvagePreview(pluginContext, runDir, state) {
   const candidates = await computeSalvageCandidates(runDir, state);
   const lanes = await readLaneProjections(runDir, state);
   const laneByCallId = new Map(lanes.map((lane) => [lane.callId, lane]).filter(([, lane]) => lane));
@@ -2682,7 +2675,7 @@ async function salvageRun(pluginContext, context, args) {
     );
   }
 
-  const enriched = await computeSalvagePreview(pluginContext, runDir, state, runId);
+  const enriched = await computeSalvagePreview(pluginContext, runDir, state);
   const computedHash = computeSalvageApprovalHash(runId, salvageApprovalPayload(enriched));
 
   const selectedCallIds = Array.isArray(args.callIds) && args.callIds.length > 0
@@ -3330,13 +3323,11 @@ WorkflowPlugin.__test = {
 
 export {
   acquireAgentSlot,
-  addEditPlanFromResult,
   applyWorkflow,
   approvalSummary,
   assertGitCleanAtBase,
   cleanupWorktrees,
   configureWorkflowEntrypoints,
-  createEditWorktree,
   executeSandbox,
   gitHead,
   gitOutput,
@@ -3346,8 +3337,6 @@ export {
   planWorkflowEnvelope,
   releaseAgentSlot,
   rollbackPatches,
-  runChildAgent,
-  runNestedWorkflow,
   runWorkflowExecution,
   salvageRun,
   startWorkflow,

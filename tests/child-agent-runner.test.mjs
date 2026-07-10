@@ -1334,7 +1334,7 @@ test("costTrackingUnreliable: sticky when a lane reports tokens with cost=0; nev
 test("runChildAgent aborts a child session that is created after the create timeout", async () => {
   const { tools, context, directory, calls } = await makeHarness(async () => ({ data: { parts: [{ type: "text", text: "never prompted" }], info: {} } }), {
     pluginContext: { __workflowChildCreateTimeoutMs: 10, __workflowChildAbortTimeoutMs: 20 },
-    session(prompt, options, sessionCalls) {
+    session(prompt, _options, sessionCalls) {
       return {
         async create(input) {
           sessionCalls.create.push(input);
@@ -1446,9 +1446,7 @@ return await agent("return schema", {
 });
 
 test("runChildAgent records a transient failure that exhausts its retries as transient_exhausted (distinct from terminal)", async () => {
-  let attempts = 0;
   const prompt = async () => {
-    attempts += 1;
     const error = new Error("503 Service Unavailable - overloaded");
     error.status = 503;
     error.retryAfterMs = 5; // tiny so the test stays fast across both attempts.

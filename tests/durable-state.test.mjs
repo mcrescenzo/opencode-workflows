@@ -606,7 +606,6 @@ test("domain mutation ledger is idempotent by mutation key", async () => {
   assert.equal(calls, 1);
   assert.deepEqual(second.readback, { observed: 1 });
   const records = await __test.readJsonlLedger(path.join(dir, "domain-ledger.jsonl"));
-  assert.equal(__test.ledgerHasCompleted(records, "bd-close:1"), true);
   assert.equal(records.filter((record) => record.phase === "completed").length, 1);
 });
 

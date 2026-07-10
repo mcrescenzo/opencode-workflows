@@ -46,6 +46,7 @@ import {
   appendEvent,
   appendIntegrationLedger,
   appendValidationLedger,
+  stageDomainMutation as stageRunDomainMutation,
 } from "./event-journal.js";
 import { recordRecentLog } from "./run-observability.js";
 import {
@@ -171,16 +172,23 @@ async function cancelFanoutSiblings(pluginContext, run, scope, reason = "failFas
 
 async function createDrainAdapter(pluginContext, toolContext, run, options) {
   const adapterName = options.adapter;
+  const factoryContext = {
+    pluginContext,
+    toolContext,
+    run,
+    options,
+    stageDomainMutation: (request) => stageRunDomainMutation(run, request),
+  };
   // Test seam (per-pluginContext): the proof-of-concept resolution path the registry generalizes.
   const testAdapterFactory = pluginContext.__workflowDrainAdapters?.[adapterName];
-  if (testAdapterFactory) return await testAdapterFactory({ pluginContext, toolContext, run, options });
+  if (testAdapterFactory) return await testAdapterFactory(factoryContext);
   // Production: resolve the adapter through the trusted extension registry. Domain adapters are host
   // code registered by an explicitly-configured extension — the core kernel ships none itself.
   const registration = pluginContext.workflowExtensionRegistry?.drainAdapter(adapterName);
   if (!registration || typeof registration.createAdapter !== "function") {
     throw new Error(`Unsupported drain adapter: ${String(adapterName)} (no extension registered this adapter)`);
   }
-  return await registration.createAdapter({ pluginContext, toolContext, run, options });
+  return await registration.createAdapter(factoryContext);
 }
 
 function drainLaneItemId(packet, attemptContext = {}) {

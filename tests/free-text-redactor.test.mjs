@@ -25,8 +25,7 @@ import {
   summarizeEntries,
 } from "../workflow-kernel/run-store-status-format.js";
 import {
-  workflowToastMessage,
-  workflowToastSnapshot,
+  workflowHeartbeatToastCard,
 } from "../workflow-kernel/notification-toast.js";
 import WorkflowPlugin from "../workflow-kernel/index.js";
 
@@ -258,8 +257,7 @@ test("notification toast masks a secret embedded in a lane taskSummary (the toas
       { callId: "lane:toast2", status: "running", model: "p/m", title: `alt title ${awsKey}` },
     ],
   };
-  const snapshot = workflowToastSnapshot(run);
-  const msg = workflowToastMessage(snapshot);
+  const msg = workflowHeartbeatToastCard(run).message;
 
   assert.ok(!msg.includes(skToken), "toast message must not leak the sk token");
   assert.ok(!msg.includes(awsKey), "toast message must not leak the aws key");

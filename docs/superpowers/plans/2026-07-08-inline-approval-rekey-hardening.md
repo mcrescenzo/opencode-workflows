@@ -1,6 +1,8 @@
 # Inline Approval Re-Key Hardening Implementation Plan
 
-> Status: Active plan (2026-07-08). Implements all fixes from the 2026-07-08 inline-approval re-key investigation (approve-by-reference, mismatch diagnostics, nested-inline binding, string-args normalization, docs).
+> Status: **historical implemented plan**. The inline-approval re-key fixes
+> shipped; task instructions, baselines, and source references below preserve
+> the implementation record rather than describe current work.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 

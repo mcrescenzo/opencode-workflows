@@ -111,6 +111,6 @@ Answer the core audit questions from those objects:
 
 This playbook was checked against the current run-state schema, the
 `run-auditability` fixture suite, and the checkout's existing run roots with
-`scripts/analyze-runs.mjs --format json` on 2026-07-07. The fixture suite covers
+`node scripts/analyze-runs.mjs --format json` on 2026-07-07. The fixture suite covers
 event pagination, corrupt trailing JSONL lines, debug-capture artifacts, queue
 wait, approval wait, and notification latency.

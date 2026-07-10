@@ -1,7 +1,8 @@
 # Deep-Research Bundled Workflow — Design
 
-> Status: Approved design (2026-07-08) — implementation planned in
-> `docs/superpowers/plans/2026-07-08-deep-research-bundled-workflow.md`.
+> Status: **historical implemented design**. The bundled `deep-research`
+> workflow and command shipped in 0.3.0 and were hardened in 0.4.0. This document
+> preserves the approved design and its later amendment.
 
 **Date:** 2026-07-08
 **Status:** Approved (Michael, 2026-07-08) — all recommendations accepted

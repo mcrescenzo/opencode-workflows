@@ -1,6 +1,8 @@
 # Design C — Gate-Subsystem Removal (Trust the Platform) Implementation Plan
 
-> Status: Active implementation plan (2026-07-07). Executed on branch `design-c-gate-simplification`.
+> Status: **historical implemented plan**. The Design C trust-model changes
+> shipped; branch names, baselines, task checkboxes, and source references below
+> preserve the implementation record rather than describe current work.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 

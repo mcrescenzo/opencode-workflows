@@ -326,7 +326,7 @@ function agentCallsInScope(scopeNode) {
   return calls;
 }
 
-function parallelCallbackSources(node, bindings) {
+function parallelCallbackSources(node) {
   const { stages, options } = splitPipelineStages((node.arguments ?? []).slice(1));
   return {
     options,
@@ -352,7 +352,7 @@ export function laneBlueprint(source) {
     if (node.type !== "CallExpression") return;
     const helper = fanoutCalleeName(node.callee);
     if (!helper) return;
-    const { sources, literalArray } = parallelCallbackSources(node, bindings);
+    const { sources, literalArray } = parallelCallbackSources(node);
     const callbacks = (sources ?? []).flatMap((src) => fanoutCallbacksFromExpression(src, bindings));
     const shapes = [];
     let certain = true;
