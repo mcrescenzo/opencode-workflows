@@ -166,12 +166,30 @@ test("missing question returns an explicit failed envelope without spawning lane
   assert.equal(result.status, "failed");
   assert.equal(result.abortReason, "no-question");
   assert.equal(calls.create.length, 0, "no child session may be created");
+  // fnop.15: every failure envelope carries the canonical empty-result default shape so the
+  // shared defaults can be owned by one helper without behavior drift.
+  assert.deepEqual(result.findings, []);
+  assert.deepEqual(result.refuted, []);
+  assert.deepEqual(result.unverified, []);
+  assert.deepEqual(result.sources, []);
+  assert.deepEqual(result.openQuestions, []);
+  assert.equal(result.caveats, "");
+  assert.equal(result.stats, null);
+  assert.equal(result.reportMarkdown, null);
+  assert.equal(result.truncatedFindings, false);
+  assert.equal(result.artifacts, null);
+  assert.equal(result.reportPath, null);
 });
 
 test("scope failure salvages to an explicit failed envelope", async () => {
   const { result } = await runDeepResearch(scriptedResponder({ scope: new Error("scope lane exploded") }));
   assert.equal(result.status, "failed");
   assert.equal(result.abortReason, "scope-failed");
+  assert.deepEqual(result.findings, []);
+  assert.deepEqual(result.refuted, []);
+  assert.deepEqual(result.unverified, []);
+  assert.deepEqual(result.sources, []);
+  assert.deepEqual(result.openQuestions, []);
 });
 
 test("all searchers empty → websearch-unavailable failed envelope, not an empty report", async () => {

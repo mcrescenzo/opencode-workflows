@@ -97,10 +97,23 @@ function tallyPhase(name, results, labelOf) {
 
 // ---- standardized return envelope ----
 let fitWarning = null;
+// fnop.15: the canonical empty result-collection defaults, owned in one place. Failure and
+// salvage envelopes inherit these; each call overrides only the fields it actually sets (its
+// abortReason, summary, per-call stats/sources, etc.). Fresh arrays per spread so no envelope
+// can mutate another's collections.
+function emptyResultDefaults() {
+  return {
+    findings: [], refuted: [], unverified: [], sources: [],
+    openQuestions: [], caveats: "", stats: null,
+    reportMarkdown: null, truncatedFindings: false, artifacts: null,
+  };
+}
 function envelope(status, extra) {
   const out = {
     domain: DOMAIN, schemaVersion: SCHEMA_VERSION, status, abortReason: null,
-    question: QUESTION, reportPath: null, laneCoverage, fitWarning, ...extra,
+    question: QUESTION, reportPath: null, laneCoverage, fitWarning,
+    ...emptyResultDefaults(),
+    ...extra,
   };
   if (fitWarning && typeof out.caveats === "string") {
     out.caveats = out.caveats ? fitWarning + "\n\n" + out.caveats : fitWarning;
@@ -112,17 +125,19 @@ if (!QUESTION) {
   return envelope("failed", {
     abortReason: "no-question",
     summary: "No research question provided. Pass args as a plain question string or { question: \"…\" }.",
-    findings: [], refuted: [], unverified: [], sources: [], openQuestions: [], caveats: "",
-    stats: null, reportMarkdown: null, truncatedFindings: false, artifacts: null,
   });
 }
 
 // ---- URL normalization (QuickJS has no URL global; pure-string, CC-equivalent) ----
+// fnop.15: one local fact owns the accepted web URL scheme. normURL strips it; isWebSource
+// recognizes it, so the two cannot drift apart (previously duplicated with a keep-in-sync note).
+// The `i` flag covers raw input in isWebSource; normURL lowercases first.
+const WEB_URL_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//i;
 // Lowercase; strip scheme and leading www.; keep host+path; drop query/fragment; strip
 // trailing slashes. Invalid/empty input normalizes to "" (callers skip those).
 function normURL(u) {
   let s = String(u ?? "").trim().toLowerCase();
-  s = s.replace(/^[a-z][a-z0-9+.-]*:\/\//, "");
+  s = s.replace(WEB_URL_SCHEME, "");
   s = s.split(/[?#]/)[0];
   s = s.replace(/^www\./, "");
   s = s.replace(/\/+$/, "");
@@ -253,13 +268,14 @@ const FETCH_PROMPT = (source, angle) =>
   "4. Note the publish date if available.\n\n" +
   "If the fetch fails or the page is irrelevant or paywalled, return claims: [] and sourceQuality: \"unreliable\".";
 
-// URL detection mirrors normURL's scheme-strip regex (line 118) so the two never drift;
-// bare "www." hosts count as web. Anything else (repo paths like workflow-kernel/x.js)
-// is a local source — verifier lanes hold unconditional Read/Grep (authority-policy.js:498-502,
-// bounded to the run's directory), so direct inspection is the correct check there.
+// fnop.15: web-source detection shares the single WEB_URL_SCHEME fact above (no duplicated
+// scheme regex). Bare "www." hosts count as web. Anything else (repo paths like
+// workflow-kernel/x.js) is a local source — verifier lanes hold unconditional Read/Grep
+// (authority-policy.js:498-502, bounded to the run's directory), so direct inspection is the
+// correct check there.
 const isWebSource = (u) => {
   const s = String(u ?? "").trim();
-  return /^[a-z][a-z0-9+.-]*:\/\//i.test(s) || /^www\./i.test(s);
+  return WEB_URL_SCHEME.test(s) || /^www\./i.test(s);
 };
 const VERIFY_PROMPT = (claim, v) => {
   const local = !isWebSource(claim.sourceUrl);
@@ -302,8 +318,6 @@ if (!scope) {
   return envelope("failed", {
     abortReason: "scope-failed",
     summary: "Scope agent returned no result — cannot decompose the research question.",
-    findings: [], refuted: [], unverified: [], sources: [], openQuestions: [], caveats: "",
-    stats: null, reportMarkdown: null, truncatedFindings: false, artifacts: null,
   });
 }
 await log("Q: " + QUESTION.slice(0, 80) + (QUESTION.length > 80 ? "…" : ""));
@@ -423,10 +437,7 @@ if (allSources.length === 0) {
       searchResultCount + " results returned, " + laneCoverage.dropped + " lane(s) dropped. " +
       "Web search may be unavailable in this opencode install (websearch/webfetch are native tools " +
       "but need a working search provider). Retry, or pass seedUrls to research from known sources.",
-    findings: [], refuted: [], unverified: [],
-    sources: [], openQuestions: [], caveats: "",
     stats: { depth: DEPTH, angles: angles.length, sourcesFetched: 0, claimsExtracted: 0, claimsVerified: 0, confirmed: 0, killed: 0, unverified: 0, claimsDroppedByCap: 0, afterSynthesis: 0, urlDupes: dupes.length, budgetDropped: budgetDropped.length, fetchFailures, agentCalls: 1 + searchAgentLanes },
-    reportMarkdown: null, truncatedFindings: false, artifacts: null,
   });
 }
 
@@ -451,9 +462,8 @@ if (rankedClaims.length === 0) {
       ? allClaims.length + " claim(s) extracted but none rated central; depth \"" + DEPTH + "\" verifies central claims only. Re-run at depth normal or thorough to verify supporting claims."
       : "No claims extracted. " + allSources.length + " source(s) fetched (" + fetchFailures + " failed), all empty. " +
         dupes.length + " URL dupes, " + budgetDropped.length + " budget-dropped.",
-    findings: [], refuted: [], unverified: [], sources: sourcesSummary, openQuestions: [], caveats: "",
+    sources: sourcesSummary,
     stats: { depth: DEPTH, angles: angles.length, sourcesFetched: allSources.length, claimsExtracted: allClaims.length, claimsVerified: 0, confirmed: 0, killed: 0, unverified: 0, claimsDroppedByCap: claimsDroppedByCap.length, afterSynthesis: 0, urlDupes: dupes.length, budgetDropped: budgetDropped.length, fetchFailures, agentCalls: 1 + searchAgentLanes + fetchLaneCount },
-    reportMarkdown: null, truncatedFindings: false, artifacts: null,
   });
 }
 
@@ -519,11 +529,10 @@ if (confirmed.length === 0) {
     summary = "All " + killed.length + " claim(s) refuted by adversarial verification. Research inconclusive — sources may be low-quality or claims overstated.";
   }
   return envelope(status, {
-    abortReason, summary, findings: [],
+    abortReason, summary,
     refuted: killed.map(toRefuted), unverified: unverifiedClaims.map(toUnverified),
-    sources: sourcesSummary, openQuestions: [], caveats: "",
+    sources: sourcesSummary,
     stats: { ...statsBase(), afterSynthesis: 0, agentCalls: 1 + searchAgentLanes + fetchLaneCount + voted.length * P.votes },
-    reportMarkdown: null, truncatedFindings: false, artifacts: null,
   });
 }
 
@@ -638,7 +647,6 @@ if (!report) {
     refuted: refutedOut, unverified: unverifiedOut, sources: sourcesSummary,
     openQuestions: [], caveats: "Synthesis failed; findings are unmerged verified claims.",
     stats: { ...statsBase(), afterSynthesis: 0 },
-    reportMarkdown: null, truncatedFindings: false, artifacts: null,
   };
   return envelope("degraded", salvage);
 }
