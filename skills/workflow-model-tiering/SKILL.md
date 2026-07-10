@@ -34,11 +34,11 @@ such a workflow is to pick the concrete fast/deep models and pass them as `model
    - **Deviation:** STOP and confirm explicitly with the user — state the chosen models and
      why — BEFORE calling `workflow_run`.
 
-4. **Run.** Call `workflow_run({ name: "<workflow>", args: {...}, modelTiers: { fast, deep } })`,
-   read the `approvalHash` from the returned preview, then call again with `approve: true`
-   and that `approvalHash`. Never set `maxCost` / `maxTokens` casually; ceilings are
-   part of the approved envelope, and workflow bodies should use `budget.remaining()`
-   or `budget.ceilings()` when they need to self-scale.
+4. **Launch with the tiers.** Pass `modelTiers: { fast, deep }` to `workflow_run`
+   and follow the `workflow-plan-review` skill for the launch → approval →
+   readback contract. Never set `maxCost` / `maxTokens` casually; ceilings are
+   part of the approved envelope, and workflow bodies should use
+   `budget.remaining()` or `budget.ceilings()` when they need to self-scale.
 
 ## Notes
 

@@ -76,13 +76,11 @@ may also be a plain question string.
 ### 4. Read back
 
 This workflow declares `recommendBackground`, so the approve call normally returns
-immediately with a run id (`background: true`). Poll
-`workflow_status({ runId, detail: "compact" })` until the status is terminal, then read
-`workflow_status({ runId, format: "json", detail: "result" })` exactly once. If the user
-forced `background: false`, the approve response itself already contains the completed
-result inline (`Result (redacted JSON, N bytes):`) or an omitted-for-size notice naming
-that same one `detail: "result"` call — do not poll, and do not re-read a result you
-already have inline.
+immediately with a run id (`background: true`). Follow the result-readback contract
+in the `workflow-plan-review` skill: poll `workflow_status({ runId, detail: "compact" })`
+until terminal, then read `workflow_status({ runId, format: "json", detail: "result" })`
+exactly once. If the user forced `background: false`, the result is already inline in
+the approve response — do not re-read it.
 
 The workflow's envelope lives under the result's `output` field
 (e.g. `result.output.reportMarkdown`), not flat on the result. The outer

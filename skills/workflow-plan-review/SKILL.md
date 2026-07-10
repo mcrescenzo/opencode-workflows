@@ -12,6 +12,11 @@ path, eligible runs can launch on the first call when their resolved authority
 tier is within the configured ceiling. In both cases, treat the launch plan as
 something to understand and refine, not a hash to echo back.
 
+This skill is the **canonical owner** of the generic launch → approval →
+background-handoff → monitoring → result-readback contract. Other surfaces
+(authoring skill, model-tiering skill, deep-research command, README, recipes)
+point here for that flow and retain only their domain-specific guidance.
+
 ## Procedure
 
 1. **Get the plan or run.** Prefer `workflow_run({ name: "...", args: {...}, format: "json", ... })`.
@@ -92,3 +97,58 @@ Not every workflow has a static lane count you can quote up front:
   envelope (authority, models, budget, background) plus `Max agents` as the ceiling.
 
 In all cases, present what you know and label what is uncertain. Never invent a precise lane count.
+
+## Background runs and monitoring
+
+When `background` is omitted, the kernel defaults wide, deep, or long runs to
+background using a heuristic; explicit `background: true` or `false` always wins,
+and resume keeps the pinned mode.
+
+- **Foreground** (`background: false`): the `approve` call blocks until the run
+  finishes and returns the terminal result inline (see Result readback below).
+- **Background** (`background: true`): the `approve` call returns immediately
+  with a run id while execution continues in the current OpenCode process. Poll
+  `workflow_status({ runId, detail: "compact" })` until the status is terminal,
+  then read the result once. Keep the run id as your control channel.
+
+Background execution is not durable across OpenCode process death; use
+`workflow_reconcile` to recover stale runs after a restart. Lifecycle tools:
+`workflow_cancel` (cooperative stop), `workflow_pause` (stop and preserve for
+resume), `workflow_kill` (force-terminate a wedged run when cancel/pause do not
+return), `workflow_events` (redacted lifecycle event log), and `workflow_salvage`
+(recover orphaned read-only lane results from an interrupted run — preview first,
+then approve).
+
+## Result readback
+
+A **completed foreground** `workflow_run` returns a terminal summary inline — the
+result is already in the approve response. **Do not re-read it** with
+`workflow_status`; that is redundant.
+
+`workflow_status({ runId, detail: "result" })` is the redacted, full-fidelity
+readback. Use it when:
+
+- The run was **background** — poll `detail: "compact"` until terminal, then read
+  `detail: "result"` exactly once.
+- The foreground response said the result was **omitted for size** — the inline
+  return exceeded the display cap; the response points you at the persisted
+  result. `detail: "result"` then returns the full data, or a partial readback
+  with `resultReadback.truncated` when even that is too large.
+
+Never read raw run files under `.opencode/workflows/runs/` for results; they can
+contain sensitive, unredacted local evidence. `workflow_status detail=result` and
+`workflow_events` are both redacted.
+
+## Edit boundary and in-run auto-apply
+
+Normal edit-capable runs stop at `awaiting-diff-approval`. Primary-tree writes
+happen only through `workflow_apply`, after source/base/diff/domain hashes and a
+clean Git base are checked. This hash gate is independent of the launch approval.
+
+The one exception is an autonomous-local drain. It may apply its verified diff
+plan in-run — right after its one-time launch approval — **only when auto-apply is
+actually eligible**: the workflow source is a trusted extension-registered
+workflow (not a project/global shadow) **and** its registered drain adapter
+declares `supportsAutoApply: true`. A drain that does not meet both conditions
+stops at `awaiting-diff-approval` like any other edit run. The bundled
+`deep-research` workflow is read-only and stages no writes.

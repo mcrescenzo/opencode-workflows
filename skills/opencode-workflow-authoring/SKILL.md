@@ -18,9 +18,10 @@ The primary pattern is **author -> run -> read -> decide**:
 1. Author a small workflow source or choose a saved workflow.
 2. Run a narrow slice first. Prefer `profile: "read-only-review"` unless the
    question truly needs shell, network, MCP, or edit authority.
-3. Read the result with `workflow_status({ runId, detail: "result" })`, or use
-   the inline foreground result returned by `workflow_run` when it fits the safe
-   display cap.
+3. Read the result. A foreground `workflow_run` returns the completed result
+   inline when it fits — use it directly; for background runs or when the inline
+   result was omitted for size, read `workflow_status({ runId, detail: "result" })`.
+   See the `workflow-plan-review` skill for the full readback contract.
 4. Decide whether to widen scope, add lanes, raise budget, switch authority, or
    stop. Do not build one giant workflow before proving the slice.
 
@@ -184,59 +185,46 @@ run's `maxAgents`, concurrency, and budget ceilings.
 
 ## Launch And Readback
 
-Default launch is two-phase: call `workflow_run` for a preview, then call again
-with `approve: true` and the matching `approvalHash`. With configured
-`options.autoApprove`, eligible readOnly/worktree/all-tier runs can launch on
-the first call; a per-call `autoApprove` argument may narrow that ceiling.
+The generic launch → approval → background → monitoring → result-readback
+contract is owned by the `workflow-plan-review` skill. The notes below are
+authoring-specific.
 
-Approving an inline-source preview does not require re-sending the source:
-present only `approve: true` + the `approvalHash` and the previewed bytes are
-reused (approve-by-reference). Re-sending the source works too but must be
-byte-identical — any drift re-keys `sourceHash`/`approvalHash`, and the
-mismatch response's `changedFields` will name the drifted field. Either way,
-the retry must still re-send the same `args` (and any other envelope-affecting
-params, e.g. `childModel`/`modelTiers`/`maxAgents`) used at preview —
-approve-by-reference only retains the source, so a changed envelope still
-re-keys and mismatches. For bodies you run more than once, `workflow_save` +
-run-by-`name` avoids the issue entirely.
-
-Foreground runs return a size-capped, secrets-redacted inline result when it
-fits. Always prefer `workflow_status({ runId, detail: "result" })` for the final
-answer path, especially for large results where inline output is omitted or
-partial.
+For inline `source`, the source bytes determine the approval hash:
+- Approving does not require re-transmitting the source — present only
+  `approve: true` + the `approvalHash` and the previewed bytes are reused
+  (approve-by-reference). Re-sending works too but must be byte-identical.
+- Any drift re-keys `sourceHash`/`approvalHash`; the mismatch response's
+  `changedFields` names the drifted field. The retry must still re-send the same
+  `args` (and other envelope-affecting params, e.g. `childModel`/`modelTiers`/
+  `maxAgents`) — approve-by-reference only retains the source.
+- For bodies you run more than once, `workflow_save` + run-by-`name` avoids the
+  issue entirely.
 
 Resuming with `resumeRunId` re-validates the persisted run's `sourceHash`; a
 changed body is rejected unless `editAndResume: true` is set, which re-keys
-`sourceHash` and `approvalHash` (fresh approval required) while unchanged
-lanes still replay as zero-spend cache hits.
+`sourceHash` and `approvalHash` (fresh approval required) while unchanged lanes
+still replay as zero-spend cache hits.
 
 ## Background Runs
 
-Explicit `background: true` returns quickly with a run id while execution
-continues in the current OpenCode process. When `background` is omitted, the
-kernel defaults wide, deep, or long runs to background using the
-wide/deep/long heuristic; explicit `background: true` or `false` wins, and
-resume keeps the pinned mode. Background execution is not durable across process
-death; use `workflow_status`, `workflow_cancel`, `workflow_pause`, and
-`workflow_reconcile` for inspection and lifecycle control.
-
-`workflow_kill` force-terminates a wedged run when cancel/pause do not
-return; `workflow_events` pages the redacted lifecycle event log; and
-`workflow_salvage` recovers orphaned read-only lane results from an
-interrupted run's child transcripts (preview first, then approve).
+Background launch, monitoring, and lifecycle control are covered by the
+`workflow-plan-review` skill. Authoring note: background mode is a launch-time
+decision (the `background` arg or the kernel's wide/deep/long heuristic), not
+something a workflow body controls. A body may declare
+`meta.recommendBackground: true` (deep-research does) to suggest background, but
+the caller's explicit `background` arg always wins.
 
 ## Edit And Apply
 
 Edit authority is only a cap. A lane receives edit tools only when it explicitly
-requests edit/worktree behavior. Edit-capable lanes run in isolated workflow
-worktrees or directories. Primary-tree writes happen through `workflow_apply`
-after source/base/diff/domain hashes and Git state are checked. The one path
-that can finalize in-run after its launch approval is a successful non-dry
-drain workflow from a trusted source: a host-configured extension workflow
-directory whose registered drain adapter declares `supportsAutoApply: true`.
-The plugin ships one bundled workflow (`deep-research`), which is read-only and
-stages no writes. Edit-producing project- and global-saved workflows stop at
-`awaiting-diff-approval` and finalize through `workflow_apply`.
+requests edit/worktree behavior, and edit-capable lanes run in isolated workflow
+worktrees or directories. The apply boundary and in-run auto-apply contract —
+when a run stops at `awaiting-diff-approval` versus finalizes in-run — is owned
+by the `workflow-plan-review` skill. The authoring-relevant point: edit-producing
+project- and global-saved workflows always stop at `awaiting-diff-approval` and
+finalize through `workflow_apply`; only a trusted extension drain with
+`supportsAutoApply: true` can apply in-run. The bundled `deep-research` is
+read-only and stages no writes.
 
 ## Review Checklist
 
@@ -248,8 +236,9 @@ stages no writes. Edit-producing project- and global-saved workflows stop at
   lane count and cost risk.
 - Model tiers, per-lane `effort`, roles, and schemas are deliberate.
 - Nested workflow calls are static and one level deep.
-- Readbacks use inline result only when it fits; otherwise use
-  `workflow_status({ detail: "result" })`.
+- Foreground readbacks use the inline result when it fits (do not re-read);
+  background or oversized runs use `workflow_status({ detail: "result" })`.
+  See the `workflow-plan-review` skill for the full contract.
 - Edit lanes stop at `workflow_apply` unless using a trusted autonomous drain.
 - After changing workflow source, commands, skills, plugin code, or registration
   behavior, restart OpenCode or use a fresh child process.

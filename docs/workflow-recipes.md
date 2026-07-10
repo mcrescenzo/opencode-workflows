@@ -128,12 +128,10 @@ run completes directly and never enters `awaiting diff approval`; there is no
 `workflow_apply` step because no writes are staged.
 
 If the plugin owner configured `options.autoApprove`, eligible runs can launch on
-the first call when the resolved authority tier is within the configured ceiling:
-`readOnly` for read-only and audited-shell inspection profiles, `worktree` for
-edit/worktree-edit planning, and `all` for integration, network, or MCP
-authority. A call-level `autoApprove` argument may narrow that ceiling for one
-run, but cannot widen it. `workflow_apply` still requires its separate reviewed
-hash fields before primary-tree writes.
+the first call when the resolved authority tier is within the configured ceiling
+— see the `workflow-plan-review` skill for the tier/ceiling rules.
+`workflow_apply` still requires its separate reviewed hash fields before
+primary-tree writes.
 
 ### Size `maxAgents`
 
@@ -150,28 +148,16 @@ to cover every lane any nested workflow will launch. See `docs/workflow-plugin.m
 
 ### Read the result back
 
-A **foreground** `workflow_run` already returns the final structured value inline
-(here `groundedFindings`, `droppedUnsupportedClaims`, and the `note`) when it fits
-the inline cap, with credential-like keys redacted for display — **do not re-read
-it.** Reach for an explicit readback only when it is actually needed:
+Follow the result-readback contract in the `workflow-plan-review` skill: a
+foreground run returns the result inline — do not re-read it; for background
+runs, poll `detail: "compact"` until terminal then read `detail: "result"` once;
+for foreground results omitted for size, fall back to `detail: "result"`.
 
-- **Background runs** — the launch returns a `runId` immediately and no result; poll
-  `detail: "compact"` until terminal, then read the result once:
-
-```jsonc
-workflow_status({ runId: "<runId>", detail: "result" })
-```
-
-- **Foreground runs whose response said the result was omitted for size** — when the
-  inline return exceeded the cap, the foreground response says so and points you at the
-  persisted result; only then call `detail: "result"`, which returns partial data plus
-  `resultReadback.truncated` when the full readback is itself too large.
-
-`workflow_status` never mutates state. Treat `groundedFindings` as the answer and
-`droppedUnsupportedClaims` as an honesty ledger: if a slice landed there, the lane did
-not actually prove its claim, so the fix is another scoped lane (or stronger evidence),
-not a louder assertion. Use `detail: "compact"` to poll progress and `detail: "full"`
-only for diagnostics.
+Recipe-specific note: treat `groundedFindings` as the answer and
+`droppedUnsupportedClaims` as an honesty ledger — if a slice landed there, the
+lane did not actually prove its claim, so the fix is another scoped lane (or
+stronger evidence), not a louder assertion. Use `detail: "compact"` to poll
+progress and `detail: "full"` only for diagnostics.
 
 ### Failure handling
 
@@ -502,30 +488,19 @@ a fresh preview. To escalate to inspect-with-shell or networked research, change
 `profile`/`authority` in the preview, re-read the new authority line, and approve
 the new hash — never reuse a read-only hash for a more-authorized run.
 
-When `options.autoApprove` is configured, a run can skip the preview call only if
-its resolved authority tier is covered by that configured ceiling. A per-call
-`autoApprove` value may narrow the ceiling for one run, but it cannot widen the
-plugin configuration; primary-tree writes still stop at the independent
-`workflow_apply` hash gate.
+When `options.autoApprove` is configured, a run can skip the preview call when
+its resolved authority tier is covered by that configured ceiling — see the
+`workflow-plan-review` skill for the tier/ceiling rules. Primary-tree writes
+still stop at the independent `workflow_apply` hash gate.
 
 ### Read the result back
 
-A **foreground** `workflow_run` already returns the final structured output inline
-(here `groundedFindings`, `droppedUnsupportedClaims`, and the authority-tier note),
-with credential-like keys redacted for display — **do not re-read it.** Only call an
-explicit readback when it is actually needed:
+Follow the result-readback contract in the `workflow-plan-review` skill: a
+foreground run returns the result inline — do not re-read it; for background
+runs, poll `detail: "compact"` until terminal then read `detail: "result"` once;
+for foreground results omitted for size, fall back to `detail: "result"`.
 
-```jsonc
-workflow_status({ runId: "<runId>", detail: "result" })
-```
-
-- **Background runs** — the launch returns a `runId` and no result; poll
-  `detail: "compact"` until terminal, then read `detail: "result"` once.
-- **Foreground runs whose response said the result was omitted for size** — only then
-  fall back to `detail: "result"` for the persisted return.
-
-`workflow_status` never mutates state. Use `detail: "full"` only for
-diagnostics/apply internals. Treat `groundedFindings` as the answer and
+Recipe-specific note: treat `groundedFindings` as the answer and
 `droppedUnsupportedClaims` as an honesty ledger — if something important landed
 there, the lanes did not actually prove it, and the right move is another scoped
 lane (or a stronger tier), not a louder claim.

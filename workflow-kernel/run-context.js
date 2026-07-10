@@ -4,8 +4,8 @@
 // event-journal.js, budget-accounting.js, ...).
 //
 // This module is intentionally type-only: it carries NO runtime logic. Its single job is
-// to document the coupling surface — the ~70-property "run" object that the staged
-// god-object split (opencode-workflows-96b) decomposes around. Extracted modules import
+// to document the coupling surface — the ~70-property "run" object that threads through the
+// orchestrator and its extracted boundaries. Extracted modules import
 // the {@link RunContext} typedef so the property contract each boundary reads/writes is
 // explicit rather than implicit, and so the natural module split points (which subset of
 // these properties a concern actually touches) become visible.

@@ -118,7 +118,8 @@ A workflow run is two phases: **preview**, then **approve**.
    ```
    workflow_run({ name: "my-workflow", args: {...}, approve: true, approvalHash: "<hash>" })
    ```
-3. Read progress and the final result:
+3. Read the result. A foreground run returns it inline; for background runs, poll
+   until terminal then read:
    ```
    workflow_status({ runId, detail: "result" })
    ```
@@ -136,6 +137,11 @@ New to workflows? Save a copy of the smallest safe shape and run it read-only:
 workflow_template_save({ template: "first-run-slice" })
 workflow_run({ name: "first-run-slice" })
 ```
+
+The bundled `workflow-plan-review` skill owns the full launch → approval →
+background → monitoring → result-readback contract; `opencode-workflow-authoring`
+covers source shape, fan-out, and edit/apply boundaries; `workflow-model-tiering`
+covers fast/deep tier mapping.
 
 ## Configuration (optional)
 
@@ -177,11 +183,12 @@ restart OpenCode. Then drive it through tools:
 - **Launch** with `workflow_run` (preview → `approve: true` + `approvalHash`;
   inline-source approves may omit `source` — approve-by-reference). Use
   `profile: "read-only-review"` until a task truly needs more.
-- **Read back** with `workflow_status({ runId, detail: "result" })`; for edit
-  runs, review the diff plan and apply with `workflow_apply` plus the required
-  hashes.
-- See the bundled `opencode-workflow-authoring` skill and the tool reference
-  below for the full contract (sandbox limits, fan-out arity, schemas, model
+- **Read back** the result (inline for foreground runs; `workflow_status` for
+  background or oversized); for edit runs, review the diff plan and apply with
+  `workflow_apply` plus the required hashes.
+- See the bundled `workflow-plan-review`, `opencode-workflow-authoring`, and
+  `workflow-model-tiering` skills and the tool reference below for the full
+  contract (launch/readback, sandbox limits, fan-out arity, schemas, model
   tiers, edit/apply boundaries).
 
 ## Documentation Map

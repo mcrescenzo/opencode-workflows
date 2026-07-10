@@ -91,8 +91,8 @@ export function resolveHardConcurrencyLimit(env = process.env, fallback = DEFAUL
 // OPENCODE_WORKFLOWS_HARD_CONCURRENCY_LIMIT or plugin option `hardConcurrencyLimit` to
 // raise/lower the schema/runtime clamp. Larger bursts can amplify provider rate limits or
 // reproduce the 2026-06-22 stall; characterize a runtime empirically before treating higher
-// values as safe production headroom (the live-gate concurrency-capacity probe that used to
-// live here was deleted with the probe subsystem — see Design C, 2026-07-07).
+// values as safe production headroom. There is no live concurrency-capacity probe gating
+// fan-out; the ceiling above is the only guard.
 export const DEFAULT_CONCURRENCY = 4;
 export const HARD_CONCURRENCY_LIMIT = resolveHardConcurrencyLimit();
 export const DEFAULT_RETRY_COUNT = 1;

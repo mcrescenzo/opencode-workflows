@@ -186,7 +186,7 @@ const execFileAsync = promisify(execFile);
 // orchestrator and the extracted boundaries (sandbox-executor.js, child-agent-runner.js).
 // @typedef {import("./run-context.js").RunContext} RunContext
 
-// Terminal states a run may be resumed from (jbs3.1). "paused"/"interrupted" are
+// Terminal states a run may be resumed from. "paused"/"interrupted" are
 // cooperative/force-kill stops. "failed" (a lane threw a non-cancellation error) and
 // "budget_stopped" (a cost/token/agent ceiling was hit) are ALSO resumable: their
 // completed lanes are journaled and replay from cache at zero re-spend, so resuming
@@ -194,7 +194,7 @@ const execFileAsync = promisify(execFile);
 // explicit operator "cancelled" stays NON-resumable by design (cancel == abandon).
 const RESUMABLE_STATUSES = new Set(["paused", "interrupted", "failed", "budget_stopped"]);
 
-// Background heuristic (jbs3.7, mfv9.6). A foreground run blocks the calling agent inside
+// Background heuristic. A foreground run blocks the calling agent inside
 // workflow_run for the whole execution, so the agent cannot workflow_pause / workflow_cancel its
 // own run mid-flight -- only the human ESC-to-interrupt path can. For a large fan-out that is a real
 // loss of control. Wide, deep, or explicitly long runs default to background when background is
@@ -542,11 +542,11 @@ function mutationDomainSummary(run) {
   return "none declared";
 }
 
-// tfil.3: consequence translation. A pure function translating ALREADY-RESOLVED envelope fields
+// Consequence translation. A pure function translating ALREADY-RESOLVED envelope fields
 // into consequence statements, scoped STRICTLY to facts the envelope actually bounds (cost/token
 // ceilings, agent-count ceiling, authority class, isolation, mutation-domain, apply-gate presence).
 // It makes NO per-file / per-target / runtime-cost / lane-execution-count claims — those are not
-// knowable at preview. Consumed by the tfil.7 preview renderer; display-only.
+// knowable at preview. Consumed by the preview renderer; display-only.
 function applyGateClass(run) {
   if (run.meta?.harness === "drain" && run.authority?.profile === "drain-autonomous-local") {
     // fnop.4: the preview must describe the SAME resolved auto-apply eligibility that execution
@@ -729,8 +729,8 @@ function sourcePreviewMetadata(source, sourcePath, args = {}) {
   return metadata;
 }
 
-// tfil.7: human-first plan rendering generated from the lane blueprint (tfil.2) + consequence
-// translation (tfil.3). Pure functions; display-only. The summary MUST stay out of
+// Human-first plan rendering generated from the lane blueprint + consequence translation.
+// Pure functions; display-only. The summary MUST stay out of
 // approvalEnvelope() (approval-hashing.js) so it cannot re-key approvalHash — it is computed only
 // for the preview envelope and the approvalSummary text, never for the hash.
 
@@ -751,7 +751,7 @@ function describeShape(shape) {
 function describeLaneSite(lane) {
   const shapes = lane.shapes ?? [];
   const decl = lane.declaration;
-  // tfil.8: prefer the human-curated declaration's display fields when present (override-when-present).
+  // Prefer the human-curated declaration's display fields when present (override-when-present).
   const shapesText = shapes.length ? shapes.map(describeShape).join("; ") : "shape unknown (dynamic)";
   if (lane.fanOut) {
     const count = lane.staticCount !== null ? `~${lane.staticCount} (runtime-determined)` : "runtime-determined count";
@@ -820,7 +820,7 @@ function approvalPreviewEnvelope(run) {
       phases: phaseList,
       phasesText: phases,
     },
-    // tfil.7: narrative summary generated from blueprint + consequences. Display-only; NOT in
+    // Narrative summary generated from blueprint + consequences. Display-only; NOT in
     // approvalEnvelope() so it cannot re-key approvalHash.
     plainEnglishSummary: plainEnglishSummaryText(run),
     source: {
@@ -885,10 +885,10 @@ function approvalPreviewEnvelope(run) {
     nestedSnapshots,
     nestedSnapshotText: nested,
     nestedBudgetNotes: nestedBudgetNotes(run),
-    // tfil.2: per-lane blueprint (shape only). fan-out sites carry runtime-determined markers and
+    // Per-lane blueprint (shape only). fan-out sites carry runtime-determined markers and
     // never claim an exact total; dynamic/unresolvable opts render uncertain. Display-only.
     laneBlueprint: run.laneBlueprint ?? { lanes: [] },
-    // tfil.3: consequence statements derived from resolved envelope-bounded facts only (cost/token
+    // Consequence statements derived from resolved envelope-bounded facts only (cost/token
     // ceilings, agent-count ceiling, authority class, isolation, mutation domain, apply gate).
     // Display-only; NOT part of approvalEnvelope() so it cannot re-key approvalHash.
     consequences: consequenceStatements(run),
@@ -933,7 +933,7 @@ function approvalSummary(run) {
   // label is preserved verbatim so order-independent regex assertions over the preview still match.
   return [
     `Workflow approval required for ${preview.workflow.name}.`,
-    // tfil.7: the "What this workflow will do" block leads, generated from the lane blueprint and
+    // The "What this workflow will do" block leads, generated from the lane blueprint and
     // consequence translation so a weak model can narrate the plan without re-reading raw source.
     "What this workflow will do:",
     ...lanePlanLines(preview.laneBlueprint),
@@ -1074,7 +1074,7 @@ function applyApprovalMismatchError({ runId, reason, field, supplied, expected, 
     message: `${mismatchSummary}. Re-read workflow_status with detail:"full" for the run and retry with the fresh hash fields (or applyBundle) if the diff plan is still acceptable.`,
     supplied,
     expected,
-    // tfil.5: every drifted apply-approval dimension is reported at once (not just the first), so a
+    // Every drifted apply-approval dimension is reported at once (not just the first), so a
     // caller can retry in one round-trip. The primary `reason`/`field`/`supplied`/`expected` above
     // retain the first/worst dimension for ordering signal.
     allMismatches: allMismatches ?? [{ field, reason, supplied, expected }],
@@ -1083,7 +1083,7 @@ function applyApprovalMismatchError({ runId, reason, field, supplied, expected, 
   }, null, 2));
 }
 
-// tfil.4 helper: a fresh applyBundle is only useful when all four constituent hashes are known.
+// A fresh applyBundle is only useful when all four constituent hashes are known.
 function freshApplyBundleForApply(state, plan, actualPlanHash, currentDomainHash) {
   return Boolean(state?.sourceHash && plan?.baseCommit && (actualPlanHash ?? plan?.diffPlanHash) && (currentDomainHash ?? plan?.domainMutationHash));
 }
@@ -1329,7 +1329,7 @@ async function runAutoApply(pluginContext, toolContext, run) {
   try {
     for (const { patch } of planned) {
       await appendApplyLedger(run.dir, { phase: "before-write", diffPlanHash: plan.diffPlanHash, path: patch.path, contentHash: hash(patch.content), auto: true });
-      // TOCTOU-safe (R18): re-validate ancestors + open the final component with
+      // TOCTOU-safe: re-validate ancestors + open the final component with
       // O_NOFOLLOW immediately at write time, so a symlink swapped in after
       // validatePatchTargets cannot redirect the write outside root.
       await safeWriteFileWithinRoot(root, patch.path, patch.content);
@@ -1376,7 +1376,7 @@ const SANDBOX_DEPS = {
 
 async function runWorkflowExecution(pluginContext, toolContext, run, body, args) {
   let stopProgressToasts = () => {};
-  // Run-level wall-clock deadline (jbs3.6): when maxRuntimeMs is set, arm a single timer that
+  // Run-level wall-clock deadline: when maxRuntimeMs is set, arm a single timer that
   // aborts the run controller so a wedged lane/host call cannot outlive the deadline. The abort
   // surfaces as a WorkflowCancelledError through the cooperative checks; run.deadlineExceeded
   // makes the catch below record a terminal "timed-out" status with a partial result.json.
@@ -1595,7 +1595,7 @@ function sameStableValue(a, b) {
   return stableStringify(a) === stableStringify(b);
 }
 
-// jbs3.4: resume replay preview for the approval gate. A resumed run re-executes the body and
+// Resume replay preview for the approval gate. A resumed run re-executes the body and
 // serves completed lanes from the journal cache when each lane's signature still matches. The
 // signature (event-journal.laneSignature) is keyed on sourceHash + runtimeArgs + the lane's resolved
 // model + body/capability-derived fields. On an allowed resume the source and model envelope are
@@ -1609,7 +1609,7 @@ async function computeResumeReplayPreview(resumeEntry, priorState, proposed) {
   if (!resumeEntry || !priorState) return null;
   const journal = await loadJournal(resumeEntry.dir);
   const completedLanes = [...journal.values()].filter((entry) => entry.outcome === "success");
-  // jbs3.3 edit-and-resume: an edited body changes sourceHash, but lane reuse is now content-addressed
+  // On an edit-and-resume, an edited body changes sourceHash, but lane reuse is content-addressed
   // PER LANE (event-journal.laneSignature no longer mixes in the whole-file hash), so a source edit no
   // longer uniformly invalidates every completed lane — only the lanes whose own resolved inputs
   // changed re-run. Which lanes those are is not known until the new body executes (each lane's prompt
@@ -1642,7 +1642,7 @@ function resumeReplayLine(preview) {
 function assertResumeEnvelopeUnchanged(args, prior, opts = {}) {
   if (!prior) return;
   if (Object.hasOwn(args, "maxAgents") && args.maxAgents !== prior.maxAgents) throw new Error(`resumeRunId cannot change maxAgents from ${prior.maxAgents} to ${args.maxAgents}`);
-  // jbs3.4: the model envelope is pinned to the prior segment (defaultChildModel/modelTiers above).
+  // The model envelope is pinned to the prior segment (defaultChildModel/modelTiers above).
   // Reject -- rather than silently ignore -- an operator who passes a DIFFERENT childModel/modelTiers
   // on resume: changing the model would invalidate every completed lane's cached signature and force
   // a full re-run/re-spend, so it must start a new workflow instead. Read the requested arg directly
@@ -1662,7 +1662,7 @@ function assertResumeEnvelopeUnchanged(args, prior, opts = {}) {
   const requestedLaneTimeoutMs = laneTimeoutAliasValue(args, "workflow_run");
   if (requestedLaneTimeoutMs !== undefined && requestedLaneTimeoutMs !== (prior.laneTimeoutMs ?? DEFAULT_CHILD_PROMPT_TIMEOUT_MS)) throw new Error("resumeRunId cannot change laneTimeoutMs without starting a new workflow");
   const priorBudget = normalizeBudgetCeilings(prior.budgetCeilings);
-  // jbs3.1: resuming a budget-stopped run may RAISE the cost/token ceiling (re-approved) so the
+  // Resuming a budget-stopped run may RAISE the cost/token ceiling (re-approved) so the
   // remaining/failed lanes get headroom; the raise (never a lower) is validated by
   // resolveResumeBudgetCeilings, so the equality pin is relaxed only on that path.
   if (!opts.allowBudgetRaise) {
@@ -1675,7 +1675,7 @@ function assertResumeEnvelopeUnchanged(args, prior, opts = {}) {
   if (Object.hasOwn(args, "debugCapture") && args.debugCapture !== (prior.debugCapture?.enabled === true)) throw new Error("resumeRunId cannot change debugCapture without starting a new workflow");
 }
 
-// jbs3.1: on a budget-stopped resume the operator may RAISE the cost/token ceiling so the
+// On a budget-stopped resume the operator may RAISE the cost/token ceiling so the
 // remaining/failed lanes have headroom; completed lanes still replay from cache at zero new
 // spend. A raise is the ONLY permitted change — lowering a ceiling below the prior value (which
 // historical replayed spend may already exceed) is rejected; omitting a ceiling keeps the prior.
@@ -1719,9 +1719,8 @@ async function readActiveSessionModel(pluginContext, toolContext) {
   return { model: null, source: "none" };
 }
 
-// Was aliased to capability-adapter.js's VERIFIED_PROBE_TTL_MS before Design C deleted the
-// live-gate probe cache; the provider-list cache is unrelated to that subsystem, so it now
-// owns its own TTL constant (same 10-minute value).
+// This provider-list cache owns its own TTL constant (10-minute value); it is unrelated to any
+// probe subsystem, so its lifetime is governed independently here.
 const WORKFLOW_PROVIDER_LIST_TTL_MS = 10 * 60 * 1000;
 const workflowProviderListCache = new Map();
 const workflowProviderListClientKeys = new WeakMap();
@@ -1824,10 +1823,10 @@ async function buildWorkflowModels(pluginContext, toolContext) {
   };
 }
 
-// Pre-flight model validation (jbs3.5): cross-reference every resolved run model
+// Pre-flight model validation: cross-reference every resolved run model
 // (defaultChildModel + modelTiers.fast/deep) against the live provider/model list
-// at plan time and reject an unknown model BEFORE approval, any capability probe,
-// or any lane launch — with the available-models list in the message.
+// at plan time and reject an unknown model BEFORE approval or any lane launch —
+// with the available-models list in the message.
 //
 // Degrades gracefully for transient provider-list gaps: an empty/unreadable
 // provider list (buildWorkflowModels never throws and returns [] when the read
@@ -1858,7 +1857,7 @@ function assertModelsAvailable(providers, models) {
   }
 }
 
-// jbs3.10: a workflow may declare meta.argsSchema (a JSON Schema). When present, the runtime args
+// A workflow may declare meta.argsSchema (a JSON Schema). When present, the runtime args
 // payload (args.args) is validated against it at plan time — before the approval envelope is built
 // and before any lane launches — so a malformed payload fails loudly here instead of surfacing as a
 // confusing mid-run failure (or silently running with missing/extra fields). Reuses the existing
@@ -1887,7 +1886,7 @@ function assertWorkflowArgsMatchSchema(meta, runtimeArgs) {
    );
 }
 
-// tfil.8: compute the lane blueprint, then if meta.lanes is declared, validate it against the
+// Compute the lane blueprint, then if meta.lanes is declared, validate it against the
 // blueprint (rejecting missing roles, exact fan-out counts, and authority/tier/schema escalation)
 // and merge the human-curated declarations in for richer preview rendering. The declaration is
 // display-only; safety decisions always use resolved runtime authority / blueprint facts.
@@ -1908,7 +1907,7 @@ async function resolveLaneBlueprintWithDeclarations(pluginContext, source, meta)
 
 async function planWorkflowEnvelope(pluginContext, toolContext, args) {
   const resumeRunId = args.resumeRunId ? assertSafeRunId(args.resumeRunId, "resumeRunId") : undefined;
-  // jbs3.3 edit-and-resume: the opt-in only makes sense when resuming AND supplying the edited body.
+  // The edit-and-resume opt-in only makes sense when resuming AND supplying the edited body.
   // Reject up front (before any source read) so a misuse can never silently fall back to running the
   // unedited persisted script or starting a brand-new run.
   if (args.editAndResume === true) {
@@ -1966,7 +1965,7 @@ async function planWorkflowEnvelope(pluginContext, toolContext, args) {
         ? meta.maxAgents
         : DEFAULT_MAX_AGENTS;
   const sessionModel = await readActiveSessionModel(pluginContext, toolContext);
-  // jbs3.4: pin the model envelope on resume exactly like maxAgents/authority/budget/concurrency.
+  // Pin the model envelope on resume exactly like maxAgents/authority/budget/concurrency.
   // A resumed run reuses the prior segment's resolved defaultChildModel/modelTiers so completed
   // lanes keep matching their cached signatures (event-journal.laneSignature keys on the resolved
   // model) even when the invoking session's model has since changed -- otherwise every completed
@@ -1998,12 +1997,12 @@ async function planWorkflowEnvelope(pluginContext, toolContext, args) {
         fast: modelKey(resolveRequestedModel(tierSource.fast || defaultChildModel, "fast tier")),
         deep: modelKey(resolveRequestedModel(tierSource.deep || defaultChildModel, "deep tier")),
       };
-  // Pre-flight model validation against the live provider list (jbs3.5). Reuse
+  // Pre-flight model validation against the live provider list. Reuse
   // buildWorkflowModels' provider read and reject an unknown model here — before
-  // the approval envelope is built, before capability probes, and before any lane
-  // launches. Skip on resume: the resumed models are pinned by priorState and were
-  // validated at original plan time, and re-checking against a possibly-changed
-  // provider list could spuriously block a previously-approved run.
+  // the approval envelope is built and before any lane launches. Skip on resume:
+  // the resumed models are pinned by priorState and were validated at original
+  // plan time, and re-checking against a possibly-changed provider list could
+  // spuriously block a previously-approved run.
   if (!resumeEntry) {
     const { providers: availableProviders } = await buildWorkflowModels(pluginContext, toolContext);
     assertModelsAvailable(availableProviders, [
@@ -2020,7 +2019,7 @@ async function planWorkflowEnvelope(pluginContext, toolContext, args) {
     maxCost: Number.isFinite(args.maxCost) ? args.maxCost : Number.isFinite(meta.maxCost) ? meta.maxCost : undefined,
     maxTokens: Number.isInteger(args.maxTokens) ? args.maxTokens : Number.isInteger(meta.maxTokens) ? meta.maxTokens : undefined,
   };
-  // jbs3.1: a budget-stopped resume may RAISE the ceiling (re-approved); any other resume pins
+  // A budget-stopped resume may RAISE the ceiling (re-approved); any other resume pins
   // the prior ceiling exactly. A cold start uses the requested ceiling.
   const resumingBudgetStopped = resumeEntry && String(priorState?.status ?? "") === "budget_stopped";
   const priorBudgetCeilings = normalizeBudgetCeilings(priorState?.budgetCeilings);
@@ -2039,7 +2038,7 @@ async function planWorkflowEnvelope(pluginContext, toolContext, args) {
   const requestedLaneTimeoutMs = workflowRunLaneTimeoutMs ?? bundledRuntimeLaneTimeoutMs ?? laneTimeoutAliasValue(meta, "workflow meta");
   const laneTimeoutMs = resumeEntry && Number.isInteger(priorState?.laneTimeoutMs) ? priorState.laneTimeoutMs : requestedLaneTimeoutMs ?? DEFAULT_CHILD_PROMPT_TIMEOUT_MS;
   const guestDeadlineMs = resumeEntry && Number.isInteger(priorState?.guestDeadlineMs) ? priorState.guestDeadlineMs : Number.isInteger(args.guestDeadlineMs) ? args.guestDeadlineMs : Number.isInteger(meta.guestDeadlineMs) ? meta.guestDeadlineMs : DEFAULT_GUEST_DEADLINE_MS;
-  // Optional run-level wall-clock deadline (jbs3.6). Distinct from the per-lane laneTimeoutMs
+  // Optional run-level wall-clock deadline. Distinct from the per-lane laneTimeoutMs
   // and the synchronous guest-burst guestDeadlineMs: when set, runWorkflowExecution hard-stops
   // the whole run (terminal status "timed-out" + partial result) after this many ms regardless
   // of where work is wedged. undefined => no run-level deadline.
@@ -2115,7 +2114,7 @@ async function planWorkflowEnvelope(pluginContext, toolContext, args) {
       capabilities: adapter.capabilities,
       nestedSnapshots,
       autoApprove,
-      // tfil.2/tfil.8: static lane blueprint (shape only, never a runtime count), enriched with the
+      // Static lane blueprint (shape only, never a runtime count), enriched with the
       // optional human-curated meta.lanes declaration when present. Display-only: it is NOT part
       // of approvalEnvelope() (which uses an explicit field list), so it cannot re-key approvalHash.
       laneBlueprint: await resolveLaneBlueprintWithDeclarations(pluginContext, source, meta),
@@ -2190,11 +2189,11 @@ async function startWorkflow(pluginContext, toolContext, args) {
     // approval envelope was hashed against.
     runtimeArgs,
   } = approval;
-  // Design C (2026-07-07): no live-gate probe preflight. A deterministic server-fingerprint
-  // check gates elevated authority instead (server-fingerprint.js); per-lane permission and
-  // directory-echo assertions in child-agent-runner.js cover the rest at launch time. adapter
-  // is the same object whose .diagnostics becomes run.diagnostics below, so stashing the
-  // fingerprint on it here means run.diagnostics already carries it once the run object exists.
+  // No live-gate probe preflight runs here. A deterministic server-fingerprint check gates
+  // elevated authority (server-fingerprint.js); per-lane permission and directory-echo
+  // assertions in child-agent-runner.js cover the rest at launch time. adapter is the same
+  // object whose .diagnostics becomes run.diagnostics below, so stashing the fingerprint on
+  // it here means run.diagnostics already carries it once the run object exists.
   const fingerprint = await serverFingerprint(pluginContext);
   adapter.diagnostics.serverFingerprint = fingerprint;
   adapter.diagnostics.opencodeVersion = fingerprint.version ?? "unknown";
@@ -2325,7 +2324,7 @@ async function startWorkflow(pluginContext, toolContext, args) {
     // Rehydrate run-level state persisted by the prior segment so a resumed run does not
     // reset observability/limit counters, worktree ledgers, or the original start time.
     rehydrateRunFromPriorState(run, priorState);
-    // jbs3.1: rehydrate restores the prior (possibly breached) ceiling from state.json; re-apply
+    // Rehydrate restores the prior (possibly breached) ceiling from state.json; re-apply
     // the approved envelope ceiling so a budget-stopped resume's RAISED ceiling takes effect.
     // For every non-raise resume this is the same value rehydrate just set (a safe no-op).
     run.budgetCeilings = budgetCeilings;
@@ -2441,7 +2440,7 @@ async function rollbackPatches(planned, root) {
   for (const item of [...planned].reverse()) {
     try {
       if (item.existed) {
-        // Restore prior content TOCTOU-safely (R18): when a root is supplied, the
+        // Restore prior content TOCTOU-safely: when a root is supplied, the
         // O_NOFOLLOW write refuses to follow a symlink swapped in for the target so
         // rollback cannot be redirected outside root either.
         if (root) await safeWriteFileWithinRoot(root, item.patch.path, item.previousContent);
@@ -2768,7 +2767,7 @@ async function salvageRun(pluginContext, context, args) {
   return JSON.stringify({ mode: "approve", runId, approvalHash: computedHash, salvaged, skipped }, null, 2);
 }
 
-// tfil.6: workflow_lint handler. Read-only structural lint that resolves a workflow source (inline
+// workflow_lint handler. Read-only structural lint that resolves a workflow source (inline
 // source/name/scriptPath) and runs collectDiagnostics without executing anything. A clean lint does
 // not prove the workflow runs at runtime (QuickJS success cannot be shown statically).
 async function lintWorkflow(pluginContext, context, args) {
@@ -2793,7 +2792,7 @@ async function lintWorkflow(pluginContext, context, args) {
 async function applyWorkflow(pluginContext, context, args) {
   assertWriteWorkflowAllowed(context, "workflow_apply");
   if (args.approvalIntent !== "apply") throw new Error('workflow_apply requires approvalIntent: "apply"');
-  // tfil.4: a single opaque applyBundle (from workflow_status detail:"full") expands server-side
+  // A single opaque applyBundle (from workflow_status detail:"full") expands server-side
   // into the four review-binding hashes. The four explicit fields remain accepted and override
   // individual bundle dimensions when both are supplied, preserving full backward compatibility.
   // The security property is unchanged: the four hashes still transit and are still compared below.
@@ -2842,7 +2841,7 @@ async function applyWorkflow(pluginContext, context, args) {
   if (state.status !== "applied" && state.status !== "awaiting-diff-approval" && state.status !== "apply-failed" && state.status !== "failed-with-diff-plan" && !isInterruptedRecovery) {
     throw new Error(`Workflow ${args.runId} is not awaiting diff approval; status=${state.status}`);
   }
-  // tfil.5: collect ALL drifted apply-approval dimensions before throwing so the caller can retry in
+  // Collect ALL drifted apply-approval dimensions before throwing so the caller can retry in
   // one round-trip. The primary (first/worst) dimension drives `reason`/`field`; allMismatches names
   // every drifted caller-supplied hash plus the server-derived staged-domain mutation drift.
   const plan = JSON.parse(await fs.readFile(path.join(entry.dir, "diff-plan.json"), "utf8"));
@@ -2964,7 +2963,7 @@ async function applyWorkflow(pluginContext, context, args) {
   try {
     for (const { patch } of planned) {
       await appendApplyLedger(entry.dir, { phase: "before-write", path: patch.path, contentHash: hash(patch.content) });
-      // TOCTOU-safe (R18): re-validate ancestors + open the final component with
+      // TOCTOU-safe: re-validate ancestors + open the final component with
       // O_NOFOLLOW immediately at write time, so a symlink swapped in after
       // validatePatchTargets cannot redirect the write outside root.
       await safeWriteFileWithinRoot(root, patch.path, patch.content);

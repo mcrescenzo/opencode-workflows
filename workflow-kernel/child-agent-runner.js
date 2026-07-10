@@ -1,5 +1,4 @@
-// child-agent-runner.js — the child-agent lane boundary extracted from the workflow
-// orchestrator (opencode-workflows-96b, stage 3 of the staged RunContext split).
+// child-agent-runner.js — the child-agent lane boundary of the workflow orchestrator.
 //
 // Owns runChildAgent (the full launch/cache/retry/integration/journal lifecycle of a
 // single workflow lane) plus journalFailure (its terminal-failure recorder) and the
@@ -403,10 +402,10 @@ export function retagRehydratedLanePlan(run, originalCallId, callId, entry) {
 }
 
 export async function createEditWorktree(run, toolContext, callId) {
-  // Design C: directoryRooting is no longer a shape capability (deleted with the probe
-  // subsystem); the worktree-distinctness check just below (the resolved worktree path must
-  // not equal the primary tree) plus sessionDirectoryEchoStatus at child-launch time are the
-  // deterministic replacements. Only the native-worktree-client shape check remains here.
+  // The worktree-distinctness check just below (the resolved worktree path must not equal the
+  // primary tree) plus sessionDirectoryEchoStatus at child-launch time are the deterministic
+  // guards against an edit worktree aliasing the primary checkout. Only the native-worktree-client
+  // shape check remains here.
   if (run.capabilities.worktree !== "available") {
     throw new WorkflowAuthorityError("Edit mode requires an available native worktree client");
   }
@@ -437,7 +436,7 @@ export async function createEditWorktree(run, toolContext, callId) {
   // if the trailing fs.mkdir throws (ENOSPC/EACCES/EMFILE under concurrent lanes, or an ancestor
   // racing away) after an unregistered creation, the worktree+branch are orphaned with no code path
   // that ever discovers them (recover() is never called). Pushing first makes a post-creation
-  // failure recoverable (opencode-workflows-ndsr).
+  // failure recoverable.
   const record = { callId, path: worktreePath, id: created?.id, name: created?.name ?? worktreeName, branch: created?.branch ?? branch };
   run.editWorktrees.push(record);
   await fs.mkdir(worktreePath, { recursive: true });
@@ -451,7 +450,7 @@ export async function createIntegrationLaneWorktree(pluginContext, run, toolCont
     // Memoize the in-flight construction promise on `run` so two integration lanes racing into
     // this lazy-init before either await lands (both see `!run.worktreeAdapter` synchronously)
     // share one createWorktreeAdapter() call instead of each redundantly running requireGitRepo's
-    // git rev-parse calls and clobbering the other's assignment (bughunt concurrency-3).
+    // git rev-parse calls and clobbering the other's assignment.
     run.worktreeAdapterPromise ??= createWorktreeAdapter({
       directory: primary,
       worktreeRoot: path.join(path.dirname(primary), `${path.basename(primary)}.workflow-worktrees`),
@@ -486,7 +485,7 @@ export function classifyResumeCacheHit(cached, sig) {
     : { kind: "hit", eventType: "cache.hit" };
 }
 
-// Resume cache-hit discriminator for the durable lane checkpoint (234m.1). A result checkpoint
+// Resume cache-hit discriminator for the durable lane checkpoint. A result checkpoint
 // written by THIS run's controller capture is trusted when its signatureHash matches the lane's
 // expected signature: it is the same own-store evidence that would have reached journal.jsonl had
 // the crash window not fallen between prompt-return and recordLaneOutcome. Returns a distinct
@@ -663,9 +662,8 @@ export async function runChildAgent(pluginContext, toolContext, run, payload, de
       Number.isInteger(opts.timeoutMs) && opts.timeoutMs > 0 ? opts.timeoutMs : (run.laneTimeoutMs ?? DEFAULT_CHILD_PROMPT_TIMEOUT_MS),
       MAX_CHILD_PROMPT_TIMEOUT_MS,
     );
-    // Design C: the structured-TEXT path (instruction + parse + corrective retry) is the
-    // one production-proven route (see commit 0b48f51); native `format:` was gated behind
-    // a probe that no longer exists. Text is now the only structured path.
+    // The structured-TEXT path (instruction + parse + corrective retry) is the only
+    // structured-output route; native `format:` is not used. Text is the only structured path.
     const useStructuredTextFallback = Boolean(schema);
     policy = resolveLanePolicy(run, opts);
     baseSystem = [
@@ -768,7 +766,7 @@ export async function runChildAgent(pluginContext, toolContext, run, payload, de
       await writeState(run);
       return signatureFallback.result;
     }
-    // Workflow-native lane checkpoint (234m.1): a durable lanes/<callId>.result.json written
+    // Workflow-native lane checkpoint: a durable lanes/<callId>.result.json written
     // around session.prompt can recover a completed result when the crash window fell between
     // prompt-return and recordLaneOutcome. Journal entries are authoritative, so the checkpoint
     // path is evaluated only after a same-signature resume-journal hit has been ruled out. A
@@ -784,7 +782,7 @@ export async function runChildAgent(pluginContext, toolContext, run, payload, de
       // persisted by the trailing writeState. On a checkpoint-hit resume the rehydrated plan
       // (from the pre-crash state.json) lacks this lane's changes, so restoring it here from the
       // checkpoint's captured descriptor is what keeps recovery from journaling outcome:'success'
-      // while silently dropping the lane's patches (opencode-workflows-zi0f). Guarded so a repeated
+      // while silently dropping the lane's patches. Guarded so a repeated
       // recovery cannot double-append.
       if (checkpoint.integrationLane && run.integrationPlan && !findIntegrationLane(run, callId)) {
         run.integrationPlan.lanes.push(checkpoint.integrationLane);
@@ -917,7 +915,7 @@ export async function runChildAgent(pluginContext, toolContext, run, payload, de
       // ceiling check above and this reservation — so a concurrent lane's checkBudgetBeforeLaunch
       // observes the in-flight commitment and a wave of up to `concurrency` lanes cannot each clear
       // the gate on stale (pre-spend) counters and collectively overshoot maxCost/maxTokens by up to
-      // (concurrency-1) unreported lanes (opencode-workflows-dx1n). Reconciled in the finally below:
+      // (concurrency - 1) unreported lanes. Reconciled in the finally below:
       // released after the real prompt spend is folded into run.cost/run.tokens (success) or after a
       // failed attempt that accrued no spend (retry/terminal), so a retry re-reserves cleanly and the
       // lane's own reservation never trips its own next-attempt ceiling check.
@@ -960,7 +958,7 @@ export async function runChildAgent(pluginContext, toolContext, run, payload, de
           // OLD childID; leaving it true would make every abortChild gate (this lane's prompt-timeout
           // handler, sandbox-executor fanout-cancel / settlePendingHostOps, lifecycle-control
           // abortRunChildren) silently skip aborting the brand-new attempt-2 child on cancel/kill/
-          // timeout, letting it keep running and accruing cost (opencode-workflows-dvww).
+          // timeout, letting it keep running and accruing cost.
           if (activeLane) activeLane.childAbortRequested = false;
           throwIfLaneCancelled(run, callId);
 
@@ -1049,7 +1047,7 @@ export async function runChildAgent(pluginContext, toolContext, run, payload, de
           await writeState(run);
         }
 
-        // Durable lane checkpoint (234m.1): capture prompt-time intent BEFORE issuing the prompt so a
+        // Durable lane checkpoint: capture prompt-time intent BEFORE issuing the prompt so a
         // crash anywhere in the prompt->capture->journal window leaves a forensics trail and (for the
         // result half) a recoverable own-store result. childID is known by this point (session.create
         // returned above), so it is recorded here. Best-effort: a checkpoint write failure must never
@@ -1214,7 +1212,7 @@ export async function runChildAgent(pluginContext, toolContext, run, payload, de
       } finally {
         // Reconcile this attempt's reservation regardless of outcome (success break, terminal
         // rethrow, or retry fall-through). Runs after the real spend was folded into run.cost/tokens
-        // on success and before the next attempt re-reserves on retry (opencode-workflows-dx1n).
+        // on success and before the next attempt re-reserves on retry.
         releaseLaneBudget(run, laneReservation);
       }
     }
@@ -1224,7 +1222,7 @@ export async function runChildAgent(pluginContext, toolContext, run, payload, de
     // folds its structured patches into run.editPlan.patches. Both effects are in-memory and only
     // become durable at the trailing writeState, so the result checkpoint is written AFTER this
     // block (below) — never before it — and captures the contribution so a checkpoint-hit resume can
-    // replay it (234m.1 / opencode-workflows-zi0f).
+    // replay it.
     if (integrationLane && worktreeRecord) {
       const committed = await run.worktreeAdapter.commit({ directory: worktreeRecord.path, message: `workflow ${run.id} ${callId}` });
       const paths = committed.committed ? await changedPathsSinceBase(worktreeRecord.path, run.integrationPlan.baseCommit) : [];
@@ -1245,7 +1243,7 @@ export async function runChildAgent(pluginContext, toolContext, run, payload, de
       addEditPlanFromResult(run, callId, result, worktreeRecord);
     }
 
-    // Durable lane checkpoint (234m.1): atomically capture the controller's validated result plus
+    // Durable lane checkpoint: atomically capture the controller's validated result plus
     // the diff-plan contribution computed just above (worktreePath + the committed integration-lane
     // descriptor). Written AFTER the integration-commit / addEditPlanFromResult block, and AFTER
     // schema validation, so the crash window is [contribution-computed, recordLaneOutcome): if the
@@ -1253,8 +1251,8 @@ export async function runChildAgent(pluginContext, toolContext, run, payload, de
     // lanes/<callId>.result.json (cache.checkpoint_hit) AND replays the captured contribution back
     // into run.integrationPlan.lanes / run.editPlan.patches without re-running the lane, committing
     // git, or reading any transcript. A crash BEFORE this write leaves no checkpoint, so the lane is
-    // re-run cleanly on resume rather than recorded as a success with a dropped contribution
-    // (opencode-workflows-zi0f). Best-effort: a write failure must never break a run; journal.jsonl
+    // re-run cleanly on resume rather than recorded as a success with a dropped contribution.
+    // Best-effort: a write failure must never break a run; journal.jsonl
     // remains authoritative.
     try {
       await writeLaneCheckpoint(run.dir, callId, "result", {

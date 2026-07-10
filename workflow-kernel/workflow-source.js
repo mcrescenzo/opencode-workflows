@@ -26,15 +26,16 @@ export function literalValue(node) {
   throw new Error("Workflow meta may only contain JSON-compatible literals");
 }
 
-// tfil.1: minimal, permissive meta field validator. Validates TYPES/SHAPES of recognized
+// Minimal, permissive meta field validator. Validates TYPES/SHAPES of recognized
 // fields the kernel actually consumes WHEN they are present. It does NOT require any optional
 // field (name/description may be omitted), does NOT reject unknown keys (display/documentation
 // metadata passes through), and does NOT validate argsSchema internals (already AJV-compiled at
-// preview). meta.lanes ownership lives in tfil.8; this base validator only checks lanes is an
-// array when present so a non-array lanes fails here instead of confusing the tfil.8 renderer.
+// preview). meta.lanes ownership lives in the lane-declaration validator; this base validator
+// only checks lanes is an array when present so a non-array lanes fails here instead of
+// confusing the lane-declaration renderer.
 //
-// metaDiagnostics() returns a non-throwing array (reused by the workflow_lint collector in
-// tfil.6); validateMeta() throws on the first diagnostic for the existing throw-based preview/
+// metaDiagnostics() returns a non-throwing array (reused by the workflow_lint collector);
+// validateMeta() throws on the first diagnostic for the existing throw-based preview/
 // save path. The two stay in lockstep so a workflow that previews also lints identically.
 // maxAgents and concurrency allow 0: many read-only/review workflows declare maxAgents: 0 for
 // synchronous single-lane execution, and a meta.concurrency of 0 is falsy (falls back to the
@@ -241,7 +242,7 @@ function splitPipelineStages(args) {
   return { stages: args, options: null };
 }
 
-// tfil.2: static lane-shape introspection. A read-only AST visitor (sibling to lintFanoutCallbacks)
+// Static lane-shape introspection. A read-only AST visitor (sibling to lintFanoutCallbacks)
 // that enumerates agent()/parallel()/pipeline() call sites and extracts per-call-site role/tier/
 // authority/schema presence from literal or const-bound opts. It produces a lane BLUEPRINT (shape),
 // never a roster or exact total: fan-out call sites (parallel/pipeline, or dynamic agent arrays)
@@ -250,8 +251,8 @@ function splitPipelineStages(args) {
 // lane counts from earlier agent outputs at runtime, so a static total would mislead.
 //
 // Each blueprint lane site carries a `shapes` array (one resolved agent-callback shape per
-// statically-enumerable callback; advisory, NOT a count guarantee) consumed by the tfil.7 renderer
-// and validated by tfil.8's meta.lanes subset check.
+// statically-enumerable callback; advisory, NOT a count guarantee) consumed by the preview renderer
+// and validated by the meta.lanes subset check.
 
 function agentCalleeName(callee) {
   if (callee?.type === "Identifier" && callee.name === "agent") return "agent";
@@ -502,17 +503,17 @@ export function parseWorkflowSource(source) {
   }
 
   const body = removeStart >= 0 ? source.slice(0, removeStart) + source.slice(removeEnd) : source;
-  // tfil.1: permissive meta field validation runs at every parse (preview and save) so a
+  // Permissive meta field validation runs at every parse (preview and save) so a
   // wrong-typed recognized field fails closed before approval, but unknown keys and omitted
   // optional fields continue to parse (preserving existing workflows).
   validateMeta(meta);
   return { meta, body };
 }
 
-// tfil.6: non-throwing multi-diagnostic collector. Mirrors the throw-based parseWorkflowSource
+// Non-throwing multi-diagnostic collector. Mirrors the throw-based parseWorkflowSource
 // checks but returns ALL diagnostics at once instead of failing on the first, and adds NEW static
 // checks not present in the throw path: top-level `return` presence and agent() call-site arity.
-// It also surfaces the tfil.1 meta-schema diagnostics. It does NOT execute the workflow; a clean
+// It also surfaces the meta-schema diagnostics. It does NOT execute the workflow; a clean
 // lint does NOT prove the workflow runs (QuickJS runtime success cannot be shown statically).
 function locLine(node) {
   const loc = node?.loc?.start;
@@ -604,7 +605,7 @@ export function collectDiagnostics(source) {
       }
     }
   }
-  // tfil.1 meta-schema diagnostics (non-throwing).
+  // Meta-schema diagnostics (non-throwing).
   for (const d of metaDiagnostics(meta)) {
     diagnostics.push({ rule: "meta-schema", severity: "error", field: d.field, message: `meta.${d.field} ${d.message}.` });
   }
@@ -620,7 +621,7 @@ export function collectDiagnostics(source) {
   return { diagnostics, ok: diagnostics.length === 0, meta };
 }
 
-// tfil.8: optional meta.lanes declaration validation + merge. Authors may declare human-curated
+// Optional meta.lanes declaration validation + merge. Authors may declare human-curated
 // lane descriptions that OVERRIDE the preview rendering when present. Safety decisions always use
 // resolved runtime authority / introspected blueprint facts, never author prose. Structural
 // validation rejects: missing roles, exact fan-out counts, and authority/tier/schema escalation
@@ -870,12 +871,12 @@ export async function resolveWorkflowSourceForStart(context, args, resumeEntry, 
   if (!resumeEntry || hasExplicitWorkflowSource(args)) {
     const resolved = await resolveWorkflowSource(context, args, extensionWorkflowDirs);
     const expectedHash = resumeEntry?.state?.sourceHash;
-    // jbs3.3 edit-and-resume: by default a resume MUST run the exact approved body — a silent body
-    // swap is rejected here (the whole-run source-hash gate). With an explicit `editAndResume: true`
-    // opt-in the operator may resume with an EDITED body: the changed source flows through with a NEW
-    // sourceHash, which re-keys the approval envelope (approvalHash binds sourceHash) and forces fresh
-    // two-phase approval before any lane executes. Lane reuse is content-addressed per lane
-    // (event-journal.laneSignature no longer mixes in the whole-file hash), so unchanged lanes still
+    // By default a resume MUST run the exact approved body — a silent body swap is rejected here
+    // (the whole-run source-hash gate). With an explicit `editAndResume: true` opt-in the operator
+    // may resume with an EDITED body: the changed source flows through with a NEW sourceHash, which
+    // re-keys the approval envelope (approvalHash binds sourceHash) and forces fresh two-phase
+    // approval before any lane executes. Lane reuse is content-addressed per lane
+    // (event-journal.laneSignature does not mix in the whole-file hash), so unchanged lanes still
     // cache-hit at zero re-spend while edited/dependent lanes re-run. Only the BODY may change on an
     // edit-and-resume — the model/budget/authority/maxAgents envelope stays pinned to the prior run.
     if (expectedHash && args.editAndResume !== true && hash(resolved.source) !== expectedHash) throw new Error("resumeRunId source hash mismatch");
