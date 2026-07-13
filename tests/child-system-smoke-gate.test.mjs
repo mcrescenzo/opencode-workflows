@@ -78,30 +78,29 @@ test("package.json exposes a separate required system-smoke gate script", async 
 });
 
 // release:no-token must clearly call out the system smoke as a SEPARATE,
-// recommended step, and must NOT add it to the no-token suite list.
-test("release:no-token documents the system smoke as a separate recommended step", async () => {
-  const releaseSrc = await fs.readFile(releaseScript, "utf8");
+// recommended step in its STDOUT output, and must NOT add it to the no-token suite list.
+// (The no-token check matrix itself — which npm commands run — is proven behaviorally by
+// release-no-token-gate.test.mjs's call-log assertion, which shows system-smoke is absent.)
+test("release:no-token STDOUT frames the system smoke as a separate recommended step", async () => {
+  const fakeDir = await fs.mkdtemp(path.join(os.tmpdir(), "smoke-release-fake-npm-"));
+  const npmPath = path.join(fakeDir, "npm");
+  await fs.writeFile(npmPath, "#!/usr/bin/env node\nprocess.exit(0);\n");
+  await fs.chmod(npmPath, 0o755);
+  try {
+    const result = spawnSync(process.execPath, [releaseScript], {
+      cwd: root,
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${fakeDir}${path.delimiter}${process.env.PATH}` },
+    });
 
-  // The strict gate is referenced as a separate step ...
-  assert.match(releaseSrc, /release:system-smoke-required/);
-  assert.match(releaseSrc, /SEPARATE, RECOMMENDED/i);
-  // ... and a skip is explicitly not treated as verified.
-  assert.match(releaseSrc, /skipped/i);
-  assert.match(releaseSrc, /not verified/i);
-  // The required smoke is NOT added to the no-token check matrix itself.
-  const checksBlock = releaseSrc.match(/const checks = \[[\s\S]*?\];/);
-  assert.ok(checksBlock, "release-no-token.mjs has a checks array");
-  assert.doesNotMatch(checksBlock[0], /system-smoke/i);
-});
-
-// The smoke script itself distinguishes the two modes in source.
-test("child-system-smoke script separates developer skip from required gate", async () => {
-  const src = await fs.readFile(smokeScript, "utf8");
-
-  assert.match(src, /OPENCODE_WORKFLOWS_CHILD_SMOKE/);
-  assert.match(src, /skipped/i);
-  assert.match(src, /--required/);
-  assert.match(src, /INCOMPLETE/i);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /release:system-smoke-required/);
+    assert.match(result.stdout, /SEPARATE, RECOMMENDED/i);
+    assert.match(result.stdout, /skipped/i);
+    assert.match(result.stdout, /NOT verified/i);
+  } finally {
+    await fs.rm(fakeDir, { recursive: true, force: true });
+  }
 });
 
 async function writeHelper(source) {

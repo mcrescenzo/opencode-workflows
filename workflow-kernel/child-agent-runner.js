@@ -420,7 +420,7 @@ export async function createEditWorktree(run, toolContext, callId) {
     directory: toolContext.directory,
   });
   const worktreePath = created?.path || created?.directory || created?.dir || fallbackPath;
-  // Physical isolation boundary (fnop.1): path.resolve normalizes "./.." but does NOT resolve
+  // Physical isolation boundary: path.resolve normalizes "./.." but does NOT resolve
   // symlinks, so a worktree adapter that returns an in-root symlink alias pointing at the
   // primary checkout would slip past a purely lexical comparison. Compare realpath-canonical
   // physical locations and fail closed when they coincide. Falls back to path.resolve when

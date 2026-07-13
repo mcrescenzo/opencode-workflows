@@ -4,6 +4,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import plugin from "../opencode-workflows.js";
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, "..");
 
@@ -49,12 +51,22 @@ test("all docs markdown files have explicit status labels or README map coverage
 });
 
 test("workflow tool reference lists every registered workflow tool and approval terms", async () => {
-  const source = await read("workflow-kernel/workflow-plugin.js");
+  const hooks = await plugin({}, {});
+  const registered = Object.keys(hooks.tool).filter((k) => k.startsWith("workflow_")).sort();
+  assert.ok(registered.length > 0, "plugin factory must register workflow_* tools");
+
   const doc = await read("docs/workflow-plugin.md");
-  const tools = [...source.matchAll(/^\s+(workflow_\w+): tool\(/gm)].map((match) => match[1]).sort();
-  assert.equal(tools.length, 17, "expected the current workflow tool registry size");
   assert.match(doc, /## Workflow Tool Reference/);
-  for (const tool of tools) assert.ok(doc.includes(`\`${tool}\``), `tool reference missing ${tool}`);
+
+  const documented = [...new Set([...doc.matchAll(/`(workflow_\w+)`/g)].map((m) => m[1]))].sort();
+
+  for (const tool of registered) {
+    assert.ok(documented.includes(tool), `registered tool ${tool} must appear as a backticked code span in the tool reference`);
+  }
+  for (const tool of documented) {
+    assert.ok(registered.includes(tool), `documented tool ${tool} must be registered by the plugin factory`);
+  }
+
   // Design C deleted the live-gate probe subsystem and its `approvalIntent: "probe"` vocabulary
   // along with the `workflow_live_gates` tool; "probe" is no longer a valid approvalIntent value
   // anywhere in the kernel, so it is intentionally absent from this list.

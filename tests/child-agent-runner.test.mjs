@@ -16,8 +16,6 @@ import {
 } from "../workflow-kernel/errors.js";
 import { laneAuthorityInstruction } from "../workflow-kernel/authority-policy.js";
 import {
-  classifyResumeCacheHit,
-  checkpointHitForSignature,
   laneTaskSummary,
   findIntegrationLane,
   normalizePatches,
@@ -39,11 +37,13 @@ import { loadRoleDefaultsManifest, mergeRoleDefaults, resolveRole } from "../wor
 import { checkBudgetBeforeLaunch } from "../workflow-kernel/budget-accounting.js";
 
 // Direct unit coverage for lane-scoped behavior exported from
-// workflow-kernel/child-agent-runner.js: the pure/semi-pure discriminators (resume cache-hit,
-// checkpoint-hit, lane task-summary, integration-lane lookup, edit-patch normalizer + edit-plan
-// accumulator), the lane failure taxonomy (errors.js), AND the real runChildAgent lane lifecycle
-// (create/prompt/retry/backoff, budget reservation, structured-output corrective retries,
-// checkpoint-resume, effort/role resolution) driven through direct plugin-context mocks.
+// workflow-kernel/child-agent-runner.js: the pure/semi-pure helpers (lane task-summary,
+// integration-lane lookup, edit-patch normalizer + edit-plan accumulator), the lane failure
+// taxonomy (errors.js), AND the real runChildAgent lane lifecycle (create/prompt/retry/backoff,
+// budget reservation, structured-output corrective retries, checkpoint-resume, effort/role
+// resolution) driven through direct plugin-context mocks. The standalone resume discriminators
+// (classifyResumeCacheHit, checkpointHitForSignature) are covered in their dedicated suites:
+// workflow-checkpoint.test.mjs and workflow-salvage-resume.test.mjs.
 // Worktree-isolation scenarios (createEditWorktree, concurrent worktree creation) live in
 // worktree-isolation.test.mjs; sandbox settlePendingHostOps concurrency lives in
 // sandbox-executor.test.mjs.
@@ -453,68 +453,6 @@ test("runChildAgent explicit opts override roles.json defaults", async () => {
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
-});
-
-// --- classifyResumeCacheHit: resume journal cache-hit discriminator ----------------------
-
-test("classifyResumeCacheHit routes a matching controller-captured success to cache.hit", () => {
-  assert.deepEqual(
-    classifyResumeCacheHit({ signatureHash: "sig", outcome: "success", result: { ok: 1 } }, "sig"),
-    { kind: "hit", eventType: "cache.hit" },
-  );
-  // An entry that omits salvagedFromTranscript entirely is a legacy normal capture too.
-  assert.deepEqual(
-    classifyResumeCacheHit({ signatureHash: "sig", outcome: "success", result: {} }, "sig"),
-    { kind: "hit", eventType: "cache.hit" },
-  );
-});
-
-test("classifyResumeCacheHit routes a matching transcript-salvaged success to the DISTINCT cache.salvaged_hit", () => {
-  const hit = classifyResumeCacheHit({ signatureHash: "sig", outcome: "success", salvagedFromTranscript: true }, "sig");
-  assert.deepEqual(hit, { kind: "salvaged-hit", eventType: "cache.salvaged_hit" });
-  assert.notEqual(hit.eventType, "cache.hit", "salvaged provenance must remain distinguishable");
-});
-
-test("classifyResumeCacheHit returns null on missing entry, signature mismatch, or non-success outcome", () => {
-  const ok = { signatureHash: "sig", outcome: "success", result: {} };
-  assert.equal(classifyResumeCacheHit(null, "sig"), null);
-  assert.equal(classifyResumeCacheHit(undefined, "sig"), null);
-  assert.equal(classifyResumeCacheHit(ok, "wrong-sig"), null, "signature mismatch must not cache-hit");
-  assert.equal(classifyResumeCacheHit(ok, undefined), null, "undefined incoming signature must not cache-hit");
-  assert.equal(
-    classifyResumeCacheHit({ signatureHash: "sig", outcome: "failure" }, "sig"),
-    null,
-    "a failed lane must never be reused as a cache hit",
-  );
-  // A salvaged entry whose outcome is failure (e.g. schema-mismatch salvage) must not be reused either.
-  assert.equal(classifyResumeCacheHit({ signatureHash: "sig", outcome: "failure", salvagedFromTranscript: true }, "sig"), null);
-});
-
-// --- checkpointHitForSignature: durable lane checkpoint discriminator ---------------------
-
-test("checkpointHitForSignature returns a checkpoint-hit (with result) on a signature match", () => {
-  const result = { itemId: "x", findings: ["a"] };
-  assert.deepEqual(
-    checkpointHitForSignature({ signatureHash: "sig", result }, "sig"),
-    { kind: "checkpoint-hit", eventType: "cache.checkpoint_hit", result },
-  );
-});
-
-test("checkpointHitForSignature returns null for an absent or signature-mismatched checkpoint", () => {
-  assert.equal(checkpointHitForSignature(null, "sig"), null, "absent checkpoint must fall through");
-  assert.equal(checkpointHitForSignature(undefined, "sig"), null);
-  assert.equal(
-    checkpointHitForSignature({ signatureHash: "sig", result: {} }, "other-sig"),
-    null,
-    "signature mismatch must fall through to the journal check",
-  );
-});
-
-test("checkpointHitForSignature returns null when the incoming signature is falsy", () => {
-  // Guards the discriminator against being called before the lane signature is computed.
-  assert.equal(checkpointHitForSignature({ signatureHash: "sig", result: {} }, ""), null);
-  assert.equal(checkpointHitForSignature({ signatureHash: "sig", result: {} }, undefined), null);
-  assert.equal(checkpointHitForSignature({ signatureHash: "sig", result: {} }, null), null);
 });
 
 // --- laneTaskSummary: the lane display/signature summary chooser -------------------------

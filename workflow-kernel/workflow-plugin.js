@@ -549,7 +549,7 @@ function mutationDomainSummary(run) {
 // knowable at preview. Consumed by the preview renderer; display-only.
 function applyGateClass(run) {
   if (run.meta?.harness === "drain" && run.authority?.profile === "drain-autonomous-local") {
-    // fnop.4: the preview must describe the SAME resolved auto-apply eligibility that execution
+    // The preview must describe the SAME resolved auto-apply eligibility that execution
     // enforces (source trust + adapter supportsAutoApply, computed by shouldAutoApplyDrain). A
     // drain whose adapter disables auto-apply is not eligible and stops at awaiting-diff-approval,
     // so its preview is apply-gated, not in-run-apply. Fails closed when the fact is unresolved.
@@ -2118,7 +2118,7 @@ async function planWorkflowEnvelope(pluginContext, toolContext, args) {
       // optional human-curated meta.lanes declaration when present. Display-only: it is NOT part
       // of approvalEnvelope() (which uses an explicit field list), so it cannot re-key approvalHash.
       laneBlueprint: await resolveLaneBlueprintWithDeclarations(pluginContext, source, meta),
-      // fnop.4: resolve the auto-apply eligibility ONCE from the same trust + adapter-capability
+      // Resolve the auto-apply eligibility ONCE from the same trust + adapter-capability
       // facts that shouldAutoApplyDrain enforces at runtime, so preview consequences and execution
       // agree. Display-only; not part of approvalEnvelope()'s explicit field set.
       autoApplyEligible: shouldAutoApplyDrain({ meta, authority, sourcePath }, pluginContext),

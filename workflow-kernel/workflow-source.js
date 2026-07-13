@@ -294,7 +294,7 @@ function hasOptsKey(optsNode, name) {
 // Resolve the agent() call's opts to a literal ObjectExpression when possible; returns null for
 // agent() with no args (defaults), a dynamic opts object, or a non-object arg.
 // Canonical runtime/authoring form is agent(prompt, opts): when two arguments are present, opts
-// is the SECOND argument (fnop.3). The legacy one-object form (a single ObjectExpression) is
+// is the SECOND argument. The legacy one-object form (a single ObjectExpression) is
 // still recognized statically for compatibility, but the runtime itself is agent(prompt, opts).
 function agentOptsNode(agentCall, bindings) {
   const args = agentCall.arguments ?? [];

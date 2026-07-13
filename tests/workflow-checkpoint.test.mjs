@@ -66,6 +66,8 @@ test("checkpointHitForSignature returns null for signature mismatch, missing che
   const checkpoint = { callId: "lane:a", signatureHash: "sig-A", result: CAPTURED_RESULT };
   assert.equal(checkpointHitForSignature(checkpoint, "wrong-signature"), null, "signature mismatch must not checkpoint-hit");
   assert.equal(checkpointHitForSignature(checkpoint, undefined), null, "undefined expected signature must not checkpoint-hit");
+  assert.equal(checkpointHitForSignature(checkpoint, null), null, "null expected signature must not checkpoint-hit");
+  assert.equal(checkpointHitForSignature(checkpoint, ""), null, "empty-string expected signature must not checkpoint-hit");
   assert.equal(checkpointHitForSignature(null, "sig-A"), null, "missing checkpoint must not checkpoint-hit");
   assert.equal(checkpointHitForSignature(undefined, "sig-A"), null);
   // A checkpoint lacking a signatureHash cannot be trusted (legacy/forensic artifact).

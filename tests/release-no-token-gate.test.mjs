@@ -59,6 +59,8 @@ test("release:no-token script runs the complete no-token checks and prints the s
 
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(await readCalls(fake.log), expectedNpmCalls);
+  assert.match(result.stdout, /all no-token release checks passed/);
+  assert.match(result.stdout, /SEPARATE, RECOMMENDED/i);
 });
 
 test("release:no-token script fails fast and propagates the failing suite status", async () => {
@@ -74,14 +76,4 @@ test("release:no-token script fails fast and propagates the failing suite status
     ],
   );
   assert.doesNotMatch(result.stdout, /all no-token release checks passed/);
-});
-
-test("release:no-token source keeps success and separate-smoke messages", async () => {
-  const releaseSrc = await fs.readFile(releaseScript, "utf8");
-
-  assert.match(releaseSrc, /npm test/);
-  assert.match(releaseSrc, /npm pack --dry-run --json/);
-  assert.match(releaseSrc, /all no-token release checks passed/);
-  assert.match(releaseSrc, /SEPARATE, RECOMMENDED step/);
-  assert.match(releaseSrc, /failed with status/);
 });
