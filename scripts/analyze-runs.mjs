@@ -17,8 +17,18 @@ function parseArgs(argv) {
     else if (arg.startsWith("--cwd=")) args.cwd = path.resolve(arg.slice("--cwd=".length));
     else if (arg === "--json") args.format = "json";
     else if (arg === "--markdown") args.format = "markdown";
-    else if (arg === "--format") args.format = argv[++i] === "json" ? "json" : "markdown";
-    else if (arg.startsWith("--format=")) args.format = arg.slice("--format=".length) === "json" ? "json" : "markdown";
+    else if (arg === "--format") {
+      // A missing following value (argv[++i] === undefined) or an unknown
+      // value must be rejected rather than silently coercing to "markdown".
+      const value = argv[++i];
+      if (value !== "json" && value !== "markdown") throw new Error("--format requires json or markdown");
+      args.format = value;
+    }
+    else if (arg.startsWith("--format=")) {
+      const value = arg.slice("--format=".length);
+      if (value !== "json" && value !== "markdown") throw new Error("--format requires json or markdown");
+      args.format = value;
+    }
     else if (arg === "--help" || arg === "-h") args.help = true;
     else throw new Error(`Unknown argument: ${arg}`);
   }

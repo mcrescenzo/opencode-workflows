@@ -92,6 +92,7 @@ the approval summary; it launches no lanes and runs no probes:
 workflow_run({
   source: "<first-run-slice body>",            // or name: "first-run-slice" if saved
   args: { question: "How does X work?", slices: ["entrypoint", "error path"] },
+  background: true,
   format: "json",                             // structured preview with byte/line counts
   includeSourceSnippet: true,                  // optional bounded snippet; omitted by default
   sourceSnippetMaxChars: 600,
@@ -113,14 +114,16 @@ same `args` — by echoing the `approvalHash`:
 workflow_run({
   source: "<first-run-slice body>",
   args: { question: "How does X work?", slices: ["entrypoint", "error path"] },
+  background: true,
   approve: true,
   approvalHash: "<approvalHash from the preview>",
 })
 ```
 
 For inline `source`, "exact" means byte-identical — re-typing the body drifts
-the hash. Prefer approving with only `approve: true` + the `approvalHash`
-(the previewed source is retained in-memory), or save once and run by `name`.
+the hash. Prefer omitting `source` while preserving `args`, `background`, and
+other envelope inputs on the `approve: true` + `approvalHash` call (the previewed
+source is retained in-memory), or save once and run by `name`.
 
 The hash covers the source, args, authority, models, and budgets, so any edit
 between preview and approve invalidates it and forces a fresh preview. A read-only
@@ -150,14 +153,15 @@ to cover every lane any nested workflow will launch. See `docs/workflow-plugin.m
 
 Follow the result-readback contract in the `workflow-plan-review` skill: a
 foreground run returns the result inline — do not re-read it; for background
-runs, poll `detail: "compact"` until terminal then read `detail: "result"` once;
+runs, yield for the completion notification then read `detail: "result"` once;
 for foreground results omitted for size, fall back to `detail: "result"`.
 
 Recipe-specific note: treat `groundedFindings` as the answer and
 `droppedUnsupportedClaims` as an honesty ledger — if a slice landed there, the
 lane did not actually prove its claim, so the fix is another scoped lane (or
-stronger evidence), not a louder assertion. Use `detail: "compact"` to poll
-progress and `detail: "full"` only for diagnostics.
+stronger evidence), not a louder assertion. Use `detail: "compact"` only for
+explicit progress/control or the no-notification fallback, and `detail: "full"`
+only for diagnostics.
 
 ### Failure handling
 
@@ -293,7 +297,12 @@ const findingSchema = {
 };
 
 const question = args?.question ?? "How does the subsystem work?";
-const areas = args?.areas ?? ["entrypoints", "data model", "error handling", "tests"];
+// Validate args.areas: a truthy non-array (e.g. a string) would otherwise pass
+// the `??` default and make `areas.map(...)` throw a TypeError before any lane runs.
+const rawAreas = args?.areas;
+const areas = Array.isArray(rawAreas)
+  ? rawAreas
+  : ["entrypoints", "data model", "error handling", "tests"];
 const allowExternalDocs = args?.allowExternalDocs === true; // only effective with network authority
 
 // Scoped local-inventory lanes run on the fast tier and stay read-only. Keep the
@@ -459,6 +468,7 @@ workflow_run({
   name: "repo-deep-research",
   args: { question: "...", areas: ["..."], allowExternalDocs: false },
   profile: "read-only-review",
+  background: true,
   maxAgents: 6,
   concurrency: 4,
 })
@@ -475,6 +485,7 @@ workflow_run({
   name: "repo-deep-research",
   args: { question: "...", areas: ["..."], allowExternalDocs: false },
   profile: "read-only-review",
+  background: true,
   maxAgents: 6,
   concurrency: 4,
   approve: true,
@@ -497,7 +508,7 @@ still stop at the independent `workflow_apply` hash gate.
 
 Follow the result-readback contract in the `workflow-plan-review` skill: a
 foreground run returns the result inline — do not re-read it; for background
-runs, poll `detail: "compact"` until terminal then read `detail: "result"` once;
+runs, yield for the completion notification then read `detail: "result"` once;
 for foreground results omitted for size, fall back to `detail: "result"`.
 
 Recipe-specific note: treat `groundedFindings` as the answer and

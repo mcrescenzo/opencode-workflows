@@ -146,6 +146,53 @@ test("domain mutation ledger is idempotent by mutation key", async () => {
   assert.equal(records.filter((record) => record.phase === "completed").length, 1);
 });
 
+test("domain mutation readback failure does not fail or rethrow a successful mutation", async () => {
+  const dir = await tempDir("workflow-domain-readback-failure");
+  const run = makeRun(dir);
+  const error = Object.assign(new Error("observation unavailable"), { code: "READBACK_DOWN" });
+
+  const result = await runDomainMutation(run, {
+    mutationKey: "domain:fresh-readback-failure",
+    operation: "update",
+    execute: async () => ({ updated: true }),
+    readback: async () => { throw error; },
+  });
+
+  assert.equal(result.replayed, false);
+  assert.deepEqual(result.result, { updated: true });
+  assert.equal(result.readback, undefined);
+  assert.deepEqual(result.readbackError, { name: "Error", message: "observation unavailable", code: "READBACK_DOWN" });
+  const records = await readJsonlLedger(path.join(dir, "domain-ledger.jsonl"));
+  assert.deepEqual(records.map((record) => record.phase), ["started", "executed", "completed"]);
+  assert.deepEqual(records.at(-1).readbackError, result.readbackError);
+});
+
+test("executed domain mutation replay handles readback failure without re-executing or recording failure", async () => {
+  const dir = await tempDir("workflow-domain-replay-readback-failure");
+  const run = makeRun(dir);
+  await appendDomainLedger(run, {
+    phase: "executed",
+    mutationKey: "domain:replay-readback-failure",
+    operation: "update",
+    result: { updated: true },
+  });
+  let executeCalls = 0;
+
+  const result = await runDomainMutation(run, {
+    mutationKey: "domain:replay-readback-failure",
+    operation: "update",
+    execute: async () => { executeCalls += 1; },
+    readback: async () => { throw new TypeError("readback parse failed"); },
+  });
+
+  assert.equal(result.replayed, true);
+  assert.equal(executeCalls, 0);
+  assert.equal(result.readback, undefined);
+  assert.deepEqual(result.readbackError, { name: "TypeError", message: "readback parse failed" });
+  const records = await readJsonlLedger(path.join(dir, "domain-ledger.jsonl"));
+  assert.deepEqual(records.map((record) => record.phase), ["executed", "completed"]);
+});
+
 test("domain mutation passes a deterministic idempotency key to execute and records it before running", async () => {
   // R16: the crash window is between execute() completing its (non-idempotent) bd side-effect and the
   // durable "executed" ledger record being written. To survive a replay, execute must be handed a

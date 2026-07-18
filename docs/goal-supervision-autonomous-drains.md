@@ -14,7 +14,7 @@
 
 ## Success Criteria
 
-A goal such as "run beads-drain until no autonomous Beads work remains" is satisfied only when the transcript shows:
+A goal such as "run the configured domain drain until no autonomous work remains" is satisfied only when the transcript shows:
 
 - A terminal workflow status such as `completed` or an explicitly reviewed `awaiting-diff-approval` followed by successful `workflow_apply` when primary writes were planned.
 - Final dry proof from fresh domain scans, including ready and in-progress work.

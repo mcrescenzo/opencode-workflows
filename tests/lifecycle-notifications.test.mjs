@@ -5,7 +5,13 @@ import os from "node:os";
 import path from "node:path";
 
 import WorkflowPlugin from "../workflow-kernel/index.js";
-import { pendingNotificationPaths } from "../workflow-kernel/lifecycle-control.js";
+import {
+  NOTIFICATION_SENDING_STALE_MS,
+  acquireNotificationDeliveryLock,
+  notificationDeliveryLockIsStale,
+  notificationDeliveryLockPath,
+  pendingNotificationPaths,
+} from "../workflow-kernel/lifecycle-control.js";
 
 // Notification-delivery regressions split out of durable-state.test.mjs
 // (opencode-workflows-fnop.9): the session.idle event hook drives
@@ -45,6 +51,75 @@ test("event hook returns normally when readdir rejects with EPERM", async (t) =>
     readdirMock.mock.restore();
     pendingNotificationPaths.clear();
     for (const value of savedPending) pendingNotificationPaths.add(value);
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("notification lock staleness uses mtimeMs directly", async (t) => {
+  const nowMs = 123_456;
+  t.mock.method(fs, "stat", async () => ({ mtime: new Date("invalid"), mtimeMs: nowMs - NOTIFICATION_SENDING_STALE_MS }));
+  assert.equal(await notificationDeliveryLockIsStale("unused", nowMs), true);
+});
+
+test("a delayed stale reclaimer rechecks the live lock after acquiring the reclaim mutex", async (t) => {
+  const dir = await tempDir("workflow-stale-lock-race");
+  const notificationPath = path.join(dir, "notification.json");
+  const lockPath = notificationDeliveryLockPath(notificationPath);
+  const tombstonePath = `${lockPath}.stale`;
+  try {
+    await fs.writeFile(lockPath, "stale", "utf8");
+    const past = new Date(Date.now() - NOTIFICATION_SENDING_STALE_MS - 1000);
+    await fs.utimes(lockPath, past, past);
+
+    const originalStat = fs.stat.bind(fs);
+    const originalMkdir = fs.mkdir.bind(fs);
+    const originalRename = fs.rename.bind(fs);
+    let releaseInitialChecks;
+    const initialChecksComplete = new Promise((resolve) => { releaseInitialChecks = resolve; });
+    let initialChecks = 0;
+    t.mock.method(fs, "stat", async (...args) => {
+      const stat = await originalStat(...args);
+      if (args[0] === lockPath && initialChecks < 2) {
+        initialChecks += 1;
+        if (initialChecks === 2) releaseInitialChecks();
+        await initialChecksComplete;
+      }
+      return stat;
+    });
+
+    let releaseSecondReclaimer;
+    const firstReclaimerFinished = new Promise((resolve) => { releaseSecondReclaimer = resolve; });
+    let tombstoneMkdirCalls = 0;
+    t.mock.method(fs, "mkdir", async (...args) => {
+      if (args[0] === tombstonePath) {
+        tombstoneMkdirCalls += 1;
+        if (tombstoneMkdirCalls === 2) await firstReclaimerFinished;
+      }
+      return await originalMkdir(...args);
+    });
+
+    let renameCalls = 0;
+    t.mock.method(fs, "rename", async (...args) => {
+      renameCalls += 1;
+      return await originalRename(...args);
+    });
+
+    const observeClaim = async (promise) => {
+      const claim = await promise;
+      if (claim.acquired) releaseSecondReclaimer();
+      return claim;
+    };
+    const claims = await Promise.all([
+      observeClaim(acquireNotificationDeliveryLock(notificationPath)),
+      observeClaim(acquireNotificationDeliveryLock(notificationPath)),
+    ]);
+
+    assert.equal(initialChecks, 2, "both reclaimers observed the original stale lock before either proceeded");
+    assert.equal(tombstoneMkdirCalls, 2, "the delayed reclaimer acquired the mutex after the winner released it");
+    assert.equal(claims.filter((claim) => claim.acquired).length, 1);
+    assert.equal(renameCalls, 1, "the delayed reclaimer must not rename the winner's fresh lock");
+    await Promise.all(claims.map((claim) => claim.release()));
+  } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }
 });

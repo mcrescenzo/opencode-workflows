@@ -32,7 +32,7 @@ export async function writeFakeExtension(dir, opts = {}) {
   const { id = "fake", assetDirs, workflows, commands, skills, source } = opts;
   const extPath = path.join(dir, "extension.js");
 
-  if (source) {
+  if (source !== undefined) {
     await fs.writeFile(extPath, source);
   } else {
     const manifest = { id };

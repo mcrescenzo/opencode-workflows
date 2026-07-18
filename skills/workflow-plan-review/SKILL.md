@@ -13,13 +13,15 @@ tier is within the configured ceiling. In both cases, treat the launch plan as
 something to understand and refine, not a hash to echo back.
 
 This skill is the **canonical owner** of the generic launch → approval →
-background-handoff → monitoring → result-readback contract. Other surfaces
+background-handoff → completion-notification → result-readback contract. Other surfaces
 (authoring skill, model-tiering skill, deep-research command, README, recipes)
 point here for that flow and retain only their domain-specific guidance.
 
 ## Procedure
 
-1. **Get the plan or run.** Prefer `workflow_run({ name: "...", args: {...}, format: "json", ... })`.
+1. **Get the plan or run.** Prefer `workflow_run({ name: "...", args: {...}, background: true, format: "json", ... })`.
+   For agent invocations, explicitly pass `background: true` unless the user requested foreground;
+   preserve that value on the approval call because it is part of the approval envelope.
    If the plugin is not auto-approving this authority tier, the returned JSON is a typed
    `workflow_preview` envelope with `executed: false`, `approvalHash`, `workflow`, `source`,
    `runtimeArgsPreview`, `laneBudget`, `modelPlan`, `budgetCeilings`, `background`, `authority`,
@@ -46,7 +48,9 @@ point here for that flow and retain only their domain-specific guidance.
    - `modelTiers: { fast, deep }` — see the `workflow-model-tiering` skill for how to pick them.
    - `maxAgents` — ceiling on child lanes launched (one slot per `agent()` lane).
    - `concurrency` — peak parallel lanes.
-   - `background: true/false` — keep a control channel for pause/cancel on long runs.
+   - `background: true/false` — agents default to `true` so they can yield for the completion
+     notification and retain a control channel; use `false` only when foreground was explicitly
+     requested or an immediate blocking result is materially necessary.
    - `maxCost` / `maxTokens` — budget ceilings are approval-envelope decisions; workflow bodies can
      self-scale with `budget.remaining()` and `budget.ceilings()`.
    - `laneTimeoutMs` (alias `childPromptTimeoutMs`) — per-lane prompt cap.
@@ -67,8 +71,9 @@ point here for that flow and retain only their domain-specific guidance.
    Do not call `approve: true` in the same turn you presented the plan unless the user already said
    to run it. For an auto-approved run, skip this step and read back the result.
 
-   For an inline-source preview, approve with only `approve: true` and the matching
-   `approvalHash` (no source re-transmission needed — approve-by-reference).
+   For an inline-source preview, omit `source` on approval (approve-by-reference),
+   but preserve the other approved inputs such as `args`, `modelTiers`, and
+   `background: true`, alongside `approve: true` and the matching `approvalHash`.
 
 ## When you may skip the confirmation step
 
@@ -98,18 +103,29 @@ Not every workflow has a static lane count you can quote up front:
 
 In all cases, present what you know and label what is uncertain. Never invent a precise lane count.
 
-## Background runs and monitoring
+## Background runs and completion notification
 
-When `background` is omitted, the kernel defaults wide, deep, or long runs to
-background using a heuristic; explicit `background: true` or `false` always wins,
-and resume keeps the pinned mode.
+Agent callers should explicitly pass `background: true` by default. The kernel's
+omission behavior remains a compatibility fallback: it defaults only wide, deep,
+or long runs to background using a heuristic. Explicit `background: true` or
+`false` always wins, and resume keeps the pinned mode.
 
 - **Foreground** (`background: false`): the `approve` call blocks until the run
   finishes and returns the terminal result inline (see Result readback below).
 - **Background** (`background: true`): the `approve` call returns immediately
-  with a run id while execution continues in the current OpenCode process. Poll
-  `workflow_status({ runId, detail: "compact" })` until the status is terminal,
-  then read the result once. Keep the run id as your control channel.
+  with a run id while execution continues in the current OpenCode process. Keep
+  the run id, then **yield the turn; do not poll**. When the workflow reaches a
+  terminal state, its best-effort completion prompt normally resumes the invoking
+  session. Read the result once at that point and summarize it for the user.
+
+Use `workflow_status({ runId, detail: "compact" })` before notification only when
+the launch warning says completion prompts are unavailable, the user explicitly
+asks for progress, you need pause/cancel control, or you are diagnosing/recovering
+a stale or failed delivery. Continuous polling keeps the session active and can
+delay the idle-gated completion prompt.
+
+Completion delivery is best-effort. A failed prompt remains persisted for retry
+on a later idle event; use compact status only when diagnosing that recovery case.
 
 Background execution is not durable across OpenCode process death; use
 `workflow_reconcile` to recover stale runs after a restart. Lifecycle tools:
@@ -128,8 +144,10 @@ result is already in the approve response. **Do not re-read it** with
 `workflow_status({ runId, detail: "result" })` is the redacted, full-fidelity
 readback. Use it when:
 
-- The run was **background** — poll `detail: "compact"` until terminal, then read
-  `detail: "result"` exactly once.
+- A **background completion notification** resumed the session — read
+  `detail: "result"` exactly once, then report the outcome.
+- A background launch explicitly warned that completion prompts are unavailable
+  — poll `detail: "compact"` as the fallback, then read `detail: "result"` once.
 - The foreground response said the result was **omitted for size** — the inline
   return exceeded the display cap; the response points you at the persisted
   result. `detail: "result"` then returns the full data, or a partial readback

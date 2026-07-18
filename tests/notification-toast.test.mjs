@@ -21,6 +21,18 @@ test("truncateText enforces result.length <= max even when max is smaller than t
   assert.match(truncateText(long, 40), /truncated \d+ chars\]$/);
 });
 
+test("truncateText never leaves a lone high surrogate at small truncation limits", () => {
+  const astral = "😀abcdef";
+  for (const max of [1, 2, 3, 4, 5]) {
+    const result = truncateText(astral, max);
+    assert.ok(result.length <= max, `max=${max} produced ${result.length} UTF-16 code units`);
+    assert.doesNotMatch(result, /[\ud800-\udbff]$/u, `max=${max} left a trailing high surrogate`);
+  }
+  assert.equal(truncateText(astral, 1), "");
+  assert.equal(truncateText(astral, 2), "😀");
+  assert.equal(truncateText(`a${astral}`, 2), "a");
+});
+
 test("showToast does not accumulate overlapping hung TUI deliveries after timeout", async () => {
   let calls = 0;
   let signal;

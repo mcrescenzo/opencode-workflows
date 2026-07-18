@@ -443,7 +443,7 @@ function sanitizeArgsExamples(rawExamples) {
 // can import it without introducing a role-template-loading → run-store-status re-export cycle.
 
 function renderRunExample(name, argsExample) {
-  const parts = [`workflow_run name=${JSON.stringify(name)}`];
+  const parts = [`workflow_run name=${JSON.stringify(name)}`, "background=true"];
   if (argsExample && argsExample.args && Object.keys(argsExample.args).length > 0) {
     parts.push(`args=${truncateText(JSON.stringify(argsExample.args), 200)}`);
   }
@@ -471,8 +471,9 @@ function buildInvocationMetadata(entry, meta) {
     deep: (meta.modelTiers && typeof meta.modelTiers.deep === "string") ? meta.modelTiers.deep : defaultModel,
   };
   const nextSteps = [
-    "workflow_status detail=compact   # poll run progress",
-    "workflow_status detail=result    # read redacted lane results after completion",
+    "wait for completion notification # yield; do not poll",
+    "workflow_status detail=result    # read redacted lane results once after notification",
+    "workflow_status detail=compact   # explicit progress/control or notification fallback only",
   ];
   if (entry.authority?.editGate && entry.authority.editGate !== "not-requested") {
     nextSteps.push("workflow_apply                   # approve staged writes before they land");

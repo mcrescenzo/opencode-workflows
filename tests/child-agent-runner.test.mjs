@@ -1430,6 +1430,134 @@ test("sessionDirectoryEchoStatus tolerates symlink-realpath divergence", async (
   assert.equal(sessionDirectoryEchoStatus({ data: { id: "s", directory: real } }, link).state, "verified");
 });
 
+// R06: directory echo is the deterministic replacement for the removed directory-rooting
+// capability. A directory-sensitive lane (worktree/edit/integration/shell) must fail closed when
+// the child session omits the directory echo — the absence cannot distinguish a silent
+// wrong-directory launch from a benign client/server omission. A shell lane can mutate the working
+// directory via the bash tool, so it is directory-sensitive even without an edit worktree.
+test("runChildAgent fails closed for a directory-sensitive shell lane when the child session omits the directory echo (R06)", async () => {
+  const { root, dir } = await tempRunDir("child-agent-directory-unverified-shell");
+  const calls = { create: [], prompt: [], abort: [] };
+  const pluginContext = directPluginContext(async () => ({
+    data: { parts: [{ type: "text", text: "must not run" }], info: { tokens: { input: 1, output: 1, reasoning: 0 }, cost: 0 } },
+  }), calls);
+  const toolContext = { directory: root, sessionID: "parent-session", abort: new AbortController().signal };
+  const run = minimalChildRun(dir, {
+    authority: {
+      readOnly: false,
+      shell: true,
+      shellPolicy: { allow: ["*"], deny: [] },
+      network: false,
+      mcp: false,
+      edit: false,
+      worktreeEdit: false,
+      integration: false,
+      profile: "inspect-with-shell",
+    },
+  });
+  try {
+    await assert.rejects(
+      runChildAgent(pluginContext, toolContext, run, {
+        callId: "lane:shell-unverified",
+        prompt: "inspect with shell",
+        opts: { shell: true },
+      }, directDeps()),
+      /directory echo unverified/i,
+    );
+    assert.equal(calls.create.length, 1, "the echo check runs after session.create");
+    assert.equal(calls.prompt.length, 0, "an unverified directory-sensitive lane must fail before session.prompt");
+    const events = await readEvents(dir);
+    assert.ok(events.some((event) => event.type === "agent.directory_unverified"), "an agent.directory_unverified event must be recorded");
+    // The failure-outcome projection overwrites `status` to the outcome (mirroring the directory-
+    // mismatch handling); the directoryEcho field is retained via merge and the event carries the
+    // specific reason.
+    const lane = run.laneRecords.get("lane:shell-unverified");
+    assert.equal(lane?.outcome, "failure");
+    assert.equal(lane?.directoryEcho?.state, "not-echoed");
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+// R06: a verified directory echo must let a directory-sensitive lane proceed normally.
+test("runChildAgent proceeds for a directory-sensitive shell lane when the child session verifies the directory echo (R06)", async () => {
+  const { root, dir } = await tempRunDir("child-agent-directory-verified-shell");
+  const calls = { create: [], prompt: [], abort: [] };
+  const pluginContext = {
+    client: {
+      session: {
+        async create(input) {
+          calls.create.push(input);
+          // Echo the directory back (v1 session shape carries it under query.directory),
+          // mirroring a compliant >= MIN_OPENCODE_SERVER_VERSION server.
+          return { data: { id: `child-${calls.create.length}`, directory: input.query.directory } };
+        },
+        async prompt(input) {
+          calls.prompt.push(input);
+          return { data: { parts: [{ type: "text", text: "shell-ok" }], info: { tokens: { input: 1, output: 1, reasoning: 0 }, cost: 0 } } };
+        },
+        async abort(input) {
+          calls.abort.push(input);
+          return { data: { ok: true } };
+        },
+      },
+    },
+  };
+  const toolContext = { directory: root, sessionID: "parent-session", abort: new AbortController().signal };
+  const run = minimalChildRun(dir, {
+    authority: {
+      readOnly: false,
+      shell: true,
+      shellPolicy: { allow: ["*"], deny: [] },
+      network: false,
+      mcp: false,
+      edit: false,
+      worktreeEdit: false,
+      integration: false,
+      profile: "inspect-with-shell",
+    },
+  });
+  try {
+    const result = await runChildAgent(pluginContext, toolContext, run, {
+      callId: "lane:shell-verified",
+      prompt: "inspect with shell",
+      opts: { shell: true },
+    }, directDeps());
+    assert.equal(result, "shell-ok");
+    assert.equal(calls.prompt.length, 1, "a verified directory-sensitive lane must reach session.prompt");
+    const lane = run.laneRecords.get("lane:shell-verified");
+    assert.equal(lane?.outcome, "success");
+    // directoryEcho is computed for the fail-closed gate but only persisted on the failure
+    // (mismatch/unverified) projections; a verified lane proceeds and records a normal success.
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+// R06: read-only lanes retain the backward-compatible tolerance for an absent directory echo.
+test("runChildAgent tolerates a missing directory echo for a read-only lane (R06)", async () => {
+  const { root, dir } = await tempRunDir("child-agent-directory-not-echoed-readonly");
+  const calls = { create: [], prompt: [], abort: [] };
+  const pluginContext = directPluginContext(async () => ({
+    data: { parts: [{ type: "text", text: "readonly-ok" }], info: { tokens: { input: 1, output: 1, reasoning: 0 }, cost: 0 } },
+  }), calls);
+  const toolContext = { directory: root, sessionID: "parent-session", abort: new AbortController().signal };
+  const run = minimalChildRun(dir);
+  try {
+    const result = await runChildAgent(pluginContext, toolContext, run, {
+      callId: "lane:readonly-not-echoed",
+      prompt: "inspect read-only",
+      opts: {},
+    }, directDeps());
+    assert.equal(result, "readonly-ok");
+    assert.equal(calls.prompt.length, 1, "a read-only lane must still prompt when the directory echo is absent");
+    const events = await readEvents(dir);
+    assert.equal(events.some((event) => event.type === "agent.directory_unverified"), false, "no unverified event for a tolerated read-only echo gap");
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("laneAuthorityInstruction renders grants and denials from authority flags", () => {
   assert.equal(
     laneAuthorityInstruction({ readOnly: true }),

@@ -28,3 +28,9 @@ test("release and CI share one canonical gate owner", () => {
   const gateScript = readFileSync(new URL("scripts/release-no-token.mjs", root), "utf8");
   assert.doesNotMatch(gateScript, /npm publish/);
 });
+
+test("release reruns check the remote before creating a version tag", () => {
+  const release = readFileSync(releasePath, "utf8");
+  assert.match(release, /git ls-remote --exit-code --tags origin "refs\/tags\/\$TAG"/);
+  assert.doesNotMatch(release, /git rev-parse "refs\/tags\/\$TAG"/);
+});

@@ -479,6 +479,27 @@ test("executeSandbox captures a non-Error thrown value as the runtime error mess
   );
 });
 
+// R15: a top-level Promise rejection escapes the body try/catch and reaches the VM-level
+// rejection path (readVmErrorMessage). dump() of a QuickJS Error historically dropped its
+// non-enumerable .message, so the host must read .message through the QuickJS context API
+// (vm.getProp) rather than a nonexistent handle method; otherwise the boundary crossing
+// degrades the message to "{}"/"[object Object]". This guards rejection-message preservation.
+test("executeSandbox preserves an Error message from a top-level Promise rejection (R15)", async () => {
+  await assert.rejects(
+    executeSandbox(NO_CTX, NO_CTX, minimalRun(), "return Promise.reject(new Error('boom'));", null, NO_DEPS),
+    (error) => error instanceof Error && error.message === "boom",
+  );
+});
+
+test("executeSandbox preserves a non-Error value from a top-level Promise rejection via the dump fallback (R15)", async () => {
+  // A rejected non-Error value (a string) has no .message to read through vm.getProp, so the
+  // dump fallback must still surface it intact.
+  await assert.rejects(
+    executeSandbox(NO_CTX, NO_CTX, minimalRun(), "return Promise.reject('rejection string');", null, NO_DEPS),
+    (error) => error instanceof Error && error.message === "rejection string",
+  );
+});
+
 // --- determinism prelude (Date / Math.random disabled) -----------------------------------
 
 test("the determinism prelude disables Date, Date.now, and Math.random in the guest", async () => {

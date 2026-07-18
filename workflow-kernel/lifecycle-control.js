@@ -187,7 +187,8 @@ function workflowNotificationPrompt(notification) {
     notification.resultPath ? `Result: ${notification.resultPath}` : undefined,
     notification.diffPlanHash ? `Diff plan hash: ${notification.diffPlanHash}` : undefined,
     notification.errorSummary ? `Error summary: ${truncateText(notification.errorSummary, MAX_STATUS_STRING_CHARS)}` : undefined,
-    `Use workflow_status({ runId: "${notification.runId}", format: "json", detail: "result" }) for the final output if needed.`,
+    "The workflow is already terminal; do not poll workflow_status.",
+    `Read the final output exactly once with workflow_status({ runId: "${notification.runId}", format: "json", detail: "result" }) if needed.`,
     "Summarize this workflow outcome for the user. Do not apply diff plans, mutate files, or close domain work unless the user explicitly asks.",
   ].filter(Boolean).join("\n");
 }
@@ -197,6 +198,83 @@ function notificationSendingIsStale(notification, nowMs = Date.now()) {
   if (!sendingAt) return false;
   const sentMs = Date.parse(sendingAt);
   return Number.isFinite(sentMs) && nowMs - sentMs >= NOTIFICATION_SENDING_STALE_MS;
+}
+
+function notificationDeliveryLockPath(notificationPath) {
+  return `${notificationPath}.deliver.lock`;
+}
+
+async function notificationDeliveryLockIsStale(lockPath, nowMs = Date.now()) {
+  let stat;
+  try {
+    stat = await fs.stat(lockPath);
+  } catch {
+    return false;
+  }
+  const mtimeMs = stat.mtimeMs;
+  if (!Number.isFinite(mtimeMs)) return false;
+  return nowMs - mtimeMs >= NOTIFICATION_SENDING_STALE_MS;
+}
+
+// Cross-process delivery claim. The in-process deliveringNotificationPaths Set only guards
+// callers within THIS plugin process; two OpenCode/plugin processes handling the same idle
+// session can both read notification.json with sendingAt=null across the await boundary and
+// both promptAsync the same completion prompt. This lock file is the atomic cross-process
+// claim: O_CREAT|O_EXCL ("wx") makes create-and-own a single atomic step that fails with
+// EEXIST if another process already owns it. A unique claim token (pid + timestamp) is written
+// for diagnostics, and a stale lock (older than NOTIFICATION_SENDING_STALE_MS) is reclaimed so
+// a crashed owner cannot permanently suppress delivery. The release is always invoked from the
+// delivery finally so a failed attempt never leaves a stuck lock.
+async function acquireNotificationDeliveryLock(notificationPath) {
+  const lockPath = notificationDeliveryLockPath(notificationPath);
+  const tombstonePath = `${lockPath}.stale`;
+  const claim = JSON.stringify({ pid: process.pid, claimedAt: new Date().toISOString() });
+  const create = async () => {
+    const handle = await fs.open(lockPath, "wx");
+    try {
+      await handle.writeFile(claim, "utf8");
+    } finally {
+      await handle.close();
+    }
+  };
+  const release = async () => { await fs.unlink(lockPath).catch(() => {}); };
+  try {
+    await create();
+    return { acquired: true, release };
+  } catch (error) {
+    if (error.code !== "EEXIST") throw error;
+    if (!(await notificationDeliveryLockIsStale(lockPath))) return { acquired: false, release: async () => {} };
+    // Serialize stale reclaimers through the tombstone directory, then atomically move the
+    // abandoned lock out of the live path. Only the reclaimer that owns the tombstone may
+    // create the replacement lock.
+    try {
+      await fs.mkdir(tombstonePath);
+    } catch (reclaimError) {
+      if (reclaimError.code === "EEXIST") return { acquired: false, release: async () => {} };
+      throw reclaimError;
+    }
+    try {
+      // The initial stale observation happened before acquiring the reclaim mutex. Another
+      // reclaimer may have replaced that lock while this caller waited, so validate the live
+      // path again while holding the mutex before moving anything out of it.
+      if (!(await notificationDeliveryLockIsStale(lockPath))) return { acquired: false, release: async () => {} };
+      try {
+        await fs.rename(lockPath, path.join(tombstonePath, "lock"));
+      } catch (renameError) {
+        if (renameError.code === "ENOENT") return { acquired: false, release: async () => {} };
+        throw renameError;
+      }
+      try {
+        await create();
+        return { acquired: true, release };
+      } catch (reclaimError) {
+        if (reclaimError.code === "EEXIST") return { acquired: false, release: async () => {} };
+        throw reclaimError;
+      }
+    } finally {
+      await fs.rm(tombstonePath, { recursive: true, force: true }).catch(() => {});
+    }
+  }
 }
 
 async function deliverWorkflowNotifications(pluginContext, event) {
@@ -228,13 +306,23 @@ async function deliverWorkflowNotifications(pluginContext, event) {
     // Synchronous in-process mutex: claim this path before any further await so a
     // concurrent caller that already read the same sendingAt=null record cannot also
     // promptAsync it. The check-and-add runs with no await in between, so at most one
-    // caller wins per process; the disk sendingAt guard below covers cross-process.
+    // caller wins per process; the exclusive delivery lock below covers cross-process.
     if (deliveringNotificationPaths.has(notificationPath)) {
       skipped += 1;
       continue;
     }
     deliveringNotificationPaths.add(notificationPath);
+    let deliveryLock = null;
     try {
+      // Atomic cross-process claim: if another OpenCode/plugin process already owns the
+      // delivery for this notification, skip it here. The in-process Set above only covers
+      // callers within this process; this lock file is the cross-process guard. Released in
+      // the finally below so a failed delivery does not leave a stuck lock.
+      deliveryLock = await acquireNotificationDeliveryLock(notificationPath);
+      if (!deliveryLock.acquired) {
+        skipped += 1;
+        continue;
+      }
       if (notification.delivery?.sendingAt) {
         if (!notificationSendingIsStale(notification)) {
           skipped += 1;
@@ -311,6 +399,7 @@ async function deliverWorkflowNotifications(pluginContext, event) {
       continue;
     } finally {
       deliveringNotificationPaths.delete(notificationPath);
+      if (deliveryLock) await deliveryLock.release().catch(() => {});
     }
   }
   return { delivered, failed, skipped };
@@ -592,6 +681,9 @@ export {
   updateNotificationIdleState,
   workflowNotificationPrompt,
   notificationSendingIsStale,
+  notificationDeliveryLockPath,
+  notificationDeliveryLockIsStale,
+  acquireNotificationDeliveryLock,
   deliverWorkflowNotifications,
   maybeDeliverCompletionNotification,
   rehydratePendingNotifications,

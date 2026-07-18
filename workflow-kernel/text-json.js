@@ -47,12 +47,15 @@ export function textPart(text) {
 // truncation marker. Used only for the degenerate small-max branch of truncateText,
 // where the marker itself would not fit. Prefers a short "..." ellipsis when there is
 // room for it, otherwise falls back to a plain slice; never splits a trailing surrogate.
+function trimTrailingHighSurrogate(string) {
+  const last = string.charCodeAt(string.length - 1);
+  return last >= 0xd800 && last <= 0xdbff ? string.slice(0, -1) : string;
+}
+
 function hardTruncate(string, max) {
   if (max <= 0) return "";
-  if (max <= 3) return string.slice(0, max);
-  let head = string.slice(0, max - 3);
-  const last = head.charCodeAt(head.length - 1);
-  if (last >= 0xd800 && last <= 0xdbff) head = head.slice(0, -1);
+  if (max <= 3) return trimTrailingHighSurrogate(string.slice(0, max));
+  const head = trimTrailingHighSurrogate(string.slice(0, max - 3));
   return `${head}...`;
 }
 
@@ -74,9 +77,7 @@ export function truncateText(text, max = MAX_STATUS_STRING_CHARS) {
     // whole budget, appending it to any head would blow past max. Hard-cap at exactly
     // max characters instead so the result.length <= max invariant holds for every max.
     if (suffix.length >= max) return hardTruncate(string, max);
-    head = string.slice(0, Math.max(0, max - suffix.length));
-    const last = head.charCodeAt(head.length - 1);
-    if (last >= 0xd800 && last <= 0xdbff) head = head.slice(0, -1);
+    head = trimTrailingHighSurrogate(string.slice(0, Math.max(0, max - suffix.length)));
     const dropped = string.length - head.length;
     if (dropped === n) break;
     n = dropped;

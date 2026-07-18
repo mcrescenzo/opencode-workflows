@@ -299,6 +299,35 @@ function domainMutationIdempotencyKey(mutationKey) {
   return `ocw-idem-${hash(String(mutationKey)).slice(0, 24)}`;
 }
 
+function domainReadbackError(error) {
+  return redactValue({
+    name: typeof error?.name === "string" ? error.name : "Error",
+    message: extractTextFromError(error),
+    ...(typeof error?.code === "string" || typeof error?.code === "number" ? { code: error.code } : {}),
+  });
+}
+
+async function completeDomainMutationReadback(run, { mutationKey, operation, result, readback, replayed }) {
+  let observed;
+  let readbackError;
+  if (typeof readback === "function") {
+    try {
+      observed = await readback(result);
+    } catch (error) {
+      readbackError = domainReadbackError(error);
+    }
+  }
+  await appendDomainLedger(run, {
+    phase: "completed",
+    mutationKey,
+    operation,
+    result: redactValue(result),
+    readback: redactValue(observed),
+    readbackError,
+  });
+  return { replayed, result, readback: observed, readbackError };
+}
+
 async function runDomainMutation(run, options) {
   const mutationKey = String(options?.mutationKey ?? "");
   if (!mutationKey) throw new Error("runDomainMutation requires mutationKey");
@@ -306,12 +335,16 @@ async function runDomainMutation(run, options) {
   const ledgerPath = ledgerFilePath(run.dir, "domain-ledger.jsonl");
   const prior = await readJsonlLedger(ledgerPath);
   const completed = completedLedgerRecord(prior, mutationKey);
-  if (completed) return { replayed: true, result: completed.result, readback: completed.readback };
+  if (completed) return { replayed: true, result: completed.result, readback: completed.readback, readbackError: completed.readbackError };
   const executed = latestLedgerRecord(prior, mutationKey, "executed");
   if (executed) {
-    const readback = hasFunction(options, "readback") ? await options.readback(executed.result) : undefined;
-    await appendDomainLedger(run, { phase: "completed", mutationKey, operation: executed.operation ?? options.operation ?? "domain-mutation", result: redactValue(executed.result), readback: redactValue(readback) });
-    return { replayed: true, result: executed.result, readback };
+    return await completeDomainMutationReadback(run, {
+      mutationKey,
+      operation: executed.operation ?? options.operation ?? "domain-mutation",
+      result: executed.result,
+      readback: options.readback,
+      replayed: true,
+    });
   }
   const operation = options.operation || "domain-mutation";
   // R16: derive a deterministic client-side idempotency key from the mutationKey and persist it in
@@ -324,16 +357,15 @@ async function runDomainMutation(run, options) {
   // resource instead of creating a duplicate.
   const idempotencyKey = options.idempotencyKey ? String(options.idempotencyKey) : domainMutationIdempotencyKey(mutationKey);
   await appendDomainLedger(run, { phase: "started", mutationKey, operation, idempotencyKey });
+  let result;
   try {
-    const result = await options.execute(idempotencyKey);
+    result = await options.execute(idempotencyKey);
     await appendDomainLedger(run, { phase: "executed", mutationKey, operation, idempotencyKey, result: redactValue(result) });
-    const readback = hasFunction(options, "readback") ? await options.readback(result) : undefined;
-    await appendDomainLedger(run, { phase: "completed", mutationKey, operation, result: redactValue(result), readback: redactValue(readback) });
-    return { replayed: false, result, readback };
   } catch (error) {
     await appendDomainLedger(run, { phase: "failed", mutationKey, operation, error: extractTextFromError(error) });
     throw error;
   }
+  return await completeDomainMutationReadback(run, { mutationKey, operation, result, readback: options.readback, replayed: false });
 }
 
 async function stageDomainMutation(run, options) {

@@ -41,6 +41,21 @@ function parseHelperTimeout(value) {
   return parsed;
 }
 
+function parseHelperArgs(raw) {
+  if (raw === undefined || raw === "") return [];
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    // A malformed JSON value must surface the intended validation message,
+    // not an uncaught SyntaxError stack trace, so this runs before the
+    // array-of-strings check below.
+    console.error("[child-system-smoke] OPENCODE_WORKFLOWS_CHILD_SMOKE_HELPER_ARGS must be a JSON array of strings");
+    process.exit(1);
+  }
+  return parsed;
+}
+
 function incomplete(reason) {
   const headline = `live child-system smoke was NOT run (${reason}); release evidence is INCOMPLETE, not verified`;
   if (required) {
@@ -67,9 +82,7 @@ if (!helper) {
   );
 }
 
-const args = process.env.OPENCODE_WORKFLOWS_CHILD_SMOKE_HELPER_ARGS
-  ? JSON.parse(process.env.OPENCODE_WORKFLOWS_CHILD_SMOKE_HELPER_ARGS)
-  : [];
+const args = parseHelperArgs(process.env.OPENCODE_WORKFLOWS_CHILD_SMOKE_HELPER_ARGS);
 
 if (!Array.isArray(args) || !args.every((item) => typeof item === "string")) {
   console.error("[child-system-smoke] OPENCODE_WORKFLOWS_CHILD_SMOKE_HELPER_ARGS must be a JSON array of strings");

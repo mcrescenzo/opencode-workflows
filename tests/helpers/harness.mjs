@@ -41,7 +41,13 @@ function defaultSession(prompt, options, calls) {
   return {
     async create(input) {
       calls.create.push(input);
-      return { data: { id: "child-1" } };
+      // Echo the requested directory back, mirroring a compliant (>= MIN_OPENCODE_SERVER_VERSION)
+      // server whose session.create result includes Session.directory. The opencode client API carries
+      // directory as a query param, so it reaches the fake at input.query.directory. Elevated/worktree/
+      // shell/integration lanes fail closed when this echo is absent (R06), so the shared fake must
+      // provide it for the laneDirectory the runner requested.
+      const echoDirectory = input?.query?.directory ?? input?.directory;
+      return { data: { id: "child-1", ...(echoDirectory ? { directory: echoDirectory } : {}) } };
     },
     async prompt(input) {
       calls.prompt.push(input);
@@ -193,6 +199,7 @@ async function makeHarness(promptOrOptions, maybeOptions = {}) {
   return {
     directory,
     tools: registered.tool,
+    hooks: registered,
     context: defaultContext(directory),
     calls,
   };

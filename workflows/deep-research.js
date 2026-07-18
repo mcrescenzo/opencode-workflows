@@ -131,17 +131,44 @@ if (!QUESTION) {
 // ---- URL normalization (QuickJS has no URL global; pure-string, CC-equivalent) ----
 // fnop.15: one local fact owns the accepted web URL scheme. normURL strips it; isWebSource
 // recognizes it, so the two cannot drift apart (previously duplicated with a keep-in-sync note).
-// The `i` flag covers raw input in isWebSource; normURL lowercases first.
+// The `i` flag covers raw input in isWebSource; normURL canonicalizes the scheme/host itself.
 const WEB_URL_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//i;
-// Lowercase; strip scheme and leading www.; keep host+path; drop query/fragment; strip
-// trailing slashes. Invalid/empty input normalizes to "" (callers skip those).
+// R08: query params that never identify a distinct document — campaign/share metadata only.
+// Dropped during dedup so the same article circulated with different share tags collapses.
+const TRACKING_QUERY_KEYS = /^(utm_[a-z_]*|gclid|fbclid|mc_(?:eid|cid)|igshid|ref|ref_src|ref_url|fb_action_ids|fb_action_types|fb_ref|si)$/i;
+// Canonical dedup key for a URL. R08: lowercases scheme + host only (path case is significant
+// on most servers; many documents live at case-sensitive paths), and KEEPS non-tracking query
+// params (which frequently identify distinct documents: ?id=, ?page=, ?p=, ?doc=, ?v=). Drops
+// fragment, leading "www.", trailing slashes, and known tracking params. The previous impl
+// lowercased the entire URL and dropped the whole query string, which silently merged distinct
+// sources (case-differing paths, ?id=N variants) so their fetch/extract lanes never ran.
+// Invalid/empty input normalizes to "" (callers skip those).
 function normURL(u) {
-  let s = String(u ?? "").trim().toLowerCase();
-  s = s.replace(WEB_URL_SCHEME, "");
-  s = s.split(/[?#]/)[0];
-  s = s.replace(/^www\./, "");
-  s = s.replace(/\/+$/, "");
-  return s;
+  let s = String(u ?? "").trim();
+  s = s.split("#")[0]; // fragment never affects document identity
+  // Split scheme/host from path so we canonicalize the host without touching path case.
+  let tail = s;
+  const m = WEB_URL_SCHEME.exec(s);
+  if (m) tail = s.slice(m[0].length);
+  const hostEnd = tail.search(/[/?]/);
+  let hostPart = hostEnd === -1 ? tail : tail.slice(0, hostEnd);
+  tail = hostEnd === -1 ? "" : tail.slice(hostEnd);
+  hostPart = hostPart.toLowerCase().replace(/^www\./, "");
+  // Keep non-tracking query params verbatim; preserve path case.
+  let path = tail;
+  let query = "";
+  const q = tail.indexOf("?");
+  if (q !== -1) {
+    path = tail.slice(0, q);
+    const kept = tail.slice(q + 1).split("&").filter((kv) => {
+      const key = kv.split("=", 1)[0];
+      return key !== "" && !TRACKING_QUERY_KEYS.test(key);
+    });
+    query = kept.length > 0 ? "?" + kept.join("&") : "";
+  }
+  let key = hostPart + path + query;
+  key = key.replace(/\/+$/, ""); // trailing slashes don't make a distinct document
+  return key;
 }
 function hostOf(u) {
   const n = normURL(u);

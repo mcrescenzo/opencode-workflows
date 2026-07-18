@@ -81,3 +81,21 @@ test("workflow tool reference lists every registered workflow tool and approval 
     assert.ok(doc.includes(term), `tool reference missing ${term}`);
   }
 });
+
+test("agent-facing workflow guidance is background and notification first", async () => {
+  const skill = await read("skills/workflow-plan-review/SKILL.md");
+  const authoring = await read("skills/opencode-workflow-authoring/SKILL.md");
+  const command = await read("commands/deep-research.md");
+  const readme = await read("README.md");
+  const reference = await read("docs/workflow-plugin.md");
+
+  for (const [name, text] of Object.entries({ skill, authoring, command, readme, reference })) {
+    assert.match(text, /background: true/, `${name} must teach explicit background launch`);
+    assert.match(text, /completion (?:prompt|notification)/i, `${name} must teach completion continuation`);
+  }
+  assert.doesNotMatch(skill, /poll `detail: "compact"` until terminal/i);
+  assert.doesNotMatch(command, /poll `workflow_status\([^\n]+\)`\s*until terminal/i);
+  assert.match(skill, /yield the turn; do not poll/i);
+  assert.match(command, /wait for the best-effort completion notification[\s\S]*do not poll/i);
+  assert.match(command, /exact preview[\s\S]*same `name`, `args`, `modelTiers`, and `background: true`/i);
+});

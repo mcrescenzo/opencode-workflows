@@ -1016,8 +1016,40 @@ export async function runChildAgent(pluginContext, toolContext, run, payload, de
             await appendEvent(run, { type: "agent.directory_mismatch", callId, childID, directoryEcho });
             throw new WorkflowAuthorityError(`Child session directory echo mismatch for ${callId}: expected ${directoryEcho.expected}, got ${directoryEcho.echoed}`);
           }
-          // "not-echoed" is tolerated: Session.directory is typed-required on >= MIN_OPENCODE_SERVER_VERSION,
-          // and the fingerprint refuses elevated authority below that floor.
+          // Directory echo is the deterministic replacement for the removed directory-rooting
+          // capability. A directory-sensitive lane (worktree/edit/integration/shell) can write to
+          // disk in its working directory, so a missing echo cannot be tolerated: the absence
+          // cannot distinguish a silent wrong-directory launch from a benign client/server
+          // omission. Read-only lanes still tolerate "not-echoed" for backward compatibility — the
+          // authority fingerprint already refuses elevated authority below the server floor that
+          // types Session.directory as required, so a read-only echo gap is a benign omission.
+          const directorySensitiveLane = Boolean(worktreeRecord?.path) || integrationLane === true
+            || policy.authority?.shell === true || policy.authority?.edit === true || policy.authority?.worktreeEdit === true;
+          if (directoryEcho.state !== "verified" && directorySensitiveLane) {
+            await writeLaneProjection(run, callId, {
+              status: "directory-unverified",
+              enqueuedAt: laneEnqueuedAt,
+              startedAt: laneStartedAt,
+              queueWaitMs: laneQueueWaitMs,
+              attempt,
+              childID,
+              title,
+              taskSummary,
+              model: resolved.modelKey,
+              agent,
+              role,
+              timeoutMs,
+              policyMode: policy.policyMode,
+              worktreePath: worktreeRecord?.path,
+              integrationLane,
+              permissionPolicy: resolved.policy,
+              permissionEcho,
+              directoryEcho,
+              signatureHash: sig,
+            });
+            await appendEvent(run, { type: "agent.directory_unverified", callId, childID, directoryEcho });
+            throw new WorkflowAuthorityError(`Child session directory echo unverified for ${callId}: expected ${directoryEcho.expected}`);
+          }
 
           await writeLaneProjection(run, callId, {
             status: "running",

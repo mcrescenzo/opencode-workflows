@@ -13,7 +13,7 @@ summary, and this file is the deeper architecture note.
 
 | Tool | Mutability | Approval / Hash Requirements | Safe Next Readback |
 | --- | --- | --- | --- |
-| `workflow_run` | Preview is read-only; approved execution creates run state and may launch lanes or approved domain mutations. | Default path: first call returns `approvalHash`; execution requires `approve: true` plus the matching `approvalHash`. Inline-source approve calls may omit `source` and present only the hash (approve-by-reference); mismatches return `changedFields` naming the re-keyed envelope fields (null when the supplied hash no longer matches a recorded preview). With configured `options.autoApprove`, eligible `readOnly` / `worktree` / `all` tier runs can launch on the first call; `args.autoApprove` can only narrow the configured ceiling. Resume preserves the approved envelope unless changed. | `workflow_status({ runId, detail: "compact" })`, then `workflow_status({ runId, detail: "result" })` at terminal state. |
+| `workflow_run` | Preview is read-only; approved execution creates run state and may launch lanes or approved domain mutations. | Default path: first call returns `approvalHash`; execution requires `approve: true` plus the matching `approvalHash`. Agent callers should pass `background: true` on preview and approval unless foreground was explicitly requested. Inline-source approve calls may omit `source` (approve-by-reference) while preserving the other envelope inputs; mismatches return `changedFields` naming the re-keyed envelope fields (null when the supplied hash no longer matches a recorded preview). With configured `options.autoApprove`, eligible `readOnly` / `worktree` / `all` tier runs can launch on the first call; `args.autoApprove` can only narrow the configured ceiling. Resume preserves the approved envelope unless changed. | For background runs, yield for the completion prompt, then call `workflow_status({ runId, detail: "result" })` once. Poll compact status only on the no-notification fallback or for explicit progress/control. |
 | `workflow_status` | Read-only. | None; `detail: "result"` requires a `runId`. | This is the authoritative readback surface. |
 | `workflow_events` | Read-only. | None; requires a `runId`. | Use this for redacted `events.jsonl` access with `typePrefix`, `limit`, `offset`, and timestamp filters. |
 | `workflow_reconcile` | Mutating recovery; persists stale-run recovery state and clears stale locks. | No approval hash; write-permission gated. | `workflow_status({ runId, detail: "full" })`. |
@@ -350,6 +350,15 @@ ceilings are not treated as predictions of actual fan-out. Explicit
 original pinned mode. If the host lacks `session.promptAsync`, background launch
 still works but `workflow_run` warns that no completion prompt can be delivered;
 use `workflow_status` polling for completion and final result readback.
+
+Agent callers should explicitly pass `background: true` by default instead of
+depending on the omission heuristic. After launch, they should yield rather than
+poll: the idle-gated completion notification uses `session.promptAsync` to resume
+the invoking session, which can then read `detail: "result"` exactly once. Delivery
+is best-effort; a failed attempt stays persisted for retry on a later idle event.
+Compact status polling is reserved for the explicit no-notification warning,
+user-requested progress/lifecycle control, or recovery diagnostics. Continuous
+polling keeps the invoking session active and can delay notification delivery.
 
 There is no detached supervisor, no respawn, and no attach. After process death
 the run directory is left behind and surfaces as stale until `workflow_reconcile`

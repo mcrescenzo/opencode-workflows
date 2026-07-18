@@ -139,7 +139,10 @@ test("ux.1: extension workflows expose machine-readable invocation metadata", as
       assert.ok(entry.invocation?.notes, `${entry.name} must expose operator/agent notes`);
       assert.ok(entry.invocation?.profile, `${entry.name} must expose authority profile`);
       assert.ok(entry.invocation?.runExamples?.some((line) => line.includes(`name="${entry.name}"`)), `${entry.name} must expose runnable examples`);
+      assert.ok(entry.invocation?.runExamples?.every((line) => line.includes("background=true")), `${entry.name} examples must opt agents into background execution`);
       assert.ok(entry.invocation?.argsExamples?.length > 0, `${entry.name} must expose structured args examples`);
+      assert.ok(entry.invocation?.nextSteps?.some((step) => /completion notification/.test(step)), `${entry.name} must expose notification-first handoff`);
+      assert.ok(!entry.invocation?.nextSteps?.some((step) => /poll run progress/.test(step)), `${entry.name} must not tell agents to continuously poll`);
       assert.ok(entry.invocation?.nextSteps?.some((step) => /workflow_status detail=result/.test(step)), `${entry.name} must expose safe readback next step`);
     }
   } finally {

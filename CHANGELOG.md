@@ -16,6 +16,9 @@ and uses semantic versioning for published package releases.
 - Removed obsolete probe-era helpers, a superseded toast-formatting island, dead
   test scaffolding, and redundant kernel facades while preserving the owning
   module exports through the kernel barrel.
+- Agent-facing workflow guidance now opts into `background: true`, yields for the
+  idle-gated completion prompt, and reserves status polling for explicit
+  progress/control or the no-notification fallback.
 
 ### Fixed
 - Resuming without an explicit args override now restores the approved runtime

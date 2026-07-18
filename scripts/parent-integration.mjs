@@ -10,6 +10,7 @@
 // the optional parent integration can never be confused with public validation.
 import { spawnSync } from "node:child_process";
 import { access } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 
 const parentCandidates = [
   new URL("../../../tests/workflows.test.mjs", import.meta.url),
@@ -36,10 +37,14 @@ if (!parentSuite) {
   process.exit(2);
 }
 
-console.log(`[parent-integration] running parent suite: ${parentSuite.pathname}`);
+// Use fileURLToPath, not .pathname: a URL pathname is percent-encoded, so a
+// parent checkout path containing spaces (e.g. /tmp/parent repo) would be
+// passed to `node --test` as the non-existent /tmp/parent%20repo/...
+const parentSuitePath = fileURLToPath(parentSuite);
+console.log(`[parent-integration] running parent suite: ${parentSuitePath}`);
 const result = spawnSync(
   process.execPath,
-  ["--test", parentSuite.pathname],
+  ["--test", parentSuitePath],
   { stdio: "inherit" },
 );
 if (result.error) {

@@ -17,11 +17,13 @@ The primary pattern is **author -> run -> read -> decide**:
 
 1. Author a small workflow source or choose a saved workflow.
 2. Run a narrow slice first. Prefer `profile: "read-only-review"` unless the
-   question truly needs shell, network, MCP, or edit authority.
+   question truly needs shell, network, MCP, or edit authority. Agent callers
+   should pass `background: true` unless the user explicitly requested foreground.
 3. Read the result. A foreground `workflow_run` returns the completed result
-   inline when it fits — use it directly; for background runs or when the inline
-   result was omitted for size, read `workflow_status({ runId, detail: "result" })`.
-   See the `workflow-plan-review` skill for the full readback contract.
+   inline when it fits — use it directly. For a background run, yield for its
+   completion prompt, then read `workflow_status({ runId, detail: "result" })`
+   exactly once. See the `workflow-plan-review` skill for the fallback and full
+   readback contract.
 4. Decide whether to widen scope, add lanes, raise budget, switch authority, or
    stop. Do not build one giant workflow before proving the slice.
 
@@ -185,14 +187,15 @@ run's `maxAgents`, concurrency, and budget ceilings.
 
 ## Launch And Readback
 
-The generic launch → approval → background → monitoring → result-readback
+The generic launch → approval → background → completion-notification → result-readback
 contract is owned by the `workflow-plan-review` skill. The notes below are
 authoring-specific.
 
 For inline `source`, the source bytes determine the approval hash:
-- Approving does not require re-transmitting the source — present only
-  `approve: true` + the `approvalHash` and the previewed bytes are reused
-  (approve-by-reference). Re-sending works too but must be byte-identical.
+- Approving does not require re-transmitting the source — omit `source`, preserve
+  all other envelope inputs (including `background: true`), and send
+  `approve: true` + the `approvalHash`; the previewed bytes are reused
+  (approve-by-reference). Re-sending the source works too but must be byte-identical.
 - Any drift re-keys `sourceHash`/`approvalHash`; the mismatch response's
   `changedFields` names the drifted field. The retry must still re-send the same
   `args` (and other envelope-affecting params, e.g. `childModel`/`modelTiers`/
@@ -207,10 +210,10 @@ still replay as zero-spend cache hits.
 
 ## Background Runs
 
-Background launch, monitoring, and lifecycle control are covered by the
-`workflow-plan-review` skill. Authoring note: background mode is a launch-time
-decision (the `background` arg or the kernel's wide/deep/long heuristic), not
-something a workflow body controls. A body may declare
+Background launch, completion notification, fallback monitoring, and lifecycle
+control are covered by the `workflow-plan-review` skill. Authoring note:
+background mode is a launch-time decision (the `background` arg or the kernel's
+wide/deep/long heuristic), not something a workflow body controls. A body may declare
 `meta.recommendBackground: true` (deep-research does) to suggest background, but
 the caller's explicit `background` arg always wins.
 
@@ -236,9 +239,11 @@ read-only and stages no writes.
   lane count and cost risk.
 - Model tiers, per-lane `effort`, roles, and schemas are deliberate.
 - Nested workflow calls are static and one level deep.
-- Foreground readbacks use the inline result when it fits (do not re-read);
-  background or oversized runs use `workflow_status({ detail: "result" })`.
-  See the `workflow-plan-review` skill for the full contract.
+- Foreground readbacks use the inline result when it fits (do not re-read).
+  Background runs yield for their completion prompt, then use
+  `workflow_status({ detail: "result" })` exactly once; oversized foreground
+  results use the same readback. See the `workflow-plan-review` skill for the
+  full contract.
 - Edit lanes stop at `workflow_apply` unless using a trusted autonomous drain.
 - After changing workflow source, commands, skills, plugin code, or registration
   behavior, restart OpenCode or use a fresh child process.

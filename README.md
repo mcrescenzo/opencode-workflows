@@ -93,7 +93,7 @@ per-claim adversarial vote panels (3 votes at `thorough`; verifier infrastructur
 errors are reported as *unverified*, never as refutations) → cited synthesis.
 
 ```
-workflow_run({ name: "deep-research", args: "is fish oil effective for ADHD?" })
+workflow_run({ name: "deep-research", args: "is fish oil effective for ADHD?", background: true })
 ```
 
 Or with options: `args: { question, depth: "quick" | "normal" | "thorough",
@@ -112,22 +112,28 @@ A workflow run is two phases: **preview**, then **approve**.
 1. Save or write a workflow, then preview it (runs nothing, returns an
    `approvalHash`):
    ```
-   workflow_run({ name: "my-workflow", args: {...} })
+   workflow_run({ name: "my-workflow", args: {...}, background: true })
    ```
 2. Review the preview (authority, models, budgets, lanes, hashes), then run it:
    ```
-   workflow_run({ name: "my-workflow", args: {...}, approve: true, approvalHash: "<hash>" })
+   workflow_run({ name: "my-workflow", args: {...}, background: true, approve: true, approvalHash: "<hash>" })
    ```
-3. Read the result. A foreground run returns it inline; for background runs, poll
-   until terminal then read:
+3. The background call returns a run id. Yield instead of polling; the best-effort
+   completion prompt normally resumes the invoking session. Then read the terminal
+   result exactly once:
    ```
    workflow_status({ runId, detail: "result" })
    ```
 
+If launch warns that completion prompts are unavailable, polling is the fallback.
+Use `background: false` only when you intentionally want the approval call to block
+and return the result inline.
+
 Approving an **inline-source** preview doesn't require re-transmitting the
-source: the approve call may send only `approve: true` + `approvalHash` (plus
-the same `args`), and the previewed bytes are reused from a bounded in-memory
-store (approve-by-reference). A mismatched approve returns `changedFields`
+source: omit `source`, preserve the same envelope inputs (including `args` and
+`background: true`), and send `approve: true` + `approvalHash`; the previewed
+bytes are reused from a bounded in-memory store (approve-by-reference). A
+mismatched approve returns `changedFields`
 naming which envelope fields re-keyed — `null` when the supplied hash no
 longer matches a recorded preview.
 
@@ -135,11 +141,11 @@ New to workflows? Save a copy of the smallest safe shape and run it read-only:
 
 ```
 workflow_template_save({ template: "first-run-slice" })
-workflow_run({ name: "first-run-slice" })
+workflow_run({ name: "first-run-slice", background: true })
 ```
 
 The bundled `workflow-plan-review` skill owns the full launch → approval →
-background → monitoring → result-readback contract; `opencode-workflow-authoring`
+background → completion-notification → result-readback contract; `opencode-workflow-authoring`
 covers source shape, fan-out, and edit/apply boundaries; `workflow-model-tiering`
 covers fast/deep tier mapping.
 
@@ -181,11 +187,15 @@ restart OpenCode. Then drive it through tools:
   `parallel`, `pipeline`, `workflow`, `phase`, `log`, `budget`, `args`,
   `persistArtifacts`, `inventoryFiles`, `drain`.
 - **Launch** with `workflow_run` (preview → `approve: true` + `approvalHash`;
-  inline-source approves may omit `source` — approve-by-reference). Use
-  `profile: "read-only-review"` until a task truly needs more.
-- **Read back** the result (inline for foreground runs; `workflow_status` for
-  background or oversized); for edit runs, review the diff plan and apply with
-  `workflow_apply` plus the required hashes.
+  inline-source approves may omit `source` — approve-by-reference). Pass
+  `background: true` by default and use `profile: "read-only-review"` until a
+  task truly needs more.
+- **Yield after launch** instead of polling. The completion prompt normally resumes the
+  invoking session; then read `workflow_status({ detail: "result" })` exactly
+  once. Poll only on the explicit no-notification fallback, for user-requested
+  progress/control, or for recovery. Foreground results are already inline.
+- For edit runs, review the diff plan and apply with `workflow_apply` plus the
+  required hashes.
 - See the bundled `workflow-plan-review`, `opencode-workflow-authoring`, and
   `workflow-model-tiering` skills and the tool reference below for the full
   contract (launch/readback, sandbox limits, fan-out arity, schemas, model

@@ -49,6 +49,7 @@ Preview first (two-phase approval):
       name: "deep-research",
       args: { question: "<refined question>", depth: "<quick|normal|thorough>" },
       modelTiers: { fast: "<provider/model>", deep: "<provider/model>" },
+      background: true,
       format: "json",
     })
 
@@ -63,8 +64,20 @@ fans out roughly 1 scope + 5 search + 15-25 fetch + 75 verify + 1 synthesis lane
 fetch), and `Max agents` (160) is the hard ceiling, not the expected count. Name the
 knobs the user could have set instead — `depth`, `maxSources`, `seedUrls`,
 `concurrency`, `background` — then, in the SAME turn, re-issue the call with
-`approve: true, approvalHash: "<hash from the preview>"` (a name-resolved approval must
-re-send the same `name` and `args`). Close the launch message by telling the user how to
+`approve: true`, `approvalHash: "<hash from the preview>"`, and the exact preview
+envelope: the same `name`, `args`, `modelTiers`, and `background: true`. For example:
+
+    workflow_run({
+      name: "deep-research",
+      args: { question: "<refined question>", depth: "<quick|normal|thorough>" },
+      modelTiers: { fast: "<provider/model>", deep: "<provider/model>" },
+      background: true,
+      format: "json",
+      approve: true,
+      approvalHash: "<hash from the preview>",
+    })
+
+Close the launch message by telling the user how to
 re-run with different knobs if the defaults weren't what they wanted.
 
 Optional args: `depth` (default `thorough` — 3-vote verification; `quick`/`normal` use
@@ -76,11 +89,13 @@ may also be a plain question string.
 ### 4. Read back
 
 This workflow declares `recommendBackground`, so the approve call normally returns
-immediately with a run id (`background: true`). Follow the result-readback contract
-in the `workflow-plan-review` skill: poll `workflow_status({ runId, detail: "compact" })`
-until terminal, then read `workflow_status({ runId, format: "json", detail: "result" })`
-exactly once. If the user forced `background: false`, the result is already inline in
-the approve response — do not re-read it.
+immediately with a run id (`background: true`). Keep the run id, end the turn, and
+wait for the best-effort completion notification to resume this session; **do not poll**.
+When notified, read `workflow_status({ runId, format: "json", detail: "result" })`
+exactly once. Poll `detail: "compact"` only if launch explicitly warns that completion
+prompts are unavailable, or if the user asks for progress/control. If the user forced
+`background: false`, the result is already inline in the approve response — do not
+re-read it.
 
 The workflow's envelope lives under the result's `output` field
 (e.g. `result.output.reportMarkdown`), not flat on the result. The outer

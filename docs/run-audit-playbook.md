@@ -105,7 +105,8 @@ Answer the core audit questions from those objects:
 - Corrective retries: `retries.map(lane => [lane.callId, lane.correctiveAttempts])`
 - Cache-served lanes: `cacheEvents.events.filter(e => e.type === "cache.hit" || e.type === "cache.signature_hit")`
 - Failed child sessions: `failed.map(lane => [lane.callId, lane.childID, lane.failureClass])`
-- Wall-clock friction: `slowestQueued.queueWaitMs`,
+- Wall-clock friction: `slowestQueued?.queueWaitMs ?? null` (null when no lane
+  had a finite `queueWaitMs`, e.g. an empty or non-queued run),
   `status.operatorMetrics.timeToFirstResultMs`, and
   `status.operatorMetrics.approvalWaitMs`
 

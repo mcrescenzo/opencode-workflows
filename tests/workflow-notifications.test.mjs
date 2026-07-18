@@ -52,6 +52,10 @@ import {
   deliverWorkflowNotifications,
   idleNotificationSessions,
   notificationSendingIsStale,
+  notificationDeliveryLockPath,
+  notificationDeliveryLockIsStale,
+  acquireNotificationDeliveryLock,
+  NOTIFICATION_SENDING_STALE_MS,
   NOTIFICATION_TRACKING_MAX,
   pendingNotificationPaths,
   rehydratePendingNotifications,
@@ -185,6 +189,64 @@ return { ok: true };`;
   assert.ok(toastCalls.some((body) => body.variant === "info" && /^▶ toast-flow/.test(body.title) && /└ Done \(2\/2\)/.test(body.message)), "missing phase-change heartbeat card");
   assert.ok(toastCalls.some((body) => body.variant === "success" && /^✓ toast-flow done/.test(body.title) && /inspect: workflow_status/.test(body.message)), "missing terminal card");
   assert.ok(toastCalls.every((body) => !/agents \d+ active|usage \$/.test(body.message)), "legacy flat toast body leaked");
+});
+
+test("background workflow yields and resumes the invoking agent exactly once on completion", async () => {
+  const promptAsyncCalls = [];
+  let laneStarted;
+  let releaseLane;
+  const laneStartedP = new Promise((resolve) => { laneStarted = resolve; });
+  const releaseLaneP = new Promise((resolve) => { releaseLane = resolve; });
+  const session = {
+    async create() { return { data: { id: "notification-child" } }; },
+    async prompt() {
+      laneStarted();
+      await releaseLaneP;
+      return { data: { parts: [{ type: "text", text: "lane complete" }], info: { tokens: { input: 0, output: 0, reasoning: 0 }, cost: 0 } } };
+    },
+    async abort() { return { data: { ok: true } }; },
+    async promptAsync(input) {
+      promptAsyncCalls.push(input);
+      return { data: { id: "completion-message" } };
+    },
+  };
+  const { tools, hooks, context, directory } = await makeHarness({ session, includeDirectory: true });
+  try {
+    const source = `export const meta = { name: "notification-handoff", profile: "read-only-review", maxAgents: 1 };
+await agent("finish after the caller yields");
+return { ok: true };`;
+    const preview = await tools.workflow_run.execute({ source, background: true }, context);
+    const approvalHash = preview.match(/approvalHash: ([a-f0-9]{64})/)?.[1];
+    assert.ok(approvalHash, `missing approval hash: ${preview}`);
+
+    const started = await tools.workflow_run.execute({ source, background: true, approve: true, approvalHash }, context);
+    assert.match(started, /started in background/);
+    assert.match(started, /best-effort completion notification should resume the invoking session/i);
+    assert.match(started, /Do not poll workflow_status/);
+    const runId = runIdFrom(started);
+    await laneStartedP;
+    const idleEvent = { type: "session.idle", properties: { sessionID: context.sessionID } };
+    await hooks.event({ event: idleEvent });
+    assert.equal(promptAsyncCalls.length, 0, "idle alone must not notify before completion");
+
+    const activeRun = runs.get(runId);
+    assert.ok(activeRun?.done, "background run must expose its in-process completion promise");
+    releaseLane();
+    await activeRun.done;
+    assert.equal(promptAsyncCalls.length, 1, "completion after yield resumes the idle invoking session");
+
+    await hooks.event({ event: idleEvent });
+
+    assert.equal(promptAsyncCalls.length, 1, "completion prompt is delivered exactly once");
+    assert.equal(promptAsyncCalls[0].path.id, context.sessionID);
+    const promptText = promptAsyncCalls[0].body.parts[0].text;
+    assert.match(promptText, new RegExp(`Workflow ${runId} finished with status completed`));
+    assert.match(promptText, /already terminal; do not poll workflow_status/);
+    assert.match(promptText, /Read the final output exactly once/);
+  } finally {
+    await hooks.dispose?.();
+    await fs.rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("workflowToastAscii plugin option flips workflow cards to ASCII", async () => {
@@ -409,6 +471,167 @@ test("concurrent notification delivery sends the completion prompt exactly once"
     assert.equal(record.delivery.attempts, 1, "the record is only attempted once");
     assert.equal(record.delivery.sendingAt, null);
     assert.equal(deliveringNotificationPaths.size, 0, "the in-process mutex is released");
+  } finally {
+    pendingNotificationPaths.delete(notificationPath);
+    deliveringNotificationPaths.clear();
+    for (const entry of savedDelivering) deliveringNotificationPaths.add(entry);
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+// R07: the persisted sendingAt field was a non-atomic read-then-write, so two OpenCode/plugin
+// processes handling the same idle session could both deliver the same completion prompt. The
+// cross-process delivery lock file (O_CREAT|O_EXCL) is the atomic claim that closes that race.
+test("notification delivery lock acquire is exclusive across processes and releases cleanly (R07)", async () => {
+  const directory = await tempDir();
+  const notificationPath = path.join(directory, "notification.json");
+  const lockPath = notificationDeliveryLockPath(notificationPath);
+  assert.equal(lockPath, `${notificationPath}.deliver.lock`, "lock is a sibling .deliver.lock file");
+  try {
+    const first = await acquireNotificationDeliveryLock(notificationPath);
+    assert.equal(first.acquired, true, "first acquire owns the lock");
+    assert.equal(await fileExists(lockPath), true, "the lock file exists on disk");
+
+    // A second acquire while the first is held must fail closed (EEXIST) without disturbing the owner.
+    const second = await acquireNotificationDeliveryLock(notificationPath);
+    assert.equal(second.acquired, false, "a concurrent acquire must not win while the lock is held");
+    assert.equal(await fileExists(lockPath), true, "the existing lock is left intact for its owner");
+
+    // Release then re-acquire works.
+    await first.release();
+    assert.equal(await fileExists(lockPath), false, "release removes the lock file");
+    const reclaimed = await acquireNotificationDeliveryLock(notificationPath);
+    assert.equal(reclaimed.acquired, true, "the lock can be re-acquired after release");
+    await reclaimed.release();
+
+    // The claim token carries pid + timestamp diagnostics.
+    const diag = await acquireNotificationDeliveryLock(notificationPath);
+    const token = JSON.parse(await fs.readFile(lockPath, "utf8"));
+    assert.equal(typeof token.pid, "number");
+    assert.equal(typeof token.claimedAt, "string");
+    await diag.release();
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("notification delivery lock reclaims a stale abandoned lock and does not steal a fresh one (R07)", async () => {
+  const directory = await tempDir();
+  const notificationPath = path.join(directory, "notification.json");
+  const lockPath = notificationDeliveryLockPath(notificationPath);
+  try {
+    // Simulate an abandoned (stale) lock from a crashed owner by backdating its mtime.
+    const stale = await acquireNotificationDeliveryLock(notificationPath);
+    assert.equal(stale.acquired, true);
+    const staleAgeMs = NOTIFICATION_SENDING_STALE_MS + 1000;
+    const past = new Date(Date.now() - staleAgeMs);
+    await fs.utimes(lockPath, past, past);
+    assert.equal(await notificationDeliveryLockIsStale(lockPath), true, "backdated lock is stale");
+
+    // A stale lock is reclaimed: the new acquire wins and takes ownership.
+    const reclaimed = await acquireNotificationDeliveryLock(notificationPath);
+    assert.equal(reclaimed.acquired, true, "a stale lock is reclaimed by a new acquire");
+    assert.equal(await notificationDeliveryLockIsStale(lockPath), false, "the reclaimed lock is fresh again");
+    await reclaimed.release();
+
+    // A fresh lock is NOT reclaimed: a second acquire fails closed.
+    const fresh = await acquireNotificationDeliveryLock(notificationPath);
+    assert.equal(fresh.acquired, true);
+    const blocked = await acquireNotificationDeliveryLock(notificationPath);
+    assert.equal(blocked.acquired, false, "a fresh lock held by another owner is not stolen");
+    await fresh.release();
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("deliverWorkflowNotifications skips delivery when another process holds the delivery lock (R07)", async () => {
+  const directory = await tempDir();
+  const notificationPath = path.join(directory, "notification.json");
+  const savedDelivering = new Set(deliveringNotificationPaths);
+  deliveringNotificationPaths.clear();
+  let promptCalls = 0;
+  try {
+    await writeJsonAtomic(notificationPath, {
+      stateVersion: 1,
+      runId: "locked-notification-run",
+      status: "completed",
+      sessionID: "parent-session",
+      directory,
+      agent: "build",
+      notificationPath,
+      sentAt: null,
+      delivery: { attempts: 0, lastAttemptAt: null, sendingAt: null, lastError: null },
+    });
+    pendingNotificationPaths.add(notificationPath);
+
+    // Pre-acquire the lock as a sibling "process" would, before the delivery attempt.
+    const held = await acquireNotificationDeliveryLock(notificationPath);
+    assert.equal(held.acquired, true);
+
+    const pluginContext = {
+      client: {
+        session: {
+          promptAsync: async () => { promptCalls += 1; return { data: { id: "must-not-happen" } }; },
+        },
+      },
+    };
+    const result = await deliverWorkflowNotifications(pluginContext, { type: "session.idle", properties: { sessionID: "parent-session" } });
+
+    assert.equal(result.delivered, 0, "a locked notification must not be delivered by a non-owner");
+    assert.equal(result.skipped, 1, "the non-owner skips the locked notification");
+    assert.equal(promptCalls, 0, "no promptAsync fires while another process owns the lock");
+    assert.equal(await fileExists(notificationDeliveryLockPath(notificationPath)), true, "the owner's lock is left intact");
+    const record = JSON.parse(await fs.readFile(notificationPath, "utf8"));
+    assert.equal(record.sentAt, null);
+    assert.equal(record.delivery.attempts, 0, "the non-owner does not record a delivery attempt");
+
+    // The owner may still deliver after releasing its lock (stale-suppression does not stick).
+    await held.release();
+    const owned = await deliverWorkflowNotifications(pluginContext, { type: "session.idle", properties: { sessionID: "parent-session" } });
+    assert.equal(owned.delivered, 1, "the notification delivers once the lock is released");
+    assert.equal(promptCalls, 1);
+  } finally {
+    pendingNotificationPaths.delete(notificationPath);
+    deliveringNotificationPaths.clear();
+    for (const entry of savedDelivering) deliveringNotificationPaths.add(entry);
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("deliverWorkflowNotifications releases the delivery lock after a failed delivery (R07)", async () => {
+  const directory = await tempDir();
+  const notificationPath = path.join(directory, "notification.json");
+  const lockPath = notificationDeliveryLockPath(notificationPath);
+  const savedDelivering = new Set(deliveringNotificationPaths);
+  deliveringNotificationPaths.clear();
+  try {
+    await writeJsonAtomic(notificationPath, {
+      stateVersion: 1,
+      runId: "failed-delivery-lock-run",
+      status: "completed",
+      sessionID: "parent-session",
+      directory,
+      agent: "build",
+      notificationPath,
+      sentAt: null,
+      delivery: { attempts: 0, lastAttemptAt: null, sendingAt: null, lastError: null },
+    });
+    pendingNotificationPaths.add(notificationPath);
+
+    const pluginContext = {
+      __workflowNotificationTimeoutMs: 1,
+      client: {
+        session: {
+          promptAsync: async () => { throw new Error("delivery transport failed"); },
+        },
+      },
+    };
+    const result = await deliverWorkflowNotifications(pluginContext, { type: "session.idle", properties: { sessionID: "parent-session" } });
+
+    assert.equal(result.failed, 1, "the delivery failed");
+    assert.equal(await fileExists(lockPath), false, "the lock is released in the failure finally so the next idle event can retry");
+    assert.equal(deliveringNotificationPaths.size, 0, "the in-process mutex is also released");
   } finally {
     pendingNotificationPaths.delete(notificationPath);
     deliveringNotificationPaths.clear();

@@ -494,7 +494,7 @@ function backgroundRecommendation(approval) {
   return [
     `Background recommended (heuristic): this is a large/long run (${signals}).`,
     "Running it foreground blocks the calling agent for the whole run, so the agent cannot workflow_pause/workflow_cancel it mid-run (only the human ESC-to-interrupt path can).",
-    "Pass background: true to retain a control channel: poll workflow_status, then workflow_pause/workflow_cancel as needed. The human ESC path is unchanged either way.",
+    "Pass background: true, retain the run id as a control channel, and yield for the completion prompt. Use workflow_status, workflow_pause, or workflow_cancel only on demand. The human ESC path is unchanged either way.",
   ].join(" ");
 }
 
@@ -956,6 +956,9 @@ function approvalSummary(run) {
     `Background: ${preview.background.enabled}`,
     ...(preview.background.defaultReason ? [preview.background.defaultReason] : []),
     ...(preview.background.recommendation ? [preview.background.recommendation] : []),
+    ...(preview.notificationDelivery.completionPrompt === "available"
+      ? ["Completion prompt: available. After launch, yield this turn and do not poll workflow_status."]
+      : []),
     ...(preview.background.notificationWarning ? [preview.background.notificationWarning] : []),
     `Authority profile: ${preview.authority.profile}`,
     `Isolation: ${preview.authority.isolation}`,
@@ -2350,8 +2353,12 @@ async function startWorkflow(pluginContext, toolContext, args) {
     const notificationWarning = backgroundNotificationWarning(run, run.id);
     return [
       `Workflow ${run.id} started in background.`,
-      `Status: workflow_status({ runId: "${run.id}" })`,
-      ...(notificationWarning ? [notificationWarning] : []),
+      ...(notificationWarning
+        ? [notificationWarning]
+        : [
+            "A best-effort completion notification should resume the invoking session when the workflow finishes. Do not poll workflow_status; yield this turn or continue other useful work.",
+            "Use workflow_status only for an explicit progress check, lifecycle control, or recovery.",
+          ]),
       "Background runs continue only while the current OpenCode process stays alive.",
     ].join("\n");
   }
@@ -3040,7 +3047,7 @@ async function WorkflowPlugin(pluginContext, options) {
     tool: {
     workflow_run: tool({
       description:
-        "Run a sandboxed OpenCode workflow. By default this is two-phase: call WITHOUT approve=true to get the plan summary (use format=json for a structured workflow_preview with approvalHash, models, lane budget, authority, and cost), then call WITH approve=true and the matching approvalHash to execute; missing/stale hashes return approval_mismatch with executed=false. If the plugin is configured with options.autoApprove, an eligible call may launch immediately without approvalHash when the resolved authority tier is covered by the configured ceiling; args.autoApprove can only narrow that configured ceiling for one call. An approve call for an inline-source preview may omit source and present only the approvalHash (approve-by-reference): the previewed bytes are reused from a bounded in-memory store, avoiding byte-identical re-transmission of the source. workflow_apply remains independently hash-gated.",
+        "Run a sandboxed OpenCode workflow. By default this is two-phase: call WITHOUT approve=true to get the plan summary (use format=json for a structured workflow_preview with approvalHash, models, lane budget, authority, and cost), then call WITH approve=true and the matching approvalHash to execute; missing/stale hashes return approval_mismatch with executed=false. Agents should normally pass background=true on both calls unless the user explicitly requests foreground. After a background launch, yield instead of polling: when session.promptAsync is available, the plugin attempts an idle-gated completion prompt that resumes the invoking session and tells it to read the terminal result once. Poll only when launch warns that completion prompts are unavailable, the user explicitly asks for progress, or lifecycle control/recovery requires it. If the plugin is configured with options.autoApprove, an eligible call may launch immediately without approvalHash when the resolved authority tier is covered by the configured ceiling; args.autoApprove can only narrow that configured ceiling for one call. An approve call for an inline-source preview may omit source (approve-by-reference) while preserving the other envelope inputs, including args and background: the previewed source bytes are reused from a bounded in-memory store, avoiding byte-identical re-transmission drift. workflow_apply remains independently hash-gated.",
       args: {
         name: tool.schema.string().optional().describe("Saved workflow name, resolved project > global > extension > bundled."),
         scriptPath: tool.schema.string().optional(),
@@ -3070,7 +3077,7 @@ async function WorkflowPlugin(pluginContext, options) {
           deep: tool.schema.string().optional(),
         }).optional(),
         profile: tool.schema.enum(Object.keys(WORKFLOW_AUTHORITY_PROFILES)).optional().describe("Named authority preset: read-only-review, inspect-with-shell, drain-dry-run, drain-autonomous-local, edit-plan-only, or apply-approved-plan. Omitted resolves to the ad-hoc profile driven by meta/args authority flags."),
-        background: tool.schema.boolean().optional().describe("true returns a runId immediately while execution continues in-process; false forces foreground; omitted defers to the wide/deep/long heuristic."),
+        background: tool.schema.boolean().optional().describe("true returns a runId immediately and requests a later idle-gated completion prompt for the invoking session; agents should normally pass true and yield instead of polling. false forces foreground; omitted defers to the wide/deep/long heuristic."),
         debugCapture: tool.schema.boolean().optional(),
         // Object-typed: resolveRunAuthority spreads args.authority as an object, so a stringified
         // value would silently no-op into profile defaults instead of erroring. Same model-

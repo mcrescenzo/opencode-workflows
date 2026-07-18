@@ -6,7 +6,15 @@ const DEFAULT_COMMAND_TIMEOUT_MS = 2 * 60 * 1000;
 const DEFAULT_COMMAND_MAX_BUFFER = 10 * 1024 * 1024;
 
 export async function defaultRunCommand(command, options = {}) {
-  const [bin, ...args] = Array.isArray(command) ? command : String(command).split(/\s+/).filter(Boolean);
+  if (!Array.isArray(command)) {
+    throw new TypeError(
+      "defaultRunCommand requires an array command like [bin, ...args]; received " +
+        JSON.stringify(command) +
+        ". Pass an explicit argv instead of a shell string; execFile does not invoke a shell, " +
+        "so string splitting would corrupt quoted arguments or values containing spaces."
+    );
+  }
+  const [bin, ...args] = command;
   if (!bin) throw new Error("test-fix adapter requires a test command");
   try {
     const result = await execFileAsync(bin, args, {

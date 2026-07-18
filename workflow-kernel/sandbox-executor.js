@@ -407,10 +407,13 @@ function readVmErrorMessage(vm, errorHandle) {
   // directly from the handle. Anything reaching here already escaped the body try/catch,
   // so this only covers prelude/wrapper-construction or other VM-internal rejections.
   try {
-    const msgHandle = errorHandle.getProp("message");
-    const msg = vm.dump(msgHandle);
-    msgHandle.dispose();
-    if (typeof msg === "string" && msg.length > 0) return msg;
+    const msgHandle = vm.getProp(errorHandle, "message");
+    try {
+      const msg = vm.dump(msgHandle);
+      if (typeof msg === "string" && msg.length > 0) return msg;
+    } finally {
+      msgHandle.dispose();
+    }
   } catch {}
   const dumped = vm.dump(errorHandle);
   if (typeof dumped === "string" && dumped.length > 0) return dumped;
